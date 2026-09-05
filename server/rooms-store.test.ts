@@ -113,6 +113,23 @@ describe("isAcknowledgement", () => {
     expect(isAcknowledgement(long, "b", `${said.slice(0, 120)} But the index rebuild is still queued behind the nightly job and nobody owns it yet.`)).toBe(false);
   });
 
+  // Two bots rotating three wordings of the same point never repeat the message
+  // directly before them, so a one-message window let the loop run to the end of
+  // the count. The detector looks a few messages back on each side.
+  it("catches a point already made a few messages ago, not just in the last one", () => {
+    const said = "The migration ran on staging, the row counts match, and I archived the old table.";
+    const looping = roomWith([
+      { from: "a", text: said },
+      { from: "b", text: "Understood, I will note that for the release page." },
+      { from: "a", text: "The release page lives in the shared drive under releases." },
+      { from: "b", text: "Noted, thanks for the pointer to the shared drive." },
+    ]);
+    const reworded = "The migration ran on staging, row counts match, and I have archived that old table.";
+    expect(isAcknowledgement(looping, "a", reworded)).toBe(true);
+    // ...and genuinely new information still travels
+    expect(isAcknowledgement(looping, "a", "The nightly index rebuild is still queued and nobody owns it.")).toBe(false);
+  });
+
   it("is false for an empty message - there is nothing to record", () => {
     expect(isAcknowledgement(room, "a", "   ")).toBe(false);
   });

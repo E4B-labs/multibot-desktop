@@ -49,7 +49,8 @@ describe("Bot rooms replace agent mail", () => {
     const panel = readFileSync(new URL("./RoomsPanel.tsx", import.meta.url), "utf8");
     expect(panel).toContain("state.rooms");
     expect(panel).toContain('type: "toggleRoom", room');
-    expect(panel).toContain("state.roomBudget");
+    // No message counter against a limit: a bot↔bot conversation has none.
+    expect(panel).not.toContain("roomBudget");
   });
 
   it("running rooms come first, newest first inside each group", () => {

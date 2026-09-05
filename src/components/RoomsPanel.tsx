@@ -107,7 +107,7 @@ export function RoomsPanel() {
                     {statusLabel(room)}
                   </span>
                   <span className="mt-0.5 block text-[11px] text-ink-secondary">
-                    {room.transcript.length} / {state.roomBudget}
+                    {room.transcript.length} {polish ? "wiad." : "msgs"}
                   </span>
                   <span className="block text-[10px] text-ink-secondary">{formatTime(room.createdAt)}</span>
                 </span>

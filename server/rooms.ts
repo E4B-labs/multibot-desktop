@@ -77,6 +77,8 @@ function nearDuplicate(a: string, b: string | undefined): boolean {
 
 /** Longest a contentless reply may be and still count as a pleasantry. */
 const ACK_MAX_CHARS = 200;
+/** How many messages back, per side, the "no new information" check looks. */
+const NO_NEW_INFO_WINDOW = 4;
 /** Words that carry no work in either language MultiBot is used in, plus the
  * glue between them. A short message made only of these says nothing.
  *
@@ -117,7 +119,14 @@ export function isAcknowledgement(room: RoomRecord, from: string, text: string):
   // and however polite. Swallowing it would leave the asker waiting forever.
   if (theirLast?.includes("?")) return false;
   if (body.length < ACK_MAX_CHARS && words(body).every((word) => ACK_WORDS.has(word))) return true;
-  return nearDuplicate(body, reversed.find((m) => m.from === from)?.text) || nearDuplicate(body, theirLast);
+  // Against the last few messages from EACH side, not just the newest one: two
+  // bots rotating three rephrasings of the same point never repeat the message
+  // directly before them, so a one-message window let the loop straight through.
+  const recent = [
+    ...reversed.filter((m) => m.from === from).slice(0, NO_NEW_INFO_WINDOW),
+    ...reversed.filter((m) => m.from !== from).slice(0, NO_NEW_INFO_WINDOW),
+  ];
+  return recent.some((m) => nearDuplicate(body, m.text));
 }
 
 const ROOMS_FILE = join(DATA_DIR, "rooms.json");

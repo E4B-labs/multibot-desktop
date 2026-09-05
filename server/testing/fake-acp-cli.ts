@@ -15,8 +15,11 @@
 //                     FAKE_ACP_RELAY_MAP, then end with [TASK COMPLETE] once
 //                     its hops run out — the peer-conversation ring e2e)
 //                   | script (reply chosen by what the prompt CONTAINS —
-//                     FAKE_ACP_SCRIPT = {default, rules:[{match,text}]}; the
-//                     group-chat e2e)
+//                     FAKE_ACP_SCRIPT = {default, rules:[{match,text}], tool};
+//                     the group-chat e2e. `tool: true` calls list_bots on the
+//                     injected agents server first, so the turn counts as one
+//                     that used a tool — a real fleet almost never has a turn
+//                     that did not.)
 //   FAKE_ACP_RELAY_MAP  path to a JSON file {botId: [nextBotId, ...]} plus the
 //                   per-bot turn counters the relay mode keeps beside it
 //   FAKE_ACP_DUMP   path to write {argv, env, mcpServers} as JSON, so a test can assert
@@ -232,7 +235,7 @@ function handle(msg: any) {
         // {default, rules: [{match, text}]} — wygrywa pierwsza pasujaca regula.
         const chunk = (text: string) =>
           out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } } });
-        let script: { default?: string; rules?: Array<{ match: string; text: string }> } = {};
+        let script: { default?: string; rules?: Array<{ match: string; text: string }>; tool?: boolean } = {};
         try {
           script = JSON.parse(process.env.FAKE_ACP_SCRIPT ?? "{}");
         } catch {
@@ -240,7 +243,17 @@ function handle(msg: any) {
         }
         const prompt = JSON.stringify(msg.params?.prompt ?? "");
         const hit = (script.rules ?? []).find((rule) => prompt.includes(rule.match));
-        chunk(hit?.text ?? script.default ?? "nothing to add");
+        const say = hit?.text ?? script.default ?? "nothing to add";
+        if (script.tool && agentsMcp) {
+          void driveMcp(agentsMcp, [{ name: "list_bots", args: () => ({}) }])
+            .catch(() => "")
+            .then(() => {
+              chunk(say);
+              complete();
+            });
+          return;
+        }
+        chunk(say);
         complete();
         return;
       }
