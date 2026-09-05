@@ -4,7 +4,9 @@
 // turn in the recipient's own chat with the full toolset (peer tools
 // included), so B can answer, ask back, or pull in C. Nothing caps the hop
 // count; three deterministic brakes bound the conversation instead — a
-// per-room message budget, a wall clock, and a duplicate guard.
+// per-room message backstop, a wall clock, and a duplicate guard. None of them
+// is the normal ending: a conversation ends when both bots have what they need
+// and stop writing.
 //
 // The fake ACP CLI runs in "relay" mode: each bot forwards to the next bot
 // named for it in FAKE_ACP_RELAY_MAP and ends with [TASK COMPLETE] once its
@@ -263,6 +265,31 @@ describe("peer conversation: a message is a real turn", () => {
           environment: { FAKE_ACP_MODE: "script", FAKE_ACP_SCRIPT: JSON.stringify({ default: "Which build should I check?" }) },
           config: { cli: FAKE_CLI, fullAuto: true },
         },
+        // An acker whose turn also CALLS A TOOL. On a real fleet nearly every
+        // turn does, and the brake used to switch itself off for exactly those.
+        ackerTool: {
+          driver: "grokAgent",
+          environment: { FAKE_ACP_MODE: "script", FAKE_ACP_SCRIPT: JSON.stringify({ default: "Confirmed.", tool: true }) },
+          config: { cli: FAKE_CLI, fullAuto: true },
+        },
+        // A plain question-and-answer pair: one answers what it was asked, the
+        // other has what it needed and says nothing more.
+        answerer: {
+          driver: "grokAgent",
+          environment: {
+            FAKE_ACP_MODE: "script",
+            FAKE_ACP_SCRIPT: JSON.stringify({
+              rules: [{ match: "your role", text: "I run the release checks." }],
+              default: "[NO REPLY]",
+            }),
+          },
+          config: { cli: FAKE_CLI, fullAuto: true },
+        },
+        quiet: {
+          driver: "grokAgent",
+          environment: { FAKE_ACP_MODE: "script", FAKE_ACP_SCRIPT: JSON.stringify({ default: "[NO REPLY]" }) },
+          config: { cli: FAKE_CLI, fullAuto: true },
+        },
         slow: {
           driver: "grokAgent",
           environment: { FAKE_ACP_MODE: "busy", FAKE_ACP_TURN_MS: "4000" },
@@ -490,6 +517,60 @@ describe("peer conversation: a message is a real turn", () => {
     60_000,
   );
 
+  // The same brake, on the path a real fleet actually takes: the turn called a
+  // tool. `usedTool` used to switch the brake off, and "is this a reply?" was a
+  // flag the CALLER passed — set by the automatic reply and by nothing else, so
+  // an answer sent through `send_bot_mail` / `ask_bot` / `collab.start` skipped
+  // the brake too. Both are now read from the room ledger instead.
+  it(
+    "an acknowledgement is braked even when the turn used a tool",
+    async () => {
+      const lead = await h.newBot("Tool Lead", "ackerTool");
+      const peer = await h.newBot("Tool Peer", "ackerTool");
+
+      const created = await h.api("POST", "/api/rooms", { task: "status check on the tool path", bot_ids: [lead, peer] });
+      expect(created.status).toBe(201);
+      const roomId = created.body.id as string;
+
+      await h.waitFor("the acks to settle the room", 60_000, async () => (await h.room(roomId)).status === "done");
+      const room = await h.room(roomId);
+      // the task plus the one recorded ack - not a runaway
+      expect(room.transcript.length).toBeLessThanOrEqual(3);
+    },
+    90_000,
+  );
+
+  // What the owner reported: two bots writing to each other to the end of the
+  // count "even when they do not need to". A conversation has no length limit;
+  // it ends when both sides have what they need and stop writing.
+  it(
+    "a question and its answer end the conversation by silence, not by a limit",
+    async () => {
+      const asker = await h.newBot("Silent Asker", "quiet");
+      const peer = await h.newBot("Role Peer", "answerer");
+
+      const created = await h.api("POST", "/api/rooms", { task: "what is your role here?", bot_ids: [asker, peer] });
+      expect(created.status).toBe(201);
+      const roomId = created.body.id as string;
+
+      await h.waitFor("the room to settle", 60_000, async () => (await h.room(roomId)).status !== "running");
+      const room = await h.room(roomId);
+      expect(room.status).toBe("done");
+      // the question and the answer: nothing after them
+      expect(room.transcript.length).toBeLessThanOrEqual(4);
+      expect(room.transcript.some((m: any) => m.text.includes("I run the release checks."))).toBe(true);
+      // silence is never written down as a message
+      expect(room.transcript.some((m: any) => m.text.includes("[NO REPLY]"))).toBe(false);
+      // and the owner is not told the conversation hit a budget
+      const owner = await h.bot(asker);
+      expect(JSON.stringify(owner.messages)).not.toContain("budget");
+      // the private chats carry chips, never the envelope
+      expect(owner.messages.some((m: any) => m.text?.includes("[Message from @"))).toBe(false);
+      expect(owner.messages.some((m: any) => m.kind === "room")).toBe(true);
+    },
+    90_000,
+  );
+
   // The brake must not eat real work: a question is content, so it is carried.
   it(
     "a question still travels as a real turn",
@@ -656,12 +737,15 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
       expect(created.status).toBe(201);
       const roomId = created.body.id as string;
 
-      await h.waitFor("the budget to close the room", 60_000, async () => (await h.room(roomId)).status !== "running");
+      await h.waitFor("the backstop to close the room", 60_000, async () => (await h.room(roomId)).status !== "running");
       const room = await h.room(roomId);
       expect(room.status).toBe("done");
       expect(room.transcript).toHaveLength(4);
+      // The owner is told the room finished — but never that a "budget" ran
+      // out: a bot↔bot conversation has no message limit the user is shown.
       const owner = await h.bot(a);
-      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes("message budget spent (4)"))).toBe(true);
+      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes(`Room "never stop" finished (done)`))).toBe(true);
+      expect(JSON.stringify(owner.messages)).not.toContain("budget spent");
     },
     90_000,
   );
@@ -700,7 +784,8 @@ describe("peer conversation: a quiet room still settles", () => {
       await h.waitFor("the sweep to close the room", 30_000, async () => (await h.room(created.body.id)).status !== "running");
       expect((await h.room(created.body.id)).status).toBe("done");
       await h.waitFor("the owner to be told", 15_000, async () =>
-        Boolean((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("time budget spent"))));
+        Boolean((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("finished (done)"))));
+      expect(JSON.stringify(await h.bot(owner))).not.toContain("budget spent");
 
     },
     60_000,

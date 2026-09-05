@@ -302,7 +302,12 @@ describe("botSystemPrompt", () => {
     // multibot: hamulec na pętlę „confirmed / potwierdzone" — grzeczność nie
     // jest odpowiedzią, więc protokół każe na nią milczeć.
     expect(text).toContain("An acknowledgement, a thanks or restating an agreement");
-    expect(text).toContain("Reply only with new information, a question, a result, or a handoff.");
+    expect(text).toContain("Reply only with new information, a question you cannot proceed without, a result, or a handoff.");
+    // A bot↔bot conversation has no length limit: it ends by silence, and the
+    // protocol has to say so, or the bots keep each other talking forever.
+    expect(text).toContain("It ENDS BY SILENCE.");
+    expect(text).toContain("Do not ask a follow-up question unless you genuinely cannot proceed without the answer.");
+    expect(text).not.toContain("keep asking back");
     expect(text).toContain("Write in the language the envelope asks for");
     expect(text).toContain("One owner per task; do not repeat what others said.");
   });

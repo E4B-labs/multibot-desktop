@@ -170,10 +170,13 @@ const t = (pl: string, en: string): string => (uiLang === "pl" ? pl : en);
 const COMMS_TOKEN = randomBytes(24).toString("hex");
 // A bot→bot message is a REAL turn on the recipient's own thread, with the
 // full toolset (peer tools included), so B can answer, ask back, or pull in C.
-// Nothing caps the hop count any more; three deterministic brakes bound the
-// conversation instead: a per-room message budget, a wall clock, and a
-// duplicate guard (see deliverPeerMessage).
-const DEFAULT_COLLAB_MAX_MESSAGES = 24;
+// A conversation has NO message limit by design: it ends when both bots have
+// what they need and stop writing ([NO REPLY] / [TASK COMPLETE]). What is left
+// here is loop protection only — a duplicate guard, an acknowledgement brake,
+// a wall clock, and a message count set so high that reaching it means a
+// runaway, never a long piece of real work. It is not a "budget" the user is
+// meant to see, and nothing in the UI counts against it.
+const DEFAULT_COLLAB_MAX_MESSAGES = 200;
 function collabMaxMessages(): number {
   const raw = Number(process.env.OMB_COLLAB_MAX_MESSAGES);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_COLLAB_MAX_MESSAGES;
@@ -482,7 +485,7 @@ function sweepExpiredRooms(): void {
     // is nobody's "collaboration result" to report into a private thread.
     if (room.status !== "running" || room.groupId || room.createdAt > cutoff) continue;
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "time budget spent");
+    closeRoom(room.id, "done", "");
   }
 }
 
@@ -711,7 +714,7 @@ function conversationLanguage(fromBotId: string, text: string): "Polish" | "Engl
  * Brackets and newlines come out; the id below the name stays authoritative. */
 function peerEnvelope(from: BotRecord, text: string, language: string): string {
   const name = from.name.replace(/[[\]\r\n]+/g, " ").trim().slice(0, 120) || from.id;
-  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn: answer them, ask them back, or reply with exactly [NO REPLY] if nothing needs saying. Reply in ${language}.]\n\n${text}`;
+  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn: answer them, or reply with exactly [NO REPLY] once you have what you need and have nothing new to add. Do not thank, confirm or restate - this conversation ends by silence, not by a closing message. Reply in ${language}.]\n\n${text}`;
 }
 
 /** Consecutive acknowledgements in a room. Two in a row means the two bots are
@@ -728,13 +731,6 @@ async function deliverPeerMessage(
   toBotId: string,
   text: string,
   roomId?: string,
-  opts?: {
-    /** This message answers a peer message, so it is subject to the ack brake:
-     * a first message never is — a short opener is a task, not a pleasantry. */
-    reply?: boolean;
-    /** The turn that produced it called a tool, i.e. it did real work. */
-    usedTool?: boolean;
-  },
 ): Promise<{ status: PeerDelivery; roomId: string | null; note: string }> {
   const refuse = (note: string) => ({ status: "refused" as const, roomId: roomId ?? null, note });
   const from = store.bot(fromBotId);
@@ -798,12 +794,12 @@ async function deliverPeerMessage(
   const max = collabMaxMessages();
   if (budgetLeft(room, max) <= 0) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", `message budget spent (${max})`);
-    return refuse(`Conversation budget spent (${max} messages) - wrap up and report to the user. Do not retry.`);
+    closeRoom(room.id, "done", "");
+    return refuse("This conversation has run long enough - wrap up and report to the user. Do not retry.");
   }
   if (Date.now() - room.createdAt >= collabMaxMs()) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "time budget spent");
+    closeRoom(room.id, "done", "");
     return refuse("This conversation ran out of time - wrap up and report to the user. Do not retry.");
   }
   const ledgerKey = `${room.id}|${fromBotId}|${toBotId}`;
@@ -819,18 +815,45 @@ async function deliverPeerMessage(
     broadcast({ kind: "room", room: rooms.get(room.id) });
   };
 
+  // Is this message an ANSWER to the bot we are writing to? Read from the room
+  // ledger, not from the caller: `send_bot_mail`, `ask_bot`, `collab.start`,
+  // the group fan-out, the boot resume and the automatic reply all land here,
+  // and only the last one used to declare itself a reply — so a bot that
+  // answered its colleague through a TOOL skipped the ack brake entirely and
+  // the two of them talked until the message count ran out. The ledger knows:
+  // the recipient has spoken here since the last thing WE said, so whatever we
+  // send now answers it. (Not "the recipient wrote the last line": in a room
+  // with three bots somebody else's line lands in between.)
+  const lastLineFrom = (who: string): number => {
+    for (let i = room.transcript.length - 1; i >= 0; i -= 1) if (room.transcript[i]!.from === who) return i;
+    return -1;
+  };
+  const isReply = lastLineFrom(toBotId) > lastLineFrom(fromBotId);
+
   // The ack brake. "Confirmed." / "Potwierdzone." bounced eleven times in a
-  // live demo before the budget died: an answer that adds nothing is worth a
-  // line in the transcript, never another turn. Two in a row and the two bots
-  // are done talking, so the room settles by itself instead of idling until
-  // the wall clock.
-  if (opts?.reply && !opts.usedTool && isAcknowledgement(room, fromBotId, message)) {
+  // live demo before the message count ran out: an answer that adds nothing is
+  // worth a line in the transcript, never another turn. Two in a row and the
+  // two bots are done talking, so the room settles by itself instead of idling
+  // until the wall clock.
+  //
+  // No "the turn used a tool" carve-out: on a real fleet almost every turn
+  // calls a tool, which switched the brake off for almost every message. It was
+  // never needed — `done`/`gotowe`/`yes`/`no` are deliberately not
+  // acknowledgement words (rooms.ts), so a short real RESULT already passes.
+  if (isReply && isAcknowledgement(room, fromBotId, message)) {
     recordInRoom();
     postRoomChip(toBotId, room, { from: fromBotId, event: "replied" });
     for (const entry of peerTurn.get(fromBotId) ?? []) if (entry.fromBotId === toBotId) entry.replied = true;
     const streak = (ackStreak.get(room.id) ?? 0) + 1;
     ackStreak.set(room.id, streak);
-    if (streak >= 2) closeRoom(room.id, "done", "both sides only acknowledged");
+    // Two content-free replies in a row and the two bots are congratulating
+    // each other, not working. In a room with only TWO bots the second one can
+    // never arrive: this reply was not delivered, so the other side gets no
+    // turn and will never write again — its silence IS the second one, and the
+    // conversation is over. Leaving the room open just parked it until the wall
+    // clock swept it up hours later. A GROUP room is the user's own chat: two
+    // polite members must never close the room the user is still writing into.
+    if (!room.groupId && (streak >= 2 || room.bot_ids.length <= 2)) closeRoom(room.id, "done", "");
     return refuse("An acknowledgement is not a reply. It was recorded; do not send another one.");
   }
   ackStreak.delete(room.id);
@@ -845,7 +868,7 @@ async function deliverPeerMessage(
   // envelope. "X texted Y" in the sender's own thread; the answer coming back
   // shows as "Y replied" in the thread of whoever asked. The words themselves
   // live in the room the chip opens.
-  if (opts?.reply) postRoomChip(toBotId, room, { from: fromBotId, event: "replied" });
+  if (isReply) postRoomChip(toBotId, room, { from: fromBotId, event: "replied" });
   else postRoomChip(fromBotId, room, { from: fromBotId, to: toBotId, event: "texted" });
 
   // The envelope goes to the MODEL, never to the user's chat: a raw
@@ -890,7 +913,6 @@ async function routePeerReply(
   peer: PeerAnswer,
   text: string,
   mayDelegate: boolean,
-  usedTool: boolean,
 ): Promise<void> {
   const room = rooms.get(peer.roomId);
   const done = DONE_MARKER_AT_END.test(text);
@@ -903,13 +925,21 @@ async function routePeerReply(
     else closeRoom(peer.roomId, "done");
     return;
   }
-  // eliza: silence is a valid contribution — no thank-you turns.
-  if (!visible || visible === NO_REPLY_MARKER) return;
+  // Silence is how a bot↔bot conversation ENDS: the bot has what it needs and
+  // has nothing new to add, so it says nothing. Leaving the room "running"
+  // meant nobody ever wrote to it again and the wall-clock sweeper reported it
+  // to the owner two hours later as "time budget spent" — the one correct
+  // ending dressed up as a failure. A group room is the user's own chat and
+  // never closes on a member's silence.
+  if (!visible || visible === NO_REPLY_MARKER) {
+    if (room && !room.groupId) closeRoom(peer.roomId, "done", "");
+    return;
+  }
   // A bot whose delegation was off for this turn does not get to answer a peer
   // through the back door of the safety net. Its answer stays in its own chat,
   // where the bubble is kept visible for exactly this case.
   if (!mayDelegate) return;
-  const delivery = await deliverPeerMessage(botId, peer.fromBotId, visible, peer.roomId, { reply: true, usedTool });
+  const delivery = await deliverPeerMessage(botId, peer.fromBotId, visible, peer.roomId);
   // The bubble was suppressed on the assumption this text would reach the room.
   // A refusal breaks that assumption — read-only access, a chief-of-staff
   // section mismatch, a room the other side already closed, a spent budget or
@@ -1694,7 +1724,6 @@ bus.subscribe((event: RuntimeEvent) => {
       // thread, so a peer turn that ended in tool calls alone would forward the
       // bot's previous, unrelated answer to a bot that never asked for it.
       const saidThisTurn = (turnAssistantText.get(event.threadId) ?? []).join("\n").trim();
-      const usedTool = turnUsedTool.has(event.threadId);
       turnAssistantText.delete(event.threadId);
       turnUsedTool.delete(event.threadId);
       turnUserText.delete(event.threadId);
@@ -1717,7 +1746,7 @@ bus.subscribe((event: RuntimeEvent) => {
         void (async () => {
           // Every bot still waiting on this turn gets the answer; sequential so
           // the room ledger and the budget see one message at a time.
-          for (const entry of answering) await routePeerReply(bot.id, entry, saidThisTurn, mayDelegate, usedTool);
+          for (const entry of answering) await routePeerReply(bot.id, entry, saidThisTurn, mayDelegate);
         })().catch((error) =>
           console.warn(`[multibot] peer reply from ${bot.id} failed:`, error instanceof Error ? error.message : error),
         );
@@ -3761,7 +3790,7 @@ const server = createServer(async (req, res) => {
         // budget. A spent budget rotates the room instead of killing the chat.
         let room = rooms.forGroup(gid);
         if (room && budgetLeft(room, collabMaxMessages()) <= 0) {
-          closeRoom(room.id, "done", `message budget spent (${collabMaxMessages()})`);
+          closeRoom(room.id, "done", "");
           room = null;
         }
         room ??= rooms.create({
