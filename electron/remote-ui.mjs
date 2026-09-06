@@ -25,6 +25,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { extname, join, resolve, sep } from "node:path";
 
+import { isOnionHost } from "./host-resolve.mjs";
 import { CERT_CHANGED, pinRequest } from "./tls-pin.mjs";
 
 // Nagłówki jednego skoku — przepisanie ich psuje ramkowanie odpowiedzi.
@@ -142,6 +143,7 @@ function upstreamOptions(req, remote, { keepHandshake = false, agent } = {}) {
       hostname: target.hostname,
       port: target.port || (target.protocol === "https:" ? 443 : 80),
       method: req.method,
+      protocol: target.protocol,
       path: target.pathname + target.search,
       headers,
       // Hosty 0.4.0 mają certyfikat z własnego podpisu, więc łańcucha nie ma
@@ -277,7 +279,7 @@ async function listenOnStablePort(server) {
  * zachowania sprzed tej zmiany. Brak tego serwera ma degradować apkę do
  * poprzedniego trybu, nigdy do białego ekranu.
  */
-export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
+export async function startRemoteUiServer({ staticDir, remoteUrl, pin, createConnection = null }) {
   // Adres sprawdzamy BEZWARUNKOWO i jako pierwszy. Wcześniej `new URL(…)`
   // stało za `!pin &&`, więc z przypięciem w ręku nikt go nie oglądał i
   // `undefined` jechało dalej — aż do `window.__MULTIBOT_HOST__="undefined"`
@@ -290,9 +292,21 @@ export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
   if (!pin && target.protocol === "https:") {
     throw new Error("remote UI proxy for an https host requires a certificate pin");
   }
+  // Adres .onion BEZ tunelu byłby zwykłym `net.connect`, czyli zapytaniem DNS
+  // o nazwę usługi ukrytej — wyciekiem, i to do adresu, którego i tak nie da
+  // się rozwiązać. Fail closed; main.mjs pokazuje wtedy HOST_ERROR_PAGE
+  // zamiast ładować hosta wprost.
+  if (isOnionHost(target.hostname) && (target.protocol !== "https:" || !createConnection)) {
+    throw new Error("an .onion host needs https and a Tor connector");
+  }
   if (!staticDir || !existsSync(join(staticDir, "index.html"))) return null;
   const root = resolve(staticDir);
   const agent = new HttpsAgent({ keepAlive: true, maxCachedSessions: 0 });
+  // Jedno miejsce na CAŁY ruch do hosta: `proxyHttp` i `pipeWs` idą tym samym
+  // agentem, więc podmiana jego `createConnection` przenosi przez tor także
+  // WebSocket. Podmiana jest tu, a nie w opcjach żądania, bo tylko agent
+  // przeżywa między żądaniami razem z pulą gniazd.
+  if (createConnection) agent.createConnection = createConnection;
   // Gniazda WebSocketa przejęte przy upgradzie — patrz komentarz w `pipeWs`.
   const live = new Set();
   const server = createServer((req, res) => {

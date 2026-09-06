@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeIdAfterMerge,
+  isOnionHost,
   mergeRemoteHost,
   normalizeRemoteUrl,
   removeRemoteHost,
@@ -165,5 +166,43 @@ describe("uiOriginChanged", () => {
     expect(uiOriginChanged({}, "https://1.2.3.4:8799")).toBe(true);
     expect(uiOriginChanged({ uiOriginHost: "https://5.6.7.8:8799" }, "https://1.2.3.4:8799")).toBe(true);
     expect(uiOriginChanged({ uiOriginHost: "https://1.2.3.4:8799" }, "https://1.2.3.4:8799")).toBe(false);
+  });
+});
+
+// PLAN-TOR: adres usługi ukrytej wchodzi tą samą drogą co każdy inny — to jest
+// cała zmiana po stronie rozwiązywania adresu. Gdyby `normalizeRemoteUrl` go
+// odrzucało, nie byłoby czego tunelować.
+describe("adres .onion", () => {
+  const ONION = "a".repeat(56) + ".onion";
+
+  it("normalizeRemoteUrl bierze .onion bez żadnego wyjątku", () => {
+    expect(normalizeRemoteUrl(`https://${ONION}:8799/`)).toBe(`https://${ONION}:8799`);
+    // Tak wygląda adres przepisany z trzech wartości serwera na drugim urządzeniu.
+    expect(normalizeRemoteUrl(`${ONION}:8799`, { assumeHttps: true })).toBe(`https://${ONION}:8799`);
+  });
+
+  it("isOnionHost rozpoznaje goły host, host:port i cały URL", () => {
+    expect(isOnionHost(ONION)).toBe(true);
+    expect(isOnionHost(`${ONION}:8799`)).toBe(true);
+    expect(isOnionHost(`https://${ONION}:8799/`)).toBe(true);
+    expect(isOnionHost(` HTTPS://${ONION.toUpperCase()}:8799 `)).toBe(true);
+    // Kropka na końcu to ten sam host — `new URL` ją zostawia, więc bez jawnego
+    // zdjęcia adres uchodziłby za zwykły i poszedł do resolvera DNS.
+    expect(isOnionHost(`${ONION}.`)).toBe(true);
+    expect(isOnionHost(`https://${ONION}.:8799`)).toBe(true);
+  });
+
+  it("odsiewa wszystko, czego tor nie zestawi", () => {
+    // v2 (16 znaków) wyłączono w sieci Tora w 2021 — przyjęcie go byłoby
+    // obietnicą połączenia, którego nie da się zbudować.
+    expect(isOnionHost("a".repeat(16) + ".onion")).toBe(false);
+    expect(isOnionHost("a".repeat(55) + ".onion")).toBe(false);
+    // `1`, `8`, `9` i `0` są poza alfabetem base32.
+    expect(isOnionHost("1".repeat(56) + ".onion")).toBe(false);
+    expect(isOnionHost(`${ONION}.evil.com`)).toBe(false);
+    expect(isOnionHost("https://192.168.1.42:8799")).toBe(false);
+    expect(isOnionHost("https://[::1]:8799")).toBe(false);
+    expect(isOnionHost("")).toBe(false);
+    expect(isOnionHost(null)).toBe(false);
   });
 });

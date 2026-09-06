@@ -40,6 +40,33 @@ export function normalizeRemoteUrl(raw, { assumeHttps = false } = {}) {
   return checkedUrl(trimmed);
 }
 
+/** Czy to adres usługi ukrytej Tora. Bierze i goły host, i `host:port`, i cały
+ * URL, bo pyta o to i powłoka (mając URL), i ekran logowania (mając to, co
+ * użytkownik właśnie wpisał). Wyłącznie v3: 56 znaków base32 — adresy v2
+ * wyłączono w sieci Tora w 2021 i przyjęcie ich znaczyłoby obiecywanie
+ * połączenia, którego nie da się zestawić.
+ *
+ * BLIŹNIAK w `src/lib/shell.ts` — ta sama funkcja po stronie renderera, gdzie
+ * nie ma jak zaimportować modułu powłoki. Zmiana tu = zmiana tam. */
+export function isOnionHost(address) {
+  const text = String(address ?? "")
+    .trim()
+    .toLowerCase();
+  let host = text.replace(/\/.*$/, "").replace(/:\d+$/, "");
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(text)) {
+    try {
+      host = new URL(text).hostname;
+    } catch {
+      return false;
+    }
+  }
+  // Kropka na końcu to ten sam host (korzeń DNS-u zapisany wprost), a `new URL`
+  // ją ZOSTAWIA. Bez tego `<56>.onion.` przechodziło przez `normalizeRemoteUrl`,
+  // wypadało tutaj na „nie onion" i szło zwykłym gniazdem — czyli wyciekiem
+  // nazwy usługi ukrytej do resolvera.
+  return /^[a-z2-7]{56}\.onion$/.test(host.replace(/\.$/, ""));
+}
+
 /** Ten sam serwer wpisany jako `https://h:8799/` i `https://h:8799` to jeden
  * host — i tak samo ten sam adres wracający z błędu certyfikatu. */
 export function sameOrigin(a, b) {

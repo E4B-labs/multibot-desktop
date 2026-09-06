@@ -284,6 +284,31 @@ export function deviceId(storage: Pick<Storage, "getItem" | "setItem"> | undefin
   }
 }
 
+/** Czy to adres usługi ukrytej Tora. Bierze i goły host, i `host:port`, i cały
+ * URL, bo ekran logowania pyta o to, co użytkownik właśnie wpisał, a to bywa
+ * każdą z tych trzech rzeczy. Wyłącznie v3: 56 znaków base32 — adresy v2
+ * wyłączono w sieci Tora w 2021, więc ich przyjęcie byłoby obietnicą
+ * połączenia, którego nie da się zestawić.
+ *
+ * BLIŹNIAK w `electron/host-resolve.mjs` — powłoka nie ma jak zaimportować
+ * modułu renderera i odwrotnie. Zmiana tu = zmiana tam. */
+export function isOnionHost(address: string | null | undefined): boolean {
+  const text = String(address ?? "")
+    .trim()
+    .toLowerCase();
+  let host = text.replace(/\/.*$/, "").replace(/:\d+$/, "");
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(text)) {
+    try {
+      host = new URL(text).hostname;
+    } catch {
+      return false;
+    }
+  }
+  // Kropka na końcu to ten sam host (korzeń DNS-u zapisany wprost), a `new URL`
+  // ją ZOSTAWIA — bez tego `<56>.onion.` uchodziło za zwykły adres.
+  return /^[a-z2-7]{56}\.onion$/.test(host.replace(/\.$/, ""));
+}
+
 export type PushOutcome = "registered" | "declined" | "skipped" | "failed";
 
 /** Called once per app start after sign-in. Deliberately every start rather

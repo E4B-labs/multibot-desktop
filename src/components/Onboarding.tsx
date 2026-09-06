@@ -7,7 +7,7 @@ import { ArrowLeft, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { authFetch, setSessionToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
-import { copyText, isReactNativeShell, joinLocalHarness, resolveHost } from "@/lib/shell";
+import { copyText, isOnionHost, isReactNativeShell, joinLocalHarness, resolveHost } from "@/lib/shell";
 import type { SetupValues } from "@/types/ogb";
 
 const isElectron = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
@@ -50,7 +50,7 @@ export function previousStep(path: OnboardingPath, step: OnboardingStep): Onboar
 
 export type JoinErrorField = "address" | "name" | "password" | "form" | "profileName" | "profilePassword";
 
-const ADDRESS_CODES = ["invalid_address", "unreachable", "timeout", "not_multibot", "server_not_set_up", "certificate_changed", "insecure_address"];
+const ADDRESS_CODES = ["invalid_address", "unreachable", "timeout", "not_multibot", "server_not_set_up", "certificate_changed", "insecure_address", "tor_unavailable", "tor_timeout"];
 const PROFILE_NAME_CODES = ["invalid username", "profile_name_taken", "no_such_profile", "invalid email", "display name required"];
 const PROFILE_PASSWORD_CODES = ["wrong_profile_password", "password must contain 12-128 characters", "new password must contain 12-128 characters"];
 
@@ -88,6 +88,17 @@ export function addressNote(values: SetupValues | null, polish: boolean): string
         : "Through your relay box — but the relay is not answering right now.";
     }
     return polish ? "Przez Twój przekaźnik." : "Through your relay box.";
+  }
+  // Nad cgnat, tak jak przekaźnik: usługa ukryta wychodzi z tego urządzenia na
+  // zewnątrz, więc NAT operatora nie ma tu nic do rzeczy i ostrzeganie o nim
+  // byłoby nieprawdą. `addressVerified` to własna sonda serwera przez tor.
+  if (values.addressKind === "onion") {
+    if (values.addressVerified === false) {
+      return polish
+        ? "Działa z każdej sieci. Pierwsze połączenie trwa ~10–20 s — ale Tor jeszcze go nie opublikował."
+        : "Works from anywhere. First connection takes ~10–20 s — but Tor has not published it yet.";
+    }
+    return polish ? "Działa z każdej sieci. Pierwsze połączenie trwa ~10–20 s." : "Works from anywhere. First connection takes ~10–20 s.";
   }
   if (values.portMapping?.state === "cgnat") {
     return polish
@@ -179,6 +190,15 @@ const ERROR_TEXTS: Record<string, [string, string]> = {
   server_not_set_up: ["That server has not been set up yet.", "Ten serwer nie jest jeszcze skonfigurowany."],
   certificate_changed: ["This server's certificate changed since the last time.", "Certyfikat tego serwera zmienił się od ostatniego razu."],
   insecure_address: ["The server password is never sent unencrypted. Use an https address.", "Hasła serwera nie wysyłamy otwartym tekstem. Użyj adresu https."],
+  // Adres .onion da się otworzyć WYŁĄCZNIE przez Tora, a powłoka nie znalazła
+  // go ani w paczce, ani w PATH. Bez niego nie ma czego spróbować.
+  tor_unavailable: ["Tor is not available on this computer.", "Tor nie jest dostępny na tym komputerze."],
+  // Tor JEST, ale nie zbudował obwodu — najczęściej dlatego, że sieć go blokuje.
+  // To jest inna rada niż „zainstaluj tora", więc i inny kod.
+  tor_timeout: [
+    "Tor could not connect (network may block Tor). Try again.",
+    "Tor nie zdołał się połączyć (ta sieć może go blokować). Spróbuj jeszcze raz.",
+  ],
   forbidden: ["This window can't change servers. Restart the app and try again.", "To okno nie może zmieniać serwerów. Uruchom aplikację ponownie i spróbuj jeszcze raz."],
   wrong_server_name: ["No server of that name here.", "Nie ma tu serwera o tej nazwie."],
   wrong_server_password: ["Wrong server password.", "Złe hasło serwera."],
@@ -556,7 +576,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </button>
             )}
             <button type="submit" disabled={busy} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
-              {busy ? (polish ? "Łączenie…" : "Connecting…") : polish ? "Połącz" : "Connect"}
+              {/* Pierwsze połączenie z usługą ukrytą to zbudowanie obwodu, nie
+                  zwykły uścisk dłoni — bez tego zdania wygląda jak zawieszenie. */}
+              {busy
+                ? isOnionHost(address)
+                  ? polish
+                    ? "Łączenie przez Tora (do 2 minut)…"
+                    : "Connecting through Tor (up to 2 minutes)…"
+                  : polish
+                    ? "Łączenie…"
+                    : "Connecting…"
+                : polish
+                  ? "Połącz"
+                  : "Connect"}
             </button>
             {/* Recovery spends a grant like any profile call, so it still has to
                 connect first — this only remembers where to go next. */}

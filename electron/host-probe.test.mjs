@@ -1,6 +1,7 @@
 // Klasyfikacja odpowiedzi serwera — czyste funkcje, bez gniazd. To one
 // decydują, co zobaczy pole adresu, nazwy albo hasła na ekranie logowania.
 import { createServer } from "node:http";
+import { connect as netConnect } from "node:net";
 
 import { describe, expect, it } from "vitest";
 
@@ -100,5 +101,29 @@ describe("requestJson przez probeServer", () => {
     });
     expect(Date.now() - started).toBeLessThan(3000);
     silent.close();
+  });
+
+  // `agent: false` znaczy w node „nowy agent", a nie „bez agenta" — a
+  // `createConnection` z opcji jest brane pod uwagę WYŁĄCZNIE wtedy, gdy agenta
+  // nie ma wcale. Pomyłka tutaj nie psuje testów klasyfikacji: po prostu adres
+  // .onion jechałby do resolvera DNS zamiast do tunelu.
+  it("adres .onion łączy się wstrzykniętym tunelem, a nie zwykłym gniazdem", async () => {
+    const fake = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ serverId: "mbs_1", configured: true }));
+    });
+    await new Promise((done) => fake.listen(0, "127.0.0.1", done));
+    const onion = "a".repeat(56) + ".onion";
+    const seen = [];
+    const createConnection = (options, callback) => {
+      seen.push({ host: options.host ?? options.hostname, port: Number(options.port) });
+      const socket = netConnect(fake.address().port, "127.0.0.1");
+      socket.once("connect", () => callback(null, socket));
+      socket.once("error", callback);
+      return undefined;
+    };
+    expect(await probeServer(`http://${onion}:8799`, { createConnection })).toEqual({ ok: true, configured: true, tlsFingerprint: undefined });
+    expect(seen).toEqual([{ host: onion, port: 8799 }]);
+    fake.close();
   });
 });

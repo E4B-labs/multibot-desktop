@@ -8,13 +8,14 @@ import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { addRemoteHost, claimUiOrigin, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
 import { getJson, joinServer, probeServer } from "./host-probe.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
-import { normalizeRemoteUrl, sameDocument, shouldStartLocalHarness } from "./host-resolve.mjs";
+import { isOnionHost, normalizeRemoteUrl, sameDocument, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { activateForBot, normalizeNotification } from "./notifications.mjs";
 import { startRemoteUiServer } from "./remote-ui.mjs";
 import { collectSetupValues } from "./setup-values.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
+import { configureTor, onionCreateConnection, startTor, stopTor, TOR_UNAVAILABLE } from "./tor.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./diagnostics.mjs";
 
@@ -323,6 +324,15 @@ const HOST_ERROR_PAGE = errorPage(
   "MultiBot couldn't load the server it is signed in to. Check that it is running and reachable, then press Ctrl+Shift+H (⌘⇧H on a Mac) to pick another one.",
 );
 
+// Zapisany host .onion na komputerze, na którym nie ma tora, to nie jest „host
+// nie odpowiada": nie ma czym nawet spróbować. Rada z HOST_ERROR_PAGE
+// („sprawdź, czy serwer działa") wysyłałaby wtedy szukać usterki tam, gdzie
+// jej nie ma.
+const TOR_ERROR_PAGE = errorPage(
+  "This server needs Tor",
+  "This server is reachable only through Tor, which is not available on this computer. Install Tor, then press Ctrl+Shift+H (⌘⇧H on a Mac) to try again or pick another server.",
+);
+
 // multibot (C2): fragment credential hand-off for a remote host's token.
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
 // window.location.hash client-side, stores it, and erases it before first
@@ -351,6 +361,25 @@ function verifyOnlyPin(url) {
   return { get: () => getHostFingerprint(url), set: () => {} };
 }
 
+/** Czym rozmawiać z tym adresem. Zwykły host: niczym dodatkowym. Adres .onion:
+ * przez NASZEGO tora — i wtedy trzeba go najpierw podnieść. `error` znaczy, że
+ * się nie da, i jedyny uczciwy wynik to odmowa: połączenie wprost
+ * rozwiązywałoby nazwę usługi ukrytej przez DNS.
+ *
+ * Dwa różne kody, bo prowadzą do dwóch różnych rzeczy do zrobienia: „nie ma
+ * tora" to zainstaluj go, a „nie zbudował obwodu" to spróbuj jeszcze raz albo
+ * zmień sieć. */
+async function onionTransport(url) {
+  if (!isOnionHost(url)) return {};
+  try {
+    await startTor();
+    return { createConnection: onionCreateConnection };
+  } catch (err) {
+    console.warn("[multibot] tor nie wstał:", err?.message ?? err);
+    return { error: err?.code === TOR_UNAVAILABLE ? "tor_unavailable" : "tor_timeout" };
+  }
+}
+
 // multibot: katalog z ZAPAKOWANYM interfejsem — tym, który przychodzi razem z
 // aktualizacją. W paczce leży w Resources (ten sam, z którego korzysta lokalny
 // harness), w repo — w `dist` po `vite build`.
@@ -376,7 +405,9 @@ async function remoteUiOriginFor(remoteUrl) {
   if (remoteUi && remoteUi.remoteUrl === remoteUrl) return remoteUi.url;
   await closeRemoteUi();
   try {
-    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl, pin: hostPin(remoteUrl) });
+    const via = await onionTransport(remoteUrl);
+    if (via.error) return null;
+    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl, pin: hostPin(remoteUrl), ...via });
   } catch (err) {
     console.warn("[multibot] lokalny origin nie wstał:", err?.message ?? err);
     remoteUi = null;
@@ -407,7 +438,24 @@ async function loadTargetNow(win, { joinGrant } = {}) {
     // żadna poprawka wyglądu nie docierała do użytkownika przez aktualizację —
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
+    // Tor musi stać, ZANIM cokolwiek pojedzie na .onion — a jeśli nie stanie,
+    // użytkownik ma zobaczyć, dlaczego. `startTor` pamięta swój wynik, więc to
+    // pytanie kosztuje tu tyle co nic.
+    const tor = await onionTransport(target.url);
+    if (tor.error) {
+      console.warn("[multibot] zapisany host .onion, a tora nie ma:", tor.error);
+      if (!win.isDestroyed()) win.loadURL(TOR_ERROR_PAGE);
+      return;
+    }
     const origin = await remoteUiOriginFor(target.url);
+    // Droga awaryjna („ładuj interfejs prosto z hosta") jest dla .onion
+    // ZAKAZANA: Chromium rozwiązałby tę nazwę przez DNS, czyli wyciek adresu i
+    // tak zakończony błędem. Lepsza jedna zrozumiała strona niż jedno i drugie.
+    if (!origin && isOnionHost(target.url)) {
+      console.warn("[multibot] onion bez tunelu — nie ładuję hosta wprost");
+      if (!win.isDestroyed()) win.loadURL(HOST_ERROR_PAGE);
+      return;
+    }
     // Ten sam origin obsługuje KAŻDY host po kolei, a localStorage i cookie
     // sesji należą do originu, nie do hosta. Bez tego czyszczenia pierwszy
     // `fetch` po przełączeniu A→B wysyłał do B token wydany przez A.
@@ -733,7 +781,9 @@ ipcMain.handle("hosts:probe", async (event, url) => {
   } catch {
     return { ok: false, error: "invalid_address" };
   }
-  return probeServer(normalized, { pin: verifyOnlyPin(normalized) });
+  const via = await onionTransport(normalized);
+  if (via.error) return { ok: false, error: via.error };
+  return probeServer(normalized, { pin: verifyOnlyPin(normalized), ...via });
 });
 
 // Hasło serwera i grant nie idą NIGDZIE poza to wywołanie: nie do logów, nie na
@@ -747,7 +797,9 @@ ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
   } catch {
     return { ok: false, error: "invalid_address" };
   }
-  const result = await joinServer(normalized, { serverName, serverPassword, pin: verifyOnlyPin(normalized) });
+  const via = await onionTransport(normalized);
+  if (via.error) return { ok: false, error: via.error };
+  const result = await joinServer(normalized, { serverName, serverPassword, pin: verifyOnlyPin(normalized), ...via });
   if (!result.ok) return result;
   const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });
   setActiveHost(host.id);
@@ -882,6 +934,9 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
 });
 
 app.whenReady().then(async () => {
+  // Sam adres katalogu i miejsce, gdzie leżałby dołączony `tor.exe`. Tor NIE
+  // wstaje tutaj — dopiero przy pierwszym adresie .onion (electron/tor.mjs).
+  configureTor({ dataDir: path.join(app.getPath("userData"), "tor"), resourcesPath: app.isPackaged ? process.resourcesPath : null });
   if (SERVER_ONLY) {
     if (!app.isPackaged) {
       console.error("--server-only requires packaged app");
@@ -971,6 +1026,10 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // Tor jest tu leniwy: podnosi się przy pierwszym adresie .onion, więc nie ma
+  // powodu, żeby przeżył ostatnie okno. Na macOS aplikacja żyje dalej i wstanie
+  // ponownie, gdy znów będzie potrzebny.
+  stopTor();
   if (!SERVER_ONLY && process.platform !== "darwin") app.quit();
 });
 
@@ -983,6 +1042,7 @@ app.on("before-quit", (e) => {
   try {
     serverProc?.kill();
   } catch {}
+  stopTor();
   stopCua().finally(() => {
     cuaCleanedUp = true;
     app.quit();

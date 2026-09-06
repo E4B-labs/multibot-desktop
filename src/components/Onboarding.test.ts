@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { addressNote, authRequest, backLeavesWizard, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, startingPoint } from "./Onboarding";
+import { isOnionHost } from "@/lib/shell";
 
 // Vitest runs in `node` here and the repo has no jsdom, so the screens
 // themselves are not rendered (same as WindowControls.test.ts). Everything that
@@ -108,6 +109,54 @@ describe("addressNote", () => {
     expect(addressNote(relay, false)).toBe("Through your relay box.");
     expect(addressNote({ ...relay, addressVerified: false }, false)).toContain("not answering");
     expect(addressNote({ ...relay, addressVerified: false }, true)).toContain("nie odpowiada");
+  });
+
+  // A hidden service reaches out of this device, so the carrier's NAT decides
+  // nothing and warning about it would be a lie — same reason the relay sits
+  // above cgnat. The sentence promises what an onion actually gives (anywhere)
+  // and warns about what it costs (the first circuit).
+  it("puts the onion ahead of the carrier-NAT warning and says what it costs", () => {
+    const onion = { ...base, addressKind: "onion", portMapping: { state: "cgnat" as const } };
+    expect(addressNote(onion, false)).toBe("Works from anywhere. First connection takes ~10–20 s.");
+    expect(addressNote(onion, true)).toContain("Działa z każdej sieci");
+    expect(addressNote(onion, false)).not.toContain("carrier");
+    expect(addressNote({ ...onion, addressVerified: false }, false)).toContain("has not published it yet");
+    expect(addressNote({ ...onion, addressVerified: false }, true)).toContain("nie opublikował");
+  });
+});
+
+describe("onion sign-in", () => {
+  const ONION = "a".repeat(56) + ".onion";
+
+  // Bez tora adresu .onion nie da się nawet spróbować, więc to jest błąd POLA
+  // adresu — nie ogólne „coś poszło nie tak" pod formularzem.
+  it("shows a missing Tor on the address field, in both languages", () => {
+    expect(joinErrorField("tor_unavailable")).toBe("address");
+    expect(joinErrorText("tor_unavailable", false)).toContain("Tor is not available");
+    expect(joinErrorText("tor_unavailable", true)).toContain("Tor nie jest dostępny");
+  });
+
+  // "Install Tor" and "your network is blocking Tor" are two different things
+  // to do, so they are two different codes — a single one would send half the
+  // people looking for a problem they do not have.
+  it("keeps a blocked Tor apart from a missing one", () => {
+    expect(joinErrorField("tor_timeout")).toBe("address");
+    expect(joinErrorText("tor_timeout", false)).toBe("Tor could not connect (network may block Tor). Try again.");
+    expect(joinErrorText("tor_timeout", true)).toContain("może go blokować");
+  });
+
+  // Pierwsze połączenie to budowa obwodu, nie uścisk dłoni: bez tego zdania
+  // przycisk stoi w „Łączenie…" przez pół minuty i wygląda na zawieszony.
+  it("says the button copy is driven by the address, not by a new IPC call", () => {
+    expect(isOnionHost(`${ONION}:8799`)).toBe(true);
+    expect(isOnionHost(`${ONION}.:8799`)).toBe(true);
+    expect(isOnionHost("https://192.168.1.42:8799")).toBe(false);
+    expect(source).toContain("isOnionHost(address)");
+    // Zmierzone na maszynie Kacpra: ~15 s do „Bootstrapped 100%". Obietnica
+    // musi mieścić wolniejszy przypadek, bo to ona decyduje, kiedy człowiek
+    // uzna, że apka zawisła.
+    expect(source).toContain("Connecting through Tor (up to 2 minutes)…");
+    expect(source).toContain("Łączenie przez Tora (do 2 minut)…");
   });
 });
 
