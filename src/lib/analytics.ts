@@ -9,7 +9,10 @@ export function initAnalytics() {
   if (ready || !TOKEN) return;
   posthog.init(TOKEN, {
     api_host: "https://us.i.posthog.com",
-    autocapture: true,
+    // Onboarding rysuje hasło serwera i kod odzyskiwania jako TEKST elementu, a
+    // PostHog maskuje wyłącznie wartości pól formularza — autocapture wysyłałby
+    // je w treści zdarzenia kliknięcia.
+    autocapture: false,
     capture_pageview: false,
     person_profiles: "identified_only",
     persistence: "localStorage",

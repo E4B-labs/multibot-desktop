@@ -249,6 +249,18 @@ export async function copyText(text: string): Promise<boolean> {
 // Same reply channel as `host.join.result`.
 const DEVICE_ID_KEY = "multibot.device.id";
 
+/** Losowe id, które działa także poza bezpiecznym kontekstem.
+ *
+ * `crypto.randomUUID` istnieje TYLKO w secure context, a serwer 0.4.0 bywa
+ * oglądany po `http://192.168.…` — tam jest `undefined` i samo wywołanie rzuca
+ * (w `deviceId` lądowało to w „brak push", w kompozytorze wywalało dodanie
+ * załącznika). `getRandomValues` jest dostępne zawsze, więc id po prostu ma
+ * inny kształt: 32 znaki hex zamiast UUID-a. */
+export function randomId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** One stable id per install, so re-registering replaces this device's row
  * instead of adding another. Empty when storage is unavailable — a churning id
  * would leave a new dead row on the server every launch, which is worse than
@@ -257,7 +269,7 @@ export function deviceId(storage: Pick<Storage, "getItem" | "setItem"> | undefin
   try {
     const stored = storage?.getItem(DEVICE_ID_KEY);
     if (stored) return stored;
-    const fresh = crypto.randomUUID();
+    const fresh = randomId();
     storage?.setItem(DEVICE_ID_KEY, fresh);
     return storage ? fresh : "";
   } catch {

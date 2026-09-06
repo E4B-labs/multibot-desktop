@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deviceId, hasCustomWindowControls, isShellMessage, joinLocalHarness, registerPushViaShell, resolveHost, shellPost } from "./shell";
+import { deviceId, randomId, hasCustomWindowControls, isShellMessage, joinLocalHarness, registerPushViaShell, resolveHost, shellPost } from "./shell";
 
 describe("hasCustomWindowControls", () => {
   it("wykrywa mostek wystawiony przez preload okna bezramkowego", () => {
@@ -121,6 +121,23 @@ describe("deviceId", () => {
     const first = deviceId(storage);
     expect(first).toBeTruthy();
     expect(deviceId(storage)).toBe(first);
+  });
+
+  // `crypto.randomUUID` istnieje tylko w bezpiecznym kontekscie, a serwer bywa
+  // ogladany po http://192.168.… — tam samo wywolanie wywalalo nas w „brak push”.
+  it("poza bezpiecznym kontekstem robi id z getRandomValues, zamiast go nie mieć", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value); } };
+    Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+    try {
+      const id = deviceId(storage);
+      expect(id).toMatch(/^[0-9a-f]{32}$/);
+      expect(deviceId(storage)).toBe(id);
+      // ten sam pomocnik daje id załącznika w kompozytorze
+      expect(randomId()).toMatch(/^[0-9a-f]{32}$/);
+    } finally {
+      delete (crypto as { randomUUID?: unknown }).randomUUID;
+    }
   });
 
   it("bez pamięci woli nie mieć id niż mieć nowe co uruchomienie", () => {
