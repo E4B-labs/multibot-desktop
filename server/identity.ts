@@ -693,15 +693,19 @@ export class IdentityStore {
   }
 
   /** The user table as the admin tab needs it: every profile, disabled ones
-   * included, with the newest still-valid session as "last seen". A profile
-   * that has never signed in anywhere gets null, not 0. */
+   * included, with the newest session activity as "last seen". A profile that
+   * has never signed in anywhere gets null, not 0.
+   *
+   * Revoked sessions count towards it. "Last seen" is history, and skipping
+   * them would blank the column for exactly the profiles an owner is looking
+   * at — disabling one revokes every session it has. */
   usersWithActivity(): AdminUser[] {
     this.init();
     const rows = this.db.prepare(`
       SELECT u.id, u.username, u.display_name, u.email, u.role, u.created_at, u.disabled_at,
              MAX(s.last_seen_at) AS last_seen_at
         FROM users u
-        LEFT JOIN sessions s ON s.user_id = u.id AND s.revoked_at IS NULL
+        LEFT JOIN sessions s ON s.user_id = u.id
        GROUP BY u.id
        ORDER BY u.created_at
     `).all() as Row[];

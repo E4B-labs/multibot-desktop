@@ -3211,7 +3211,7 @@ async function handleIdentityRoute(
         if (actor.role !== "owner") return identityHandled(res, 403, { error: "owner access required" });
         if (method === "GET" && path === "/api/admin/overview") {
           res.setHeader("cache-control", "no-store");
-          return identityHandled(res, 200, await adminOverview({ identity, store, server }));
+          return identityHandled(res, 200, await adminOverview({ identity, store, server, tlsFingerprint: TLS_FINGERPRINT }));
         }
         const adminUser = path.match(/^\/api\/admin\/users\/([^/]+)$/);
         if (method === "PATCH" && adminUser) {

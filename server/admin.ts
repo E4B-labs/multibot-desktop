@@ -16,9 +16,11 @@ import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
 import type { AdminUser } from "./identity.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Enough to describe a busy day without ever being a memory question: at
- * ~40 bytes an entry the two rings together cost well under 100 KB. */
-const RING = 500;
+/** On a fleet that runs more turns than this in a day the cap, not the clock,
+ * becomes the real window — so it is sized to make that unlikely rather than
+ * tidy: at ~40 bytes an entry both rings together stay under half a megabyte.
+ * ponytail: in-memory ring; persist or sample if a fleet ever outruns it. */
+const RING = 5_000;
 const MEMO_MS = 60_000;
 const GPU_QUERY = ["--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"];
 
@@ -54,7 +56,15 @@ function within<T extends { at: number }>(ring: T[], now: number): T[] {
 }
 
 /** Wire once, next to `workspace.recordTurn`: every runtime event passes here
- * and only four of them leave a trace. */
+ * and only three of them leave a trace.
+ *
+ * `runtime.error` is deliberately NOT one of them. Drivers emit it mid-turn for
+ * every tool a bot's permissions refuse (`drivers/codex.ts`, `drivers/acp`) and
+ * the turn carries on regardless; the fatal ones (spawn failure, CLI exit before
+ * a result) are always followed by `settle(false, …)`, which is a
+ * `turn.completed` with `ok:false`. So the completed event alone is both
+ * complete and correct, and counting errors too would score a denied `rm` as a
+ * failed turn. */
 export function recordTurnEvent(event: RuntimeEvent, now = Date.now()): void {
   const key = event.turnId ?? event.threadId;
   if (event.type === "turn.started") {
@@ -68,25 +78,28 @@ export function recordTurnEvent(event: RuntimeEvent, now = Date.now()): void {
     push(tokens, { at: now, n: Math.max(0, event.input) + Math.max(0, event.output) });
     return;
   }
-  if (event.type !== "turn.completed" && event.type !== "runtime.error") return;
+  if (event.type !== "turn.completed") return;
   const began = startedAt.get(key);
   startedAt.delete(key);
-  push(turns, { at: now, ms: began === undefined ? null : now - began, ok: event.type === "turn.completed" && event.ok });
+  push(turns, { at: now, ms: began === undefined ? null : now - began, ok: event.ok });
 }
 
 export function performanceSummary(now = Date.now()) {
   const window = within(turns, now);
   const done = window.filter((turn) => turn.ok);
-  const errors = window.length - done.length;
+  // Only a turn that produced an answer has a response time; how long a failure
+  // took before giving up would drag the average around for no reader's benefit.
   const times = done.map((turn) => turn.ms).filter((ms): ms is number => ms !== null).sort((a, b) => a - b);
   return {
     avgResponseMs: times.length ? Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length) : 0,
-    // Nearest-rank p95: with a handful of samples the honest answer is the
-    // slowest one, not an interpolation between two of them.
+    // Nearest-rank p95: with a handful of samples the honest answer is one of
+    // them, not an interpolation between two.
     p95ResponseMs: times.length ? times[Math.min(times.length - 1, Math.ceil(times.length * 0.95) - 1)] : 0,
-    turns24h: done.length,
+    // Every turn, so the card's own two numbers reconcile: turns24h × errorRate
+    // is the number of failures.
+    turns24h: window.length,
     tokens24h: within(tokens, now).reduce((sum, sample) => sum + sample.n, 0),
-    errorRate: window.length ? errors / window.length : 0,
+    errorRate: window.length ? (window.length - done.length) / window.length : 0,
   };
 }
 
@@ -152,6 +165,9 @@ export interface AdminDeps {
   };
   store: { bots: AdminBot[]; messagesFor(threadId: string): AdminMessage[] };
   server: { getConnections(callback: (error: Error | null, count: number) => void): unknown };
+  /** SHA-256 of the self-signed certificate this harness serves. The admin tab
+   * shows it so a "server certificate changed" refusal can be checked by eye. */
+  tlsFingerprint?: string | null;
   now?: () => number;
   gpuBinary?: string;
 }
@@ -170,16 +186,23 @@ function messageTally(store: AdminDeps["store"], now: number): Map<string, numbe
   return byUser;
 }
 
+/** Two layouts, because the packaged desktop app has neither of the obvious
+ * ones: a checkout and the phone/Docker install both run `<root>/…/index.js`
+ * with package.json one level up, while electron-builder copies `dist-server`
+ * to `Resources/server` and leaves package.json inside `Resources/app.asar`
+ * (readable — the harness is forked as an Electron utilityProcess). */
 function version(): string {
-  if (appVersion === null) {
+  if (appVersion !== null) return appVersion;
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, "..", "package.json"), join(here, "..", "app.asar", "package.json")]) {
     try {
-      const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")) as { version?: string };
-      appVersion = pkg.version ?? "0.0.0";
+      const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { version?: string };
+      if (pkg.version) return (appVersion = pkg.version);
     } catch {
-      appVersion = "0.0.0";
+      /* try the next layout */
     }
   }
-  return appVersion;
+  return (appVersion = "0.0.0");
 }
 
 async function connectionCount(server: AdminDeps["server"]): Promise<number> {
@@ -215,6 +238,7 @@ export async function adminOverview(deps: AdminDeps) {
       version: version(),
       publicAddress: deps.identity.getMeta?.("server.publicAddress") ?? null,
       addressVerified: Boolean(deps.identity.getMeta?.("server.addressVerifiedAt")),
+      tlsFingerprint: deps.tlsFingerprint ?? null,
       connectionsActive: await connectionCount(deps.server),
     },
     bots: {

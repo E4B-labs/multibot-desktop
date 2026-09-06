@@ -14,7 +14,7 @@ const tokens = (input: number, output: number): RuntimeEvent => ({ ...base, type
 /** One turn, start to finish, `ms` long, finishing at `at`. */
 function turn(turnId: string, at: number, ms: number, ok = true): void {
   recordTurnEvent(started(turnId), at - ms);
-  recordTurnEvent(ok ? completed(turnId) : failed(turnId), at);
+  recordTurnEvent(completed(turnId, ok), at);
 }
 
 beforeEach(() => resetAdminMetricsForTests());
@@ -39,17 +39,33 @@ describe("turn ring", () => {
     expect(performanceSummary(T0).p95ResponseMs).toBe(2_000);
   });
 
-  it("counts a runtime error and an unsuccessful turn against the error rate", () => {
+  it("counts an unsuccessful turn against the error rate and out of the timings", () => {
     turn("ok-1", T0 - 10_000, 500);
     turn("ok-2", T0 - 9_000, 500);
-    turn("crashed", T0 - 8_000, 400, false);
-    recordTurnEvent(started("refused"), T0 - 7_400);
-    recordTurnEvent(completed("refused", false), T0 - 7_000);
+    turn("failed", T0 - 8_000, 30_000, false);
 
     const summary = performanceSummary(T0);
-    expect(summary.turns24h).toBe(2);
-    expect(summary.errorRate).toBe(0.5);
+    // Every completed turn is a turn, so the card's two numbers reconcile:
+    // 3 turns, a third of them failed, is the one failure.
+    expect(summary.turns24h).toBe(3);
+    expect(summary.errorRate).toBeCloseTo(1 / 3);
+    // The 30 s failure is not a response time and must not move the average.
     expect(summary.avgResponseMs).toBe(500);
+  });
+
+  // Drivers emit `runtime.error` for every tool a bot's permissions refuse and
+  // then carry on; the fatal ones always settle into a failed `turn.completed`.
+  // Counting them would score a denied `rm` as a broken turn.
+  it("ignores a mid-turn runtime error and keeps the turn it belongs to intact", () => {
+    recordTurnEvent(started("t-1"), T0 - 5_000);
+    recordTurnEvent(failed("t-1"), T0 - 4_500);
+    recordTurnEvent(failed("t-1"), T0 - 4_000);
+    recordTurnEvent(completed("t-1"), T0 - 3_000);
+
+    const summary = performanceSummary(T0);
+    expect(summary.turns24h).toBe(1);
+    expect(summary.errorRate).toBe(0);
+    expect(summary.avgResponseMs).toBe(2_000);
   });
 
   it("sums token usage over the window and drops yesterday's", () => {
@@ -110,6 +126,7 @@ function stubDeps(overrides: Record<string, unknown> = {}) {
       messagesFor: (threadId: string) => transcripts[threadId] ?? [],
     },
     server: { getConnections: (cb: (error: Error | null, count: number) => void) => cb(null, 7) },
+    tlsFingerprint: "AA:BB",
     now: () => T0,
     gpuBinary: "multibot-no-such-gpu-binary",
     ...overrides,
@@ -134,6 +151,7 @@ describe("adminOverview", () => {
     expect(overview.server.connectionsActive).toBe(7);
     expect(overview.server.publicAddress).toBe("http://[2a00::1]:8799");
     expect(overview.server.addressVerified).toBe(false);
+    expect(overview.server.tlsFingerprint).toBe("AA:BB");
     expect(overview.server.cpuCount).toBeGreaterThan(0);
     expect(overview.server.ram.usedBytes).toBeGreaterThan(0);
     expect(overview.server.ram.usedBytes).toBeLessThanOrEqual(overview.server.ram.totalBytes);

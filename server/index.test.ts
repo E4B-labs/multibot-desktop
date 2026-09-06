@@ -974,6 +974,7 @@ describe("harness HTTP API", () => {
     expect(overview.body.server.cpuCount).toBeGreaterThan(0);
     expect(overview.body.server.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(typeof overview.body.server.connectionsActive).toBe("number");
+    expect(overview.body.server.tlsFingerprint).toMatch(/^[0-9A-F]{2}(:[0-9A-F]{2})+$/);
     expect(Object.keys(overview.body.bots.byVisibility).sort()).toEqual(["private", "public", "team"]);
     expect(overview.body.performance).toMatchObject({ turns24h: expect.any(Number), errorRate: expect.any(Number) });
     expect(overview.body.audit.some((row: any) => row.action === "user.registered")).toBe(true);
