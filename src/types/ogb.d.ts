@@ -89,7 +89,8 @@ declare global {
 
 /** `error` codes: transport ones are `unreachable` | `timeout` |
  * `not-multibot` | `certificate_changed` (a pinned certificate changed — see
- * electron/tls-pin.mjs). */
+ * electron/tls-pin.mjs) | `forbidden` (called from a page that isn't ours —
+ * a screen served straight from the host joins same-origin instead). */
 export type HostProbeResult =
   | { ok: true; configured: boolean; tlsFingerprint?: string }
   | { ok: false; error: string };

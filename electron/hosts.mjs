@@ -56,13 +56,6 @@ function sameOrigin(a, b) {
   }
 }
 
-/** Czy ten adres jest w ogóle zapisanym hostem — brama dla zgody na
- * certyfikat z własnego podpisu (`certificate-error` w main.mjs). Obce originy
- * mają dostawać odmowę Chromium, a nie nasze TOFU. */
-export function isKnownHost(url) {
-  return (readRaw().hosts ?? []).some((h) => sameOrigin(h.url, url));
-}
-
 /** Pinned TLS fingerprint of this host, or undefined when its certificate has
  * never been seen (records saved before pinning existed have no field). */
 export function getHostFingerprint(url) {
@@ -88,15 +81,20 @@ export function addRemoteHost({ name, url, token, tlsFingerprint }) {
   const config = readRaw();
   const normalized = normalizeRemoteUrl(url);
   const tokenEnc = token?.trim() ? encryptToken(token.trim()) : undefined;
+  // Jeden rekord na serwer. Logowanie do tego samego adresu po raz drugi ma
+  // nadpisać wpis, a nie dołożyć bliźniaka do listy hostów — i ma zachować to,
+  // czego nie przyniósł: token z poprzedniego razu i przypięty odcisk (inaczej
+  // świeży wpis bez odcisku znów zaufałby PIERWSZEMU napotkanemu certyfikatowi).
+  const existing = (config.hosts ?? []).find((h) => sameOrigin(h.url, normalized));
   const host = {
-    id: `h_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-    name: (name ?? "").trim() || normalized,
+    id: existing?.id ?? `h_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    name: (name ?? "").trim() || existing?.name || normalized,
     url: normalized,
-    tokenEnc,
+    tokenEnc: tokenEnc ?? existing?.tokenEnc,
     // Optional, and only ever written for an https host — the record stays
     // readable by shells that predate pinning.
-    tlsFingerprint: tlsFingerprint || undefined,
-    createdAt: Date.now(),
+    tlsFingerprint: tlsFingerprint || existing?.tlsFingerprint || undefined,
+    createdAt: existing?.createdAt ?? Date.now(),
   };
   const hosts = upsertRemoteHost(config.hosts ?? [], host);
   writeRaw({ activeId: config.activeId, hosts });

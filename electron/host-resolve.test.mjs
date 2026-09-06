@@ -25,8 +25,10 @@ describe("host resolve", () => {
     expect(normalizeRemoteUrl("192.168.1.42:8799")).toBe("https://192.168.1.42:8799");
     expect(normalizeRemoteUrl(" [2a00:f41:8c4:1::7]:8799/ ")).toBe("https://[2a00:f41:8c4:1::7]:8799");
     expect(normalizeRemoteUrl("brave-otter.local:8799")).toBe("https://brave-otter.local:8799");
-    // Bez portu to już zgadywanie — zostaje błąd.
+    // Bez portu to już zgadywanie — zostaje błąd, tak samo jak port spoza zakresu.
     expect(() => normalizeRemoteUrl("192.168.1.42")).toThrow();
+    expect(() => normalizeRemoteUrl("192.168.1.42:99999")).toThrow();
+    expect(() => normalizeRemoteUrl("192.168.1.42:0")).toThrow();
   });
 
   it("upsertRemoteHost replaces by id and keeps newest first", () => {

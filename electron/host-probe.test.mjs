@@ -39,6 +39,7 @@ describe("classifyJoin", () => {
 
   it("404 bez kodu to serwer bez tej trasy, czyli nie ten serwer", () => {
     expect(classifyJoin(404, null)).toEqual({ ok: false, error: "not-multibot" });
+    expect(classifyJoin(200, null)).toEqual({ ok: false, error: "not-multibot" });
     expect(classifyJoin(500, null)).toEqual({ ok: false, error: "http_500" });
   });
 });

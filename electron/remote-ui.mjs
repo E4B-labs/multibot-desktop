@@ -133,6 +133,10 @@ function upstreamOptions(req, remote, { keepHandshake = false } = {}) {
       // Hosty 0.4.0 mają certyfikat z własnego podpisu, więc łańcucha nie ma
       // czym sprawdzić; zaufanie stoi na odcisku przypiętym w `pin`
       // (electron/tls-pin.mjs) — bez niego byłoby to gołe „ufam każdemu".
+      // ponytail: odcisk sprawdzamy przy uścisku dłoni, więc gniazdo z puli
+      // (keep-alive) przechodzi bez ponownego sprawdzenia — podmiana
+      // certyfikatu na serwerze wychodzi przy następnym połączeniu, nie w tej
+      // samej milisekundzie. Gdyby to kiedyś było za mało: `agent: false`.
       rejectUnauthorized: false,
     },
   };

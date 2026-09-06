@@ -44,7 +44,9 @@ contextBridge.exposeInMainWorld("ogb", {
   probeHost: (url) => ipcRenderer.invoke("hosts:probe", url),
   /** Wymiana nazwy i hasła serwera na krótkotrwały grant. Sukces przełącza
    * okno na tego hosta i wiezie grant we fragmencie URL, więc zwrócona
-   * obietnica zwykle ginie razem ze stroną — tak ma być. */
+   * obietnica zwykle ginie razem ze stroną — tak ma być.
+   * Hasło jedzie tędy w jawnej postaci: NIGDY nie logować argumentów tego
+   * wywołania ani nie przepisywać ich do żadnego stanu, który przeżyje ekran. */
   joinHost: (url, serverName, serverPassword) => ipcRenderer.invoke("hosts:join", url, serverName, serverPassword),
   /** Otwiera natywny wybór hosta bez zmiany aktywnego hosta — „← Wstecz" na
    * ekranie logowania. Zmiana następuje dopiero po jawnym wyborze w tym oknie. */

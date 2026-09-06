@@ -58,7 +58,16 @@ export function pinRequest(req, pin) {
         // the session was created, so there is nothing new to check.
         if (!actual && socket.isSessionReused?.()) return;
         const { learned } = verifyFingerprint({ stored: pin.get(), actual });
-        if (learned) pin.set(learned);
+        if (learned) {
+          // Nieudany zapis (dysk, uprawnienia) nie ma prawa zerwać połączenia,
+          // które właśnie przeszło sprawdzenie — najwyżej odcisk zostanie
+          // zapamiętany przy następnym uścisku dłoni.
+          try {
+            pin.set(learned);
+          } catch {
+            /* nic — patrz wyżej */
+          }
+        }
       } catch (err) {
         socket.destroy(err);
       }

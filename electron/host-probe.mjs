@@ -36,13 +36,27 @@ export function classifyJoin(status, body) {
     return { ok: true, joinGrant: body.joinGrant, expiresAt: body.expiresAt, hasUsers: body.hasUsers };
   }
   if (typeof body?.error === "string") return { ok: false, error: body.error };
-  // No route, no error code: an old server, or not one of ours at all.
-  return { ok: false, error: status === 404 ? "not-multibot" : `http_${status}` };
+  // No error code at all: either the route is missing (an old server) or the
+  // answer isn't JSON we understand — neither is a MultiBot server we can join.
+  if (status === 404 || status === 200) return { ok: false, error: "not-multibot" };
+  return { ok: false, error: `http_${status}` };
 }
 
 function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } = {}) {
-  return new Promise((done, fail) => {
+  return new Promise((resolveWith, rejectWith) => {
     const target = new URL(url);
+    // Budżet CAŁEGO wywołania, nie samej bezczynności gniazda: serwer sączący
+    // po bajcie utrzymywałby `setTimeout` na gnieździe w nieskończoność, a
+    // ekran logowania obiecuje odpowiedź w 8 sekund.
+    const budget = setTimeout(() => req.destroy(Object.assign(new Error("timed out"), { code: TIMED_OUT })), timeoutMs);
+    const done = (value) => {
+      clearTimeout(budget);
+      resolveWith(value);
+    };
+    const fail = (err) => {
+      clearTimeout(budget);
+      rejectWith(err);
+    };
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
     const req = send(
@@ -80,7 +94,6 @@ function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } 
       },
     );
     if (pin) pinRequest(req, pin);
-    req.setTimeout(timeoutMs, () => req.destroy(Object.assign(new Error("timed out"), { code: TIMED_OUT })));
     req.on("error", fail);
     if (payload) req.write(payload);
     req.end();

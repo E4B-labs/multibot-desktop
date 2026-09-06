@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
-import { addRemoteHost, getActiveId, getHostFingerprint, isKnownHost, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
+import { addRemoteHost, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
 import { joinServer, probeServer } from "./host-probe.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
 import { normalizeRemoteUrl, shouldStartLocalHarness } from "./host-resolve.mjs";
@@ -621,7 +621,15 @@ ipcMain.handle("hosts:use-host", async (_event, id) => {
 // jak tego zrobić — webui żyje dopiero w originie serwera, a serwer nie wysyła
 // żadnych nagłówków CORS, więc poświadczenia trzeba wymienić, ZANIM okno tam
 // pojedzie. Odpowiedzi są wąskie z rozmysłem: kod błędu, nic więcej.
-ipcMain.handle("hosts:probe", async (_event, url) => {
+//
+// Tylko z NASZEGO ekranu (`isLocalSender`): w trybie zdalnym w oknie stoi
+// strona z cudzego serwera, a bez tej bramki mogłaby po cichu przestawić
+// powłokę na serwer napastnika albo skanować tym LAN użytkownika. Ekran
+// logowania podany prosto z hosta (droga awaryjna, bez lokalnego originu) nic
+// przez to nie traci — jest w originie serwera, więc `POST /api/auth/join`
+// robi zwykłym `fetch`, same-origin.
+ipcMain.handle("hosts:probe", async (event, url) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   let normalized;
   try {
     normalized = normalizeRemoteUrl(url);
@@ -634,7 +642,8 @@ ipcMain.handle("hosts:probe", async (_event, url) => {
 // Hasło serwera i grant nie idą NIGDZIE poza to wywołanie: nie do logów, nie na
 // dysk. W rekordzie hosta lądują wyłącznie adres i odcisk certyfikatu, który
 // właśnie zobaczyliśmy w uścisku dłoni (TOFU — dalsze połączenia go pilnują).
-ipcMain.handle("hosts:join", async (_event, url, serverName, serverPassword) => {
+ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   let normalized;
   try {
     normalized = normalizeRemoteUrl(url);
@@ -645,17 +654,49 @@ ipcMain.handle("hosts:join", async (_event, url, serverName, serverPassword) => 
   if (!result.ok) return result;
   const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });
   setActiveHost(host.id);
-  if (mainWindow) await loadActiveTarget(mainWindow, { joinGrant: result.joinGrant });
+  // Host jest już zapisany i aktywny, więc nieudane przeładowanie okna nie
+  // czyni z udanego logowania błędu — najwyżej trzeba je powtórzyć albo
+  // uruchomić apkę ponownie. Rzucenie tutaj wywróciłoby onboarding po tym,
+  // jak grant został wydany i przepadłby razem z wyjątkiem.
+  if (mainWindow) {
+    try {
+      await loadActiveTarget(mainWindow, { joinGrant: result.joinGrant });
+    } catch (err) {
+      console.warn("[multibot] host zapisany, ale okno się nie przeładowało:", err?.message ?? err);
+    }
+  }
   return { ok: true, joinGrant: result.joinGrant, expiresAt: result.expiresAt, hasUsers: result.hasUsers };
 });
 
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Origin aktywnego hosta zdalnego albo `null`. Wąsko z rozmysłem: zgoda na
+ * certyfikat z własnego podpisu należy się temu jednemu serwerowi, na który
+ * apka właśnie patrzy, a nie każdemu adresowi kiedykolwiek zapisanemu. */
+function activeRemoteOrigin() {
+  try {
+    const target = resolveLoadTarget();
+    return target.mode === "remote" ? originOf(target.url) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Bezpośredni `loadURL` na hosta (droga awaryjna, gdy lokalny origin nie
 // wstał) trafia na certyfikat z własnego podpisu i Chromium zrywa połączenie,
-// zanim ktokolwiek zdąży cokolwiek zobaczyć. Zgoda tylko dla ZAPISANEGO hosta
-// i tylko na ten sam certyfikat co poprzednio; pierwszy kontakt zapamiętuje
-// odcisk, każda zmiana to odmowa. Obce originy idą zwykłą drogą Chromium.
-app.on("certificate-error", (event, _webContents, url, _error, certificate, callback) => {
-  if (!isKnownHost(url)) {
+// zanim ktokolwiek zdąży cokolwiek zobaczyć. Zgoda tylko dla AKTYWNEGO hosta,
+// tylko w głównym oknie i tylko na ten sam certyfikat co poprzednio; pierwszy
+// kontakt zapamiętuje odcisk, każda zmiana to odmowa. Wszystko inne — obce
+// originy, podramki, wyskakujące okna — idzie zwykłą drogą Chromium.
+app.on("certificate-error", (event, webContents, url, _error, certificate, callback) => {
+  const active = activeRemoteOrigin();
+  if (!active || webContents !== mainWindow?.webContents || originOf(url) !== active) {
     callback(false);
     return;
   }
