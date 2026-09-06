@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,6 +95,26 @@ const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
 const PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "");
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE = !new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
+
+// ponytail: a plain interface scan — no UPnP, no probe, no verification. PR 3
+// replaces both helpers with server/net-address.ts.
+function localAddresses(port: number): string[] {
+  const found: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const entry of list ?? []) {
+      if (entry.internal) continue;
+      const v6 = entry.family === "IPv6" || (entry.family as unknown as number) === 6;
+      found.push(v6 ? `http://[${entry.address}]:${port}` : `http://${entry.address}:${port}`);
+    }
+  }
+  return found;
+}
+
+function primaryAddress(port: number): string {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const found = localAddresses(port);
+  return found.find((address) => !address.includes("[")) ?? found[0] ?? `http://127.0.0.1:${port}`;
+}
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
 const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE ? join(ROOT, "dist") : null);
@@ -133,6 +154,18 @@ startOpenCodeModelRefresh();
 const cfg = loadConfig();
 const identity = new IdentityStore();
 identity.init();
+// 0.4.0 dropped the installation-wide bearer token. The file keeps it (nothing
+// rewrites config.json), but every client holding one is about to get a single
+// 401 — say so loudly once, or the first restart looks like a crash.
+try {
+  const raw = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8")) as { auth?: { token?: string } };
+  if (raw.auth?.token) {
+    console.warn("[multibot] config.json still holds the old auth.token — that rail is gone in 0.4.0.");
+    console.warn("[multibot] old clients will be asked to sign in again (one 401, then the sign-in screen). The file is left untouched.");
+  }
+} catch {
+  /* no config yet, or unreadable — nothing to warn about */
+}
 const identityAttempts = new Map<string, { startedAt: number; count: number }>();
 // Ustawiane przy montażu bramki (na końcu pliku); unieważnienie sesji musi
 // zerwać jej SSE/WS, inaczej wylogowany socket dalej dostaje zdarzenia.
@@ -2937,7 +2970,7 @@ function readBody(req: IncomingMessage): Promise<any> {
 }
 
 function identityUser(actor: IdentityActor) {
-  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role };
+  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role, email: actor.email ?? null };
 }
 
 function identitySessionBody(session: CreatedSession & { recoveryCode?: string }, includeSessionToken = false) {
@@ -2976,31 +3009,30 @@ async function handleIdentityRoute(
   actor: IdentityActor | null,
 ): Promise<boolean> {
   if (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server")) {
-    return identityHandled(res, 200, identity.publicInfo());
+    // No `name`: it is one of the three join credentials, so a port scan must
+    // not hand it out. Members read it back from GET /api/server.
+    const info = identity.publicInfo();
+    return identityHandled(res, 200, {
+      configured: info.configured,
+      serverId: info.serverId,
+      protocol: info.protocol,
+      generation: info.generation,
+      publicKey: info.publicKey,
+    });
   }
-  if (method === "POST" && path === "/api/setup/server") {
-    if (!isLoopbackRequest(req)) return identityHandled(res, 403, { error: "server setup is local-only" });
-    if (identityRateLimited(req, "setup")) return identityHandled(res, 429, { error: "too many attempts" });
-    try {
-      const body = await readBody(req);
-      const setup = await identity.configureServer(body.name, body.serverPassword);
-      const requestHost = typeof req.headers.host === "string" ? req.headers.host.trim() : "";
-      const forwardedProto = req.headers["x-forwarded-proto"];
-      const protocol = typeof forwardedProto === "string" && forwardedProto ? forwardedProto.split(",")[0].trim() : isSecureRequest(req) ? "https" : "http";
-      const address = PUBLIC_URL || (requestHost && !/^\[?(?:0\.0\.0\.0|::|localhost)\]?(:\d+)?$/i.test(requestHost) ? `${protocol}://${requestHost}` : `http://127.0.0.1:${PORT}`);
-      res.setHeader("cache-control", "no-store");
-      return identityHandled(res, 201, { server: setup.server, serverPassword: setup.serverPassword, serverAddress: address });
-    } catch (error) {
-      const status = error instanceof IdentityError ? error.status : 400;
-      return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
-    }
+  if (method === "GET" && path === "/api/setup/values") {
+    // Reads the password back from setup.json — the only place it exists in the
+    // clear, and only while nobody has claimed the server yet.
+    const values = isLoopbackRequest(req) && identity.userCount() === 0 ? identity.setupValues() : null;
+    if (!values) return identityHandled(res, 404, { error: "not_found" });
+    res.setHeader("cache-control", "no-store");
+    return identityHandled(res, 200, { ...values, address: primaryAddress(PORT), addresses: localAddresses(PORT) });
   }
   if (method === "POST" && path === "/api/auth/join") {
     if (identityRateLimited(req, "join")) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
-      if (!await identity.verifyJoinPassword(body.serverPassword)) return identityHandled(res, 401, { error: "invalid server credentials" });
-      return identityHandled(res, 200, { server: identity.publicInfo() });
+      return identityHandled(res, 200, await identity.join(body.serverName, body.serverPassword));
     } catch (error) {
       const status = error instanceof IdentityError ? error.status : 400;
       return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
@@ -3010,14 +3042,23 @@ async function handleIdentityRoute(
     if (identityRateLimited(req, "register")) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
-      const session = await identity.register({
+      let session = await identity.register({
         username: body.username,
         password: body.password,
         displayName: body.displayName,
+        email: body.email,
+        joinGrant: body.joinGrant,
         serverPassword: body.serverPassword,
         deviceName: body.deviceName,
       });
-      if (session.actor.role === "owner") store.migrateLegacyOwner(session.actor.userId, session.actor.displayName);
+      if (session.actor.role === "owner") {
+        store.migrateLegacyOwner(session.actor.userId, session.actor.displayName);
+        // The pre-0.4.0 install kept one shared e-mail in config.json. It
+        // belonged to whoever ran the server, and that is exactly this account.
+        if (!session.actor.email && cfg.profile?.email) {
+          session = { ...session, actor: identity.updateProfile(session.actor, session.actor.displayName, cfg.profile.email) };
+        }
+      }
       res.setHeader("set-cookie", identityCookie(session.sessionToken, isSecureRequest(req)));
       res.setHeader("cache-control", "no-store");
       return identityHandled(res, 201, identitySessionBody(session, req.headers["x-multibot-client"] === "native"));
@@ -3030,7 +3071,7 @@ async function handleIdentityRoute(
     if (identityRateLimited(req, "login")) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
-      const session = await identity.login(body.username, body.password, body.deviceName);
+      const session = await identity.login({ username: body.username, password: body.password, joinGrant: body.joinGrant, deviceName: body.deviceName });
       res.setHeader("set-cookie", identityCookie(session.sessionToken, isSecureRequest(req)));
       res.setHeader("cache-control", "no-store");
       return identityHandled(res, 200, identitySessionBody(session, req.headers["x-multibot-client"] === "native"));
@@ -3043,7 +3084,7 @@ async function handleIdentityRoute(
     if (identityRateLimited(req, "recover")) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
-      const session = await identity.recover(body.username, body.recoveryCode, body.newPassword, body.deviceName);
+      const session = await identity.recover({ username: body.username, recoveryCode: body.recoveryCode, newPassword: body.newPassword, joinGrant: body.joinGrant, deviceName: body.deviceName });
       res.setHeader("set-cookie", identityCookie(session.sessionToken, isSecureRequest(req)));
       res.setHeader("cache-control", "no-store");
       // `recover` unieważnił WSZYSTKIE sesje tego konta — ich gniazda muszą pójść.
@@ -3087,12 +3128,18 @@ async function handleIdentityRoute(
       if (method === "GET" && path === "/api/profile") return identityHandled(res, 200, { user: identityUser(actor) });
       if (method === "PATCH" && path === "/api/profile") {
         const body = await readBody(req);
-        return identityHandled(res, 200, { user: identityUser(identity.updateProfile(actor, body.displayName)) });
+        return identityHandled(res, 200, { user: identityUser(identity.updateProfile(actor, body.displayName, body.email)) });
       }
-      if (method === "GET" && path === "/api/server") return identityHandled(res, 200, identity.publicInfo());
+      if (method === "GET" && path === "/api/server") {
+        return identityHandled(res, 200, { ...identity.publicInfo(), publicAddress: identity.publicAddress() });
+      }
       if (method === "PATCH" && path === "/api/server") {
         const body = await readBody(req);
-        return identityHandled(res, 200, await identity.updateServer(actor, body.name, body.serverPassword));
+        return identityHandled(res, 200, await identity.updateServer(actor, body.name));
+      }
+      if (method === "POST" && path === "/api/server/password") {
+        res.setHeader("cache-control", "no-store");
+        return identityHandled(res, 200, { serverPassword: await identity.rotateServerPassword(actor) });
       }
       if (method === "GET" && path === "/api/server/members") return identityHandled(res, 200, { members: identity.members() });
       if (method === "GET" && path === "/api/workspace") {
@@ -5213,6 +5260,11 @@ server.on("error", (err: NodeJS.ErrnoException) => {
     process.exit(1);
   }
   throw err;
+});
+// A server that has never been joined configures itself here — before the first
+// request can ask whether it is configured.
+await identity.ensureConfigured(primaryAddress(PORT)).catch((error) => {
+  console.error("[multibot] server self-configuration failed:", error);
 });
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on http://${HOST}:${PORT}`);

@@ -22,6 +22,10 @@ describe("public allowlist", () => {
   it("wpuszcza tylko to, czego ekran logowania naprawdę potrzebuje", () => {
     expect(isPublicRoute("GET", "/api/public/server")).toBe(true);
     expect(isPublicRoute("GET", "/api/health")).toBe(true);
+    // Gated inside the handler by loopback + "no profile yet", not by the gate.
+    expect(isPublicRoute("GET", "/api/setup/values")).toBe(true);
+    // Setting a server up is not a request any more — it happens on boot.
+    expect(isPublicRoute("POST", "/api/setup/server")).toBe(false);
     expect(isPublicRoute("POST", "/api/auth/join")).toBe(true);
     expect(isPublicRoute("POST", "/api/auth/login")).toBe(true);
     expect(isPublicRoute("POST", "/api/auth/register")).toBe(true);
