@@ -285,7 +285,7 @@ const ONION = "a".repeat(56) + ".onion";
 function startOnionProxy() {
   const seen = [];
   const createConnection = (options, callback) => {
-    seen.push({ host: options.host ?? options.hostname, port: Number(options.port) });
+    seen.push({ host: options.host ?? options.hostname, port: Number(options.port), servername: options.servername });
     // Tunel udajemy zwykłym gniazdem do atrapy hosta — proxy nie ma prawa
     // wiedzieć, co jest po drugiej stronie.
     const socket = netConnect(Number(new URL(host.url).port), "127.0.0.1");
@@ -308,7 +308,10 @@ test("żądania do hosta .onion idą przez tunel, a nie przez resolver", async (
     const res = await get(`${przez.url}/api/ping?x=1`);
     assert.equal(res.status, 200);
     assert.deepEqual(JSON.parse(res.body), { from: "host", path: "/api/ping?x=1" });
-    assert.deepEqual(seen, [{ host: ONION, port: 8799 }], "nazwa .onion ma trafić do tunelu, nie do gniazda");
+    assert.deepEqual(seen, [{ host: ONION, port: 8799, servername: ONION }], "nazwa .onion ma trafić do tunelu, nie do gniazda");
+    // Dowód, że zdejmowanie `servername` w tor.mjs ma co zdejmować: agent HTTPS
+    // wypełnia je sam z nagłówka Host, zanim woła `createConnection`.
+    assert.equal(seen[0].servername, ONION, "agent podstawia servername — dlatego tor.mjs je usuwa");
   } finally {
     await przez.close();
   }
@@ -341,7 +344,7 @@ test("upgrade WebSocketa na hoście .onion też idzie przez tunel", async () => 
       req.end();
     });
     assert.equal(upgraded.res.statusCode, 101);
-    assert.deepEqual(seen, [{ host: ONION, port: 8799 }]);
+    assert.deepEqual(seen, [{ host: ONION, port: 8799, servername: ONION }]);
     upgraded.socket.destroy();
   } finally {
     await przez.close();

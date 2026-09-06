@@ -109,7 +109,10 @@ function spawnTor({ dataDir, resourcesPath, budgetMs }) {
       rejectWith(Object.assign(new Error("tor is not available on this computer"), { code: TOR_UNAVAILABLE }));
       return;
     }
-    mkdirSync(dataDir, { recursive: true });
+    // 0700: tor trzyma tu klucze swoich obwodów i stan katalogu. Na Windowsie
+    // node ten tryb ignoruje, na macOS i Linuksie jest jedyną zaporą przed
+    // innym kontem na tej samej maszynie.
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const torrc = join(dataDir, "torrc");
     writeFileSync(torrc, torrcText({ dataDir }));
 
@@ -185,10 +188,14 @@ function spawnTor({ dataDir, resourcesPath, budgetMs }) {
 export function startTor(options = {}) {
   if (options.dataDir || options.resourcesPath) configureTor(options);
   if (starting) return starting;
-  starting = spawnTor({ ...settings, budgetMs: options.budgetMs ?? BOOTSTRAP_BUDGET_MS }).catch((err) => {
-    starting = null;
+  // `starting === mine` obowiązkowo: bez tego SPÓŹNIONE odrzucenie starej próby
+  // kasowało uchwyt do NOWEJ, już działającej — a wtedy `stopTor` nie miał
+  // czego zatrzymać i tor zostawał sierotą po zamknięciu aplikacji.
+  const mine = spawnTor({ ...settings, budgetMs: options.budgetMs ?? BOOTSTRAP_BUDGET_MS }).catch((err) => {
+    if (starting === mine) starting = null;
     throw err;
   });
+  starting = mine;
   return starting;
 }
 
@@ -203,6 +210,18 @@ export function stopTor() {
   } catch {
     /* already gone */
   }
+}
+
+/**
+ * Options for `tls.connect` over an already-open tunnel. `servername` is
+ * dropped (D3): the pin compares `fingerprint256` and never looks at a SAN, and
+ * an https Agent fills `servername` in from the Host header on its own — so
+ * without this the onion address would be announced in SNI for nothing.
+ * Exported so the one line that must not regress has a test of its own.
+ */
+export function tunnelTlsOptions(options) {
+  const { servername: _sni, ...rest } = options;
+  return rest;
 }
 
 /**
@@ -231,12 +250,9 @@ export function onionCreateConnection(options, callback) {
         process.nextTick(() => socket.resume());
         return;
       }
-      // `servername` zdejmujemy (D3): przypięcie porównuje `fingerprint256` i
-      // nigdy nie zagląda do SAN, a agent HTTPS dokłada je sam z nagłówka Host.
-      const { servername: _sni, ...rest } = options;
       let secure;
       try {
-        secure = tlsConnect({ ...rest, socket });
+        secure = tlsConnect({ ...tunnelTlsOptions(options), socket });
       } catch (err) {
         // Tunel jest NASZ do chwili, w której ktoś go od nas odbierze. Gdyby
         // TLS wywrócił się tutaj, nikt inny by go już nie zamknął.

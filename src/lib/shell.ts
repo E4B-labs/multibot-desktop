@@ -304,7 +304,9 @@ export function isOnionHost(address: string | null | undefined): boolean {
       return false;
     }
   }
-  return /^[a-z2-7]{56}\.onion$/.test(host);
+  // Kropka na końcu to ten sam host (korzeń DNS-u zapisany wprost), a `new URL`
+  // ją ZOSTAWIA — bez tego `<56>.onion.` uchodziło za zwykły adres.
+  return /^[a-z2-7]{56}\.onion$/.test(host.replace(/\.$/, ""));
 }
 
 export type PushOutcome = "registered" | "declined" | "skipped" | "failed";

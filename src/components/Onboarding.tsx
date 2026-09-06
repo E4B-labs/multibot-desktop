@@ -50,7 +50,7 @@ export function previousStep(path: OnboardingPath, step: OnboardingStep): Onboar
 
 export type JoinErrorField = "address" | "name" | "password" | "form" | "profileName" | "profilePassword";
 
-const ADDRESS_CODES = ["invalid_address", "unreachable", "timeout", "not_multibot", "server_not_set_up", "certificate_changed", "insecure_address", "tor_unavailable"];
+const ADDRESS_CODES = ["invalid_address", "unreachable", "timeout", "not_multibot", "server_not_set_up", "certificate_changed", "insecure_address", "tor_unavailable", "tor_timeout"];
 const PROFILE_NAME_CODES = ["invalid username", "profile_name_taken", "no_such_profile", "invalid email", "display name required"];
 const PROFILE_PASSWORD_CODES = ["wrong_profile_password", "password must contain 12-128 characters", "new password must contain 12-128 characters"];
 
@@ -193,6 +193,12 @@ const ERROR_TEXTS: Record<string, [string, string]> = {
   // Adres .onion da się otworzyć WYŁĄCZNIE przez Tora, a powłoka nie znalazła
   // go ani w paczce, ani w PATH. Bez niego nie ma czego spróbować.
   tor_unavailable: ["Tor is not available on this computer.", "Tor nie jest dostępny na tym komputerze."],
+  // Tor JEST, ale nie zbudował obwodu — najczęściej dlatego, że sieć go blokuje.
+  // To jest inna rada niż „zainstaluj tora", więc i inny kod.
+  tor_timeout: [
+    "Tor could not connect (network may block Tor). Try again.",
+    "Tor nie zdołał się połączyć (ta sieć może go blokować). Spróbuj jeszcze raz.",
+  ],
   forbidden: ["This window can't change servers. Restart the app and try again.", "To okno nie może zmieniać serwerów. Uruchom aplikację ponownie i spróbuj jeszcze raz."],
   wrong_server_name: ["No server of that name here.", "Nie ma tu serwera o tej nazwie."],
   wrong_server_password: ["Wrong server password.", "Złe hasło serwera."],
@@ -575,8 +581,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               {busy
                 ? isOnionHost(address)
                   ? polish
-                    ? "Łączenie przez Tora (do 30 s)…"
-                    : "Connecting through Tor (up to 30 s)…"
+                    ? "Łączenie przez Tora (do 2 minut)…"
+                    : "Connecting through Tor (up to 2 minutes)…"
                   : polish
                     ? "Łączenie…"
                     : "Connecting…"

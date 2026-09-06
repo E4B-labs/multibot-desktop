@@ -15,7 +15,7 @@ import { activateForBot, normalizeNotification } from "./notifications.mjs";
 import { startRemoteUiServer } from "./remote-ui.mjs";
 import { collectSetupValues } from "./setup-values.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
-import { configureTor, onionCreateConnection, startTor, stopTor } from "./tor.mjs";
+import { configureTor, onionCreateConnection, startTor, stopTor, TOR_UNAVAILABLE } from "./tor.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./diagnostics.mjs";
 
@@ -324,6 +324,15 @@ const HOST_ERROR_PAGE = errorPage(
   "MultiBot couldn't load the server it is signed in to. Check that it is running and reachable, then press Ctrl+Shift+H (⌘⇧H on a Mac) to pick another one.",
 );
 
+// Zapisany host .onion na komputerze, na którym nie ma tora, to nie jest „host
+// nie odpowiada": nie ma czym nawet spróbować. Rada z HOST_ERROR_PAGE
+// („sprawdź, czy serwer działa") wysyłałaby wtedy szukać usterki tam, gdzie
+// jej nie ma.
+const TOR_ERROR_PAGE = errorPage(
+  "This server needs Tor",
+  "This server is reachable only through Tor, which is not available on this computer. Install Tor, then press Ctrl+Shift+H (⌘⇧H on a Mac) to try again or pick another server.",
+);
+
 // multibot (C2): fragment credential hand-off for a remote host's token.
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
 // window.location.hash client-side, stores it, and erases it before first
@@ -353,9 +362,13 @@ function verifyOnlyPin(url) {
 }
 
 /** Czym rozmawiać z tym adresem. Zwykły host: niczym dodatkowym. Adres .onion:
- * przez NASZEGO tora — i wtedy trzeba go najpierw podnieść. `null` znaczy „na
- * tym komputerze nie ma tora", czyli jedyny uczciwy wynik to odmowa: połączenie
- * wprost rozwiązywałoby nazwę usługi ukrytej przez DNS. */
+ * przez NASZEGO tora — i wtedy trzeba go najpierw podnieść. `error` znaczy, że
+ * się nie da, i jedyny uczciwy wynik to odmowa: połączenie wprost
+ * rozwiązywałoby nazwę usługi ukrytej przez DNS.
+ *
+ * Dwa różne kody, bo prowadzą do dwóch różnych rzeczy do zrobienia: „nie ma
+ * tora" to zainstaluj go, a „nie zbudował obwodu" to spróbuj jeszcze raz albo
+ * zmień sieć. */
 async function onionTransport(url) {
   if (!isOnionHost(url)) return {};
   try {
@@ -363,7 +376,7 @@ async function onionTransport(url) {
     return { createConnection: onionCreateConnection };
   } catch (err) {
     console.warn("[multibot] tor nie wstał:", err?.message ?? err);
-    return null;
+    return { error: err?.code === TOR_UNAVAILABLE ? "tor_unavailable" : "tor_timeout" };
   }
 }
 
@@ -393,7 +406,7 @@ async function remoteUiOriginFor(remoteUrl) {
   await closeRemoteUi();
   try {
     const via = await onionTransport(remoteUrl);
-    if (!via) return null;
+    if (via.error) return null;
     remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl, pin: hostPin(remoteUrl), ...via });
   } catch (err) {
     console.warn("[multibot] lokalny origin nie wstał:", err?.message ?? err);
@@ -425,6 +438,15 @@ async function loadTargetNow(win, { joinGrant } = {}) {
     // żadna poprawka wyglądu nie docierała do użytkownika przez aktualizację —
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
+    // Tor musi stać, ZANIM cokolwiek pojedzie na .onion — a jeśli nie stanie,
+    // użytkownik ma zobaczyć, dlaczego. `startTor` pamięta swój wynik, więc to
+    // pytanie kosztuje tu tyle co nic.
+    const tor = await onionTransport(target.url);
+    if (tor.error) {
+      console.warn("[multibot] zapisany host .onion, a tora nie ma:", tor.error);
+      if (!win.isDestroyed()) win.loadURL(TOR_ERROR_PAGE);
+      return;
+    }
     const origin = await remoteUiOriginFor(target.url);
     // Droga awaryjna („ładuj interfejs prosto z hosta") jest dla .onion
     // ZAKAZANA: Chromium rozwiązałby tę nazwę przez DNS, czyli wyciek adresu i
@@ -760,7 +782,7 @@ ipcMain.handle("hosts:probe", async (event, url) => {
     return { ok: false, error: "invalid_address" };
   }
   const via = await onionTransport(normalized);
-  if (!via) return { ok: false, error: "tor_unavailable" };
+  if (via.error) return { ok: false, error: via.error };
   return probeServer(normalized, { pin: verifyOnlyPin(normalized), ...via });
 });
 
@@ -776,7 +798,7 @@ ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
     return { ok: false, error: "invalid_address" };
   }
   const via = await onionTransport(normalized);
-  if (!via) return { ok: false, error: "tor_unavailable" };
+  if (via.error) return { ok: false, error: via.error };
   const result = await joinServer(normalized, { serverName, serverPassword, pin: verifyOnlyPin(normalized), ...via });
   if (!result.ok) return result;
   const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });

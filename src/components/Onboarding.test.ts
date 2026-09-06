@@ -136,14 +136,27 @@ describe("onion sign-in", () => {
     expect(joinErrorText("tor_unavailable", true)).toContain("Tor nie jest dostępny");
   });
 
+  // "Install Tor" and "your network is blocking Tor" are two different things
+  // to do, so they are two different codes — a single one would send half the
+  // people looking for a problem they do not have.
+  it("keeps a blocked Tor apart from a missing one", () => {
+    expect(joinErrorField("tor_timeout")).toBe("address");
+    expect(joinErrorText("tor_timeout", false)).toBe("Tor could not connect (network may block Tor). Try again.");
+    expect(joinErrorText("tor_timeout", true)).toContain("może go blokować");
+  });
+
   // Pierwsze połączenie to budowa obwodu, nie uścisk dłoni: bez tego zdania
   // przycisk stoi w „Łączenie…" przez pół minuty i wygląda na zawieszony.
   it("says the button copy is driven by the address, not by a new IPC call", () => {
     expect(isOnionHost(`${ONION}:8799`)).toBe(true);
+    expect(isOnionHost(`${ONION}.:8799`)).toBe(true);
     expect(isOnionHost("https://192.168.1.42:8799")).toBe(false);
     expect(source).toContain("isOnionHost(address)");
-    expect(source).toContain("Connecting through Tor (up to 30 s)…");
-    expect(source).toContain("Łączenie przez Tora (do 30 s)…");
+    // Zmierzone na maszynie Kacpra: ~15 s do „Bootstrapped 100%". Obietnica
+    // musi mieścić wolniejszy przypadek, bo to ona decyduje, kiedy człowiek
+    // uzna, że apka zawisła.
+    expect(source).toContain("Connecting through Tor (up to 2 minutes)…");
+    expect(source).toContain("Łączenie przez Tora (do 2 minut)…");
   });
 });
 

@@ -186,6 +186,10 @@ describe("adres .onion", () => {
     expect(isOnionHost(`${ONION}:8799`)).toBe(true);
     expect(isOnionHost(`https://${ONION}:8799/`)).toBe(true);
     expect(isOnionHost(` HTTPS://${ONION.toUpperCase()}:8799 `)).toBe(true);
+    // Kropka na końcu to ten sam host — `new URL` ją zostawia, więc bez jawnego
+    // zdjęcia adres uchodziłby za zwykły i poszedł do resolvera DNS.
+    expect(isOnionHost(`${ONION}.`)).toBe(true);
+    expect(isOnionHost(`https://${ONION}.:8799`)).toBe(true);
   });
 
   it("odsiewa wszystko, czego tor nie zestawi", () => {

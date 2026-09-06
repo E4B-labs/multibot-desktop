@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { parseTorLine, resolveTorBinary, startTor, TOR_UNAVAILABLE, torrcText } from "./tor.mjs";
+import { parseTorLine, resolveTorBinary, startTor, TOR_UNAVAILABLE, torrcText, tunnelTlsOptions } from "./tor.mjs";
 
 test("z logu tora wychodzi port SOCKS i moment gotowości", () => {
   assert.deepEqual(parseTorLine("Sep 06 12:00:00.000 [notice] Opened Socks listener on 127.0.0.1:53422"), { socksPort: 53422 });
@@ -77,4 +77,17 @@ test("startTor bez binarki odpada od razu kodem tor_unavailable, a nie po 90 sek
     if (before === undefined) delete process.env.OMB_TOR;
     else process.env.OMB_TOR = before;
   }
+});
+
+// D3: przypięcie porównuje `fingerprint256` i nie zagląda do SAN, a agent HTTPS
+// wypełnia `servername` sam z nagłówka Host. Zostawienie go rozgłaszałoby adres
+// usługi ukrytej w SNI za darmo. Ta jedna linijka nie ma jak się bronić sama,
+// więc ma własną asercję.
+test("nad tunelem nie idzie servername", () => {
+  const options = { host: "x.onion", port: 8799, servername: "x.onion", rejectUnauthorized: false };
+  const over = tunnelTlsOptions(options);
+  assert.equal("servername" in over, false);
+  assert.equal(over.rejectUnauthorized, false, "reszta opcji zostaje nietknięta");
+  assert.equal(over.port, 8799);
+  assert.equal(options.servername, "x.onion", "wejście zostaje nietknięte");
 });

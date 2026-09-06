@@ -60,7 +60,11 @@ export function isOnionHost(address) {
       return false;
     }
   }
-  return /^[a-z2-7]{56}\.onion$/.test(host);
+  // Kropka na końcu to ten sam host (korzeń DNS-u zapisany wprost), a `new URL`
+  // ją ZOSTAWIA. Bez tego `<56>.onion.` przechodziło przez `normalizeRemoteUrl`,
+  // wypadało tutaj na „nie onion" i szło zwykłym gniazdem — czyli wyciekiem
+  // nazwy usługi ukrytej do resolvera.
+  return /^[a-z2-7]{56}\.onion$/.test(host.replace(/\.$/, ""));
 }
 
 /** Ten sam serwer wpisany jako `https://h:8799/` i `https://h:8799` to jeden
