@@ -111,10 +111,16 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       // server name and password, and spends the 5-minute grant that proof
       // returns. PR 7 replaces this screen; this keeps it working until then.
       const deviceName = navigator.userAgent.slice(0, 80);
-      const joined = await authFetch("/api/auth/join", { method: "POST", body: JSON.stringify({ serverName: serverName.trim(), serverPassword }) });
-      const grant = await joined.json().catch(() => ({})) as { joinGrant?: string; error?: string };
-      if (!joined.ok || !grant.joinGrant) throw new Error(grant.error ?? `Join failed (${joined.status})`);
-      const joinGrant = grant.joinGrant;
+      // The desktop shell joins natively and hands the grant over in the
+      // fragment (`electron/main.mjs` → `#join=…`); only a browser, which has
+      // nowhere else to get one, asks the server itself.
+      let joinGrant = new URLSearchParams(location.hash.slice(1)).get("join") ?? "";
+      if (!joinGrant) {
+        const joined = await authFetch("/api/auth/join", { method: "POST", body: JSON.stringify({ serverName: serverName.trim(), serverPassword }) });
+        const grant = await joined.json().catch(() => ({})) as { joinGrant?: string; error?: string };
+        if (!joined.ok || !grant.joinGrant) throw new Error(grant.error ?? `Join failed (${joined.status})`);
+        joinGrant = grant.joinGrant;
+      }
       let response: Response;
       if (mode === "recover") {
         response = await authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, joinGrant, deviceName }) });
