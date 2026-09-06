@@ -42,7 +42,9 @@ describe("Windows one-command server installer", () => {
     expect(main).toContain('OMB_HOST: "127.0.0.1"');
     expect(main).toContain('OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : ""');
     expect(main).toContain("body?.service === true");
-    expect(main).toContain("#access_token=");
+    // Fragment z tokenem powstaje teraz ze sklejki (obok jedzie `join=<grant>`
+    // powłoki), więc literału „#access_token=" już w kodzie nie ma.
+    expect(main).toContain("access_token=${encodeURIComponent(token)}");
     expect(auth).toContain('history.replaceState(null, ""');
     expect(main).toMatch(/if \(SERVER_ONLY\)[\s\S]+startServerPackaged\(\)[\s\S]+return;/);
     expect(builder).toContain("from: dist-server");
