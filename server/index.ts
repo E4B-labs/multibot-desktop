@@ -3216,11 +3216,12 @@ async function handleIdentityRoute(
         const adminUser = path.match(/^\/api\/admin\/users\/([^/]+)$/);
         if (method === "PATCH" && adminUser) {
           const body = await readBody(req);
-          const user = identity.adminUpdateUser(actor, decodeURIComponent(adminUser[1]), body);
-          // Revoking the credential is not enough on its own: an SSE stream or
-          // a computer socket opened before the disable stays authenticated
-          // until its socket dies.
-          if (user.disabled) revokeAuthSessions(req.socket);
+          const { user, staleSockets } = identity.adminUpdateUser(actor, decodeURIComponent(adminUser[1]), body);
+          // Revoking the credential in SQLite is not enough on its own: an SSE
+          // stream or a computer socket resolved its actor at upgrade time and
+          // would keep the old role — or keep working while disabled — until it
+          // happened to close.
+          if (staleSockets) revokeAuthSessions(req.socket);
           return identityHandled(res, 200, { user });
         }
         const adminReset = path.match(/^\/api\/admin\/users\/([^/]+)\/reset$/);
@@ -3228,6 +3229,9 @@ async function handleIdentityRoute(
           res.setHeader("cache-control", "no-store");
           return identityHandled(res, 200, { recoveryCode: identity.resetRecoveryCode(actor, decodeURIComponent(adminReset[1])) });
         }
+        // Owner-only means owner-only: an unmatched admin path ends here rather
+        // than falling through to a general handler that never saw the prefix.
+        return identityHandled(res, 404, { error: `unknown route ${path}` });
       }
       if (method === "GET" && path === "/api/workspace") {
         const info = identity.publicInfo();

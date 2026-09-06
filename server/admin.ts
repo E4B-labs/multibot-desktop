@@ -8,7 +8,6 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { deviceResources } from "./device.ts";
@@ -18,9 +17,11 @@ import type { AdminUser } from "./identity.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** On a fleet that runs more turns than this in a day the cap, not the clock,
  * becomes the real window — so it is sized to make that unlikely rather than
- * tidy: at ~40 bytes an entry both rings together stay under half a megabyte.
+ * tidy: at ~40 bytes an entry the ring stays a quarter of a megabyte.
  * ponytail: in-memory ring; persist or sample if a fleet ever outruns it. */
 const RING = 5_000;
+/** The tab polls every 10 s, so anything costlier than a property access is
+ * computed once a minute and served from a cache in between. */
 const MEMO_MS = 60_000;
 const GPU_QUERY = ["--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"];
 
@@ -30,33 +31,26 @@ interface TurnSample {
   ms: number | null;
   ok: boolean;
 }
-interface TokenSample {
-  at: number;
-  n: number;
-}
 
 const turns: TurnSample[] = [];
-const tokens: TokenSample[] = [];
 const startedAt = new Map<string, number>();
 let tally: { at: number; byUser: Map<string, number> } | null = null;
-let gpuCache: { at: number; value: GpuInfo[] | null } | null = null;
+let machine: { at: number; value: ReturnType<typeof deviceResources> } | null = null;
+/** The promise, not the result: a second caller during the 1 s probe waits on
+ * the first one instead of spawning nvidia-smi again. */
+let gpuCache: { at: number; binary: string; value: Promise<GpuInfo[] | null> } | null = null;
 let appVersion: string | null = null;
-
-function push<T>(ring: T[], entry: T): void {
-  ring.push(entry);
-  if (ring.length > RING) ring.shift();
-}
 
 /** Entries are appended in clock order, so everything older than the window is
  * a prefix: one splice both answers the read and shrinks the ring. */
-function within<T extends { at: number }>(ring: T[], now: number): T[] {
+function within(ring: TurnSample[], now: number): TurnSample[] {
   const first = ring.findIndex((entry) => entry.at > now - DAY_MS);
   ring.splice(0, first === -1 ? ring.length : first);
   return ring;
 }
 
 /** Wire once, next to `workspace.recordTurn`: every runtime event passes here
- * and only three of them leave a trace.
+ * and only two of them leave a trace.
  *
  * `runtime.error` is deliberately NOT one of them. Drivers emit it mid-turn for
  * every tool a bot's permissions refuse (`drivers/codex.ts`, `drivers/acp`) and
@@ -74,14 +68,11 @@ export function recordTurnEvent(event: RuntimeEvent, now = Date.now()): void {
     startedAt.set(key, now);
     return;
   }
-  if (event.type === "thread.token-usage.updated") {
-    push(tokens, { at: now, n: Math.max(0, event.input) + Math.max(0, event.output) });
-    return;
-  }
   if (event.type !== "turn.completed") return;
   const began = startedAt.get(key);
   startedAt.delete(key);
-  push(turns, { at: now, ms: began === undefined ? null : now - began, ok: event.ok });
+  turns.push({ at: now, ms: began === undefined ? null : now - began, ok: event.ok });
+  if (turns.length > RING) turns.shift();
 }
 
 export function performanceSummary(now = Date.now()) {
@@ -97,8 +88,11 @@ export function performanceSummary(now = Date.now()) {
     p95ResponseMs: times.length ? times[Math.min(times.length - 1, Math.ceil(times.length * 0.95) - 1)] : 0,
     // Every turn, so the card's own two numbers reconcile: turns24h × errorRate
     // is the number of failures.
+    //
+    // No tokens24h: `workspace` keeps lifetime totals per bot, and a second ring
+    // for the 24 h figure would be a whole mechanism for one decorative number.
+    // The plan allows dropping it; add it back with the usage table it needs.
     turns24h: window.length,
-    tokens24h: within(tokens, now).reduce((sum, sample) => sum + sample.n, 0),
     errorRate: window.length ? (window.length - done.length) / window.length : 0,
   };
 }
@@ -120,9 +114,9 @@ function parseGpuRow(line: string): GpuInfo | null {
  * AMD and Apple ship no equivalent query tool, and guessing from /sys would be
  * a per-vendor parser for a decoration.
  * ponytail: nvidia-smi only; add a vendor probe when someone asks for one. */
-export async function gpuInfo(now = Date.now(), binary = "nvidia-smi"): Promise<GpuInfo[] | null> {
-  if (gpuCache && now - gpuCache.at < MEMO_MS) return gpuCache.value;
-  const value = await new Promise<GpuInfo[] | null>((resolve) => {
+export function gpuInfo(now = Date.now(), binary = "nvidia-smi"): Promise<GpuInfo[] | null> {
+  if (gpuCache && gpuCache.binary === binary && now - gpuCache.at < MEMO_MS) return gpuCache.value;
+  const value = new Promise<GpuInfo[] | null>((resolve) => {
     let cli: ReturnType<typeof resolveCliSpawn>;
     try {
       cli = resolveCliSpawn(binary, GPU_QUERY);
@@ -140,13 +134,11 @@ export async function gpuInfo(now = Date.now(), binary = "nvidia-smi"): Promise<
       },
     );
   });
-  gpuCache = { at: now, value };
+  gpuCache = { at: now, binary, value };
   return value;
 }
 
 interface AdminBot {
-  id: string;
-  threadId: string;
   busy?: boolean;
   visibility?: string;
   ownerId?: string;
@@ -163,7 +155,7 @@ export interface AdminDeps {
      * predates the address discovery of PR 3. */
     getMeta?(key: string): string | null;
   };
-  store: { bots: AdminBot[]; messagesFor(threadId: string): AdminMessage[] };
+  store: { bots: AdminBot[]; residentTranscripts(): AdminMessage[][] };
   server: { getConnections(callback: (error: Error | null, count: number) => void): unknown };
   /** SHA-256 of the self-signed certificate this harness serves. The admin tab
    * shows it so a "server certificate changed" refusal can be checked by eye. */
@@ -172,12 +164,15 @@ export interface AdminDeps {
   gpuBinary?: string;
 }
 
+/** Counted from the transcripts already in memory.
+ * ponytail: threads nobody has opened since the last restart count 0, so this
+ * is a floor, not a total. Reading them all would cold-load and REWRITE every
+ * transcript file on a GET; add a user_stats table when the number must be exact. */
 function messageTally(store: AdminDeps["store"], now: number): Map<string, number> {
   if (tally && now - tally.at < MEMO_MS) return tally.byUser;
   const byUser = new Map<string, number>();
-  // ponytail: full transcript scan, add a user_stats table when slow
-  for (const bot of store.bots) {
-    for (const message of store.messagesFor(bot.threadId)) {
+  for (const transcript of store.residentTranscripts()) {
+    for (const message of transcript) {
       if (message.role !== "user" || !message.userId) continue;
       byUser.set(message.userId, (byUser.get(message.userId) ?? 0) + 1);
     }
@@ -186,36 +181,22 @@ function messageTally(store: AdminDeps["store"], now: number): Map<string, numbe
   return byUser;
 }
 
-/** Two layouts, because the packaged desktop app has neither of the obvious
- * ones: a checkout and the phone/Docker install both run `<root>/…/index.js`
- * with package.json one level up, while electron-builder copies `dist-server`
- * to `Resources/server` and leaves package.json inside `Resources/app.asar`
- * (readable — the harness is forked as an Electron utilityProcess). */
+/** Packaged, electron-builder copies `dist-server` to `Resources/server` and
+ * leaves package.json in the asar, so the relative path finds nothing — Electron
+ * passes the version it already knows instead (`electron/main.mjs`). */
 function version(): string {
   if (appVersion !== null) return appVersion;
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const candidate of [join(here, "..", "package.json"), join(here, "..", "app.asar", "package.json")]) {
-    try {
-      const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { version?: string };
-      if (pkg.version) return (appVersion = pkg.version);
-    } catch {
-      /* try the next layout */
-    }
-  }
-  return (appVersion = "0.0.0");
-}
-
-async function connectionCount(server: AdminDeps["server"]): Promise<number> {
   try {
-    return await promisify(server.getConnections.bind(server) as (cb: (error: Error | null, count: number) => void) => void)();
-  } catch {
-    return 0;
-  }
+    const path = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+    appVersion = (JSON.parse(readFileSync(path, "utf8") as string) as { version?: string }).version ?? null;
+  } catch { /* not this layout */ }
+  return (appVersion ??= process.env.MULTIBOT_VERSION || "0.0.0");
 }
 
 export async function adminOverview(deps: AdminDeps) {
   const now = deps.now?.() ?? Date.now();
-  const resources = deviceResources();
+  if (!machine || now - machine.at >= MEMO_MS) machine = { at: now, value: deviceResources() };
+  const resources = machine.value;
   const bots = deps.store.bots;
   const messages = messageTally(deps.store, now);
   const users = deps.identity.usersWithActivity().map((user) => ({
@@ -239,7 +220,7 @@ export async function adminOverview(deps: AdminDeps) {
       publicAddress: deps.identity.getMeta?.("server.publicAddress") ?? null,
       addressVerified: Boolean(deps.identity.getMeta?.("server.addressVerifiedAt")),
       tlsFingerprint: deps.tlsFingerprint ?? null,
-      connectionsActive: await connectionCount(deps.server),
+      connectionsActive: await new Promise<number>((resolve) => deps.server.getConnections((error, count) => resolve(error ? 0 : count))),
     },
     bots: {
       total: bots.length,
@@ -253,11 +234,11 @@ export async function adminOverview(deps: AdminDeps) {
 }
 
 /** Module state is process-wide on purpose (one server, one fleet); a suite
- * that measures it has to start from empty. */
+ * that measures the ring or the caches has to start from empty. */
 export function resetAdminMetricsForTests(): void {
   turns.length = 0;
-  tokens.length = 0;
   startedAt.clear();
   tally = null;
+  machine = null;
   gpuCache = null;
 }

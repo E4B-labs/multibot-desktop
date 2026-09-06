@@ -267,6 +267,9 @@ export class IdentityStore {
       CREATE INDEX IF NOT EXISTS access_user_idx ON access_tokens(user_id);
     `);
     this.addColumnIfMissing("users", "email", "TEXT");
+    // Set when an owner mints a code from the admin tab, cleared the moment it
+    // is spent. It is what lets a MEMBER use `recover` at all — see the gate there.
+    this.addColumnIfMissing("users", "recovery_admin_issued", "INTEGER");
     // Sessions minted before 0.4.0 carry a one-year deadline; nothing else in
     // the app would ever tell the user why they were signed out, so move every
     // session that is still alive TODAY out to the horizon on the boot that
@@ -538,15 +541,18 @@ export class IdentityStore {
     const deviceName = input.deviceName;
     const row = this.db.prepare("SELECT * FROM users WHERE username = ? AND disabled_at IS NULL").get(username) as Row | undefined;
     const storedRecovery = row?.recovery_hash instanceof Uint8Array ? Buffer.from(row.recovery_hash) : null;
-    // One answer for "no such profile", "wrong code" and "you are a member":
-    // separating them would let anyone walk the user list looking for the owner.
-    // The role check runs last so a member's code is still checked first.
-    if (!row || !storedRecovery || storedRecovery.length !== 32 || !recovery || !timingSafeEqual(hash(recovery), storedRecovery) || row.role !== "owner") {
+    // One answer for "no such profile", "wrong code" and "you are a member with
+    // a code nobody issued you": separating them would let anyone walk the user
+    // list looking for the owner. The role check runs last so a member's code is
+    // still checked first. A member gets in only with a code an owner minted for
+    // them from the admin tab, which is what makes that button worth pressing.
+    if (!row || !storedRecovery || storedRecovery.length !== 32 || !recovery || !timingSafeEqual(hash(recovery), storedRecovery) ||
+        (row.role !== "owner" && !row.recovery_admin_issued)) {
       throw new IdentityError("invalid recovery credentials", 401);
     }
     this.consumeJoinGrant(input.joinGrant);
     const nextRecovery = randomBytes(24).toString("base64url");
-    this.db.prepare("UPDATE users SET password_hash = ?, recovery_hash = ? WHERE id = ?").run(await passwordHash(newPassword), hash(nextRecovery), row.id);
+    this.db.prepare("UPDATE users SET password_hash = ?, recovery_hash = ?, recovery_admin_issued = NULL WHERE id = ?").run(await passwordHash(newPassword), hash(nextRecovery), row.id);
     this.db.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(Date.now(), row.id);
     this.db.prepare("UPDATE access_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(Date.now(), row.id);
     const session = this.createSession(String(row.id), String(deviceName ?? "recovery"));
@@ -741,8 +747,12 @@ export class IdentityStore {
   /** Owner administration of a profile: role, and whether it may sign in at
    * all. The guard is on the server keeping one enabled owner rather than on
    * "yourself" — demoting the last owner locks every admin surface for good,
-   * and it makes no difference who clicked it. */
-  adminUpdateUser(actor: IdentityActor, userId: string, patch: { role?: unknown; disabled?: unknown }): AdminUser {
+   * and it makes no difference who clicked it.
+   *
+   * `staleSockets` says the caller has to drop live connections: they carry an
+   * actor snapshot resolved at upgrade time, so a demoted member would keep
+   * owner powers on an open socket until it happened to close. */
+  adminUpdateUser(actor: IdentityActor, userId: string, patch: { role?: unknown; disabled?: unknown }): { user: AdminUser; staleSockets: boolean } {
     this.init();
     if (actor.role !== "owner") throw new IdentityError("owner access required", 403);
     const row = this.db.prepare("SELECT id, role, disabled_at FROM users WHERE id = ?").get(userId) as Row | undefined;
@@ -768,18 +778,24 @@ export class IdentityStore {
     if (disabled !== wasDisabled) this.audit(actor.userId, disabled ? "user.disabled" : "user.enabled", userId);
     const updated = this.usersWithActivity().find((user) => user.id === userId);
     if (!updated) throw new IdentityError("no_such_profile", 404);
-    return updated;
+    return { user: updated, staleSockets: (disabled && !wasDisabled) || role !== row.role };
   }
 
-  /** Mint a fresh recovery code for a profile whose owner asked for one, the
-   * same way `register` does. Shown once: only the hash is kept. */
+  /** Mint a fresh recovery code for a profile, the same way `register` does,
+   * and mark it admin-issued so the member it belongs to can actually spend it
+   * on `recover`. Shown once: only the hash is kept.
+   *
+   * Never for a DIFFERENT owner: one owner minting a code for another is a
+   * takeover of an equal account, and an owner who lost their own code has the
+   * server password and can rotate from there. */
   resetRecoveryCode(actor: IdentityActor, userId: string): string {
     this.init();
     if (actor.role !== "owner") throw new IdentityError("owner access required", 403);
-    const row = this.db.prepare("SELECT id FROM users WHERE id = ?").get(userId) as Row | undefined;
+    const row = this.db.prepare("SELECT id, role FROM users WHERE id = ?").get(userId) as Row | undefined;
     if (!row) throw new IdentityError("no_such_profile", 404);
+    if (row.role === "owner" && userId !== actor.userId) throw new IdentityError("cannot reset another owner", 403);
     const recoveryCode = randomBytes(24).toString("base64url");
-    this.db.prepare("UPDATE users SET recovery_hash = ? WHERE id = ?").run(hash(recoveryCode), userId);
+    this.db.prepare("UPDATE users SET recovery_hash = ?, recovery_admin_issued = 1 WHERE id = ?").run(hash(recoveryCode), userId);
     this.audit(actor.userId, "user.recovery.reset", userId);
     return recoveryCode;
   }

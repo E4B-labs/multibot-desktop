@@ -996,5 +996,9 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", `/api/admin/users/${owner.id}`, { disabled: true })).status).toBe(409);
     expect((await api("GET", "/api/auth/me")).body.user.role).toBe("owner");
     expect((await api("PATCH", "/api/admin/users/usr_nobody", { disabled: true })).status).toBe(404);
+    // An unmatched admin path stops inside the owner-gated block instead of
+    // falling through to a handler that never saw the prefix.
+    expect((await api("GET", "/api/admin/nope")).status).toBe(404);
+    expect((await asMember(member.accessToken, "GET", "/api/admin/nope")).status).toBe(401);
   });
 });

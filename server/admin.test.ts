@@ -9,7 +9,6 @@ const base = { eventId: "e", provider: "claude" as const, threadId: "t1", create
 const started = (turnId: string): RuntimeEvent => ({ ...base, turnId, type: "turn.started" });
 const completed = (turnId: string, ok = true): RuntimeEvent => ({ ...base, turnId, type: "turn.completed", ok });
 const failed = (turnId: string): RuntimeEvent => ({ ...base, turnId, type: "runtime.error", message: "boom" });
-const tokens = (input: number, output: number): RuntimeEvent => ({ ...base, type: "thread.token-usage.updated", input, output });
 
 /** One turn, start to finish, `ms` long, finishing at `at`. */
 function turn(turnId: string, at: number, ms: number, ok = true): void {
@@ -68,15 +67,8 @@ describe("turn ring", () => {
     expect(summary.avgResponseMs).toBe(2_000);
   });
 
-  it("sums token usage over the window and drops yesterday's", () => {
-    recordTurnEvent(tokens(1_000, 200), T0 - 25 * 60 * 60 * 1000);
-    recordTurnEvent(tokens(300, 40), T0 - 60_000);
-    recordTurnEvent(tokens(10, 5), T0 - 30_000);
-    expect(performanceSummary(T0).tokens24h).toBe(355);
-  });
-
   it("reports zeroes rather than NaN on a server that has run no turns", () => {
-    expect(performanceSummary(T0)).toMatchObject({ avgResponseMs: 0, p95ResponseMs: 0, turns24h: 0, tokens24h: 0, errorRate: 0 });
+    expect(performanceSummary(T0)).toEqual({ avgResponseMs: 0, p95ResponseMs: 0, turns24h: 0, errorRate: 0 });
   });
 
   it("keeps a turn whose start was lost out of the timings but inside the counts", () => {
@@ -95,6 +87,8 @@ const USERS: AdminUser[] = [
 ];
 
 function stubDeps(overrides: Record<string, unknown> = {}) {
+  // Only threads someone has opened since the restart are resident, and only
+  // those are counted — "th-missing" stands for the ones that are not.
   const transcripts: Record<string, Array<{ role: string; userId?: string }>> = {
     "th-1": [
       { role: "user", userId: "usr_owner" },
@@ -119,11 +113,11 @@ function stubDeps(overrides: Record<string, unknown> = {}) {
     },
     store: {
       bots: [
-        { id: "b1", threadId: "th-1", visibility: "private", ownerId: "usr_owner", busy: true },
-        { id: "b2", threadId: "th-2", visibility: "public", ownerId: "usr_member" },
-        { id: "b3", threadId: "th-missing", ownerId: "usr_owner" },
+        { visibility: "private", ownerId: "usr_owner", busy: true },
+        { visibility: "public", ownerId: "usr_member" },
+        { ownerId: "usr_owner" },
       ],
-      messagesFor: (threadId: string) => transcripts[threadId] ?? [],
+      residentTranscripts: () => Object.values(transcripts),
     },
     server: { getConnections: (cb: (error: Error | null, count: number) => void) => cb(null, 7) },
     tlsFingerprint: "AA:BB",
@@ -168,18 +162,26 @@ describe("adminOverview", () => {
     expect(overview.server.addressVerified).toBe(false);
   });
 
-  it("scans every transcript once per minute, not once per request", async () => {
+  it("scans the resident transcripts once per minute, not once per request", async () => {
     let scans = 0;
     const deps = stubDeps();
-    const counting = { ...deps, store: { ...deps.store, messagesFor: (threadId: string) => (scans++, deps.store.messagesFor(threadId)) } };
+    const counting = { ...deps, store: { ...deps.store, residentTranscripts: () => (scans++, deps.store.residentTranscripts()) } };
     await adminOverview(counting);
     await adminOverview(counting);
-    expect(scans).toBe(3);
+    // …and the same minute serves one machine reading too, not one per poll.
+    expect((await adminOverview(counting)).server.cpuCount).toBeGreaterThan(0);
+    expect(scans).toBe(1);
   });
 });
 
 describe("gpuInfo", () => {
   it("is null when no NVIDIA tooling is installed", async () => {
     expect(await gpuInfo(T0, "multibot-no-such-gpu-binary")).toBeNull();
+  });
+
+  it("hands a concurrent caller the in-flight probe and keys the cache by binary", () => {
+    const first = gpuInfo(T0, "multibot-no-such-gpu-binary");
+    expect(gpuInfo(T0, "multibot-no-such-gpu-binary")).toBe(first);
+    expect(gpuInfo(T0, "multibot-another-missing-binary")).not.toBe(first);
   });
 });
