@@ -76,6 +76,19 @@ export function credentialsText(values: { serverName: string; address: string; s
  * server has not told us yet (the discovery fields land with PR 3). */
 export function addressNote(values: SetupValues | null, polish: boolean): string | null {
   if (!values) return null;
+  // Above cgnat on purpose: with a relay in front, the carrier's NAT no longer
+  // decides anything, so warning about it would be false. `addressVerified`
+  // here is the server's own probe through the tunnel (`probeRelay`), not
+  // `noteReachedHost` — which can never see a relay, since the traffic reaches
+  // us from 127.0.0.1. So this line is real UP/DOWN, not "we did not check".
+  if (values.addressKind === "relay") {
+    if (values.addressVerified === false) {
+      return polish
+        ? "Przez Twój przekaźnik — ale przekaźnik teraz nie odpowiada."
+        : "Through your relay box — but the relay is not answering right now.";
+    }
+    return polish ? "Przez Twój przekaźnik." : "Through your relay box.";
+  }
   if (values.portMapping?.state === "cgnat") {
     return polish
       ? "Operator chowa to urządzenie za swoim NAT-em — z zewnątrz nie da się do niego wejść. Potrzebne IPv6 albo serwer w domu."

@@ -16,6 +16,7 @@
 //
 // ponytail: UPnP only; add NAT-PMP when a real router refuses it.
 import { createSocket } from "node:dgram";
+import { connect } from "node:tls";
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 /** `relay`: a box the owner rents/owns with a public IP, reached by an outbound
@@ -368,6 +369,10 @@ export type AddressDeps = {
    * server is already running: re-reading it on each scan means the new address
    * appears within a tick instead of after a restart. */
   relayHost?(): string | null;
+  /** Our own certificate's SHA-256, so `probeRelay` can recognise us coming
+   * back through the tunnel. Null with `OMB_TLS=off`, where there is nothing
+   * to recognise and the relay simply stays unverified. */
+  tlsFingerprint?: string | null;
   getMeta(key: string): string | null;
   setMeta(key: string, value: string): void;
   onChange(report: AddressReport): void;
@@ -435,6 +440,31 @@ function persist(report: AddressReport, previous: AddressReport | null): Address
   else if (previous?.verified) deps.setMeta(META_VERIFIED_AT, "");
   if (previous?.current !== report.current || previous?.verified !== report.verified) deps.onChange(report);
   return report;
+}
+
+/** The relay is the one rung `noteReachedHost` can never confirm: traffic
+ * arrives through the tunnel from 127.0.0.1, so there is no public peer to
+ * learn anything from. So we check it ourselves — dial the relay's PUBLIC port
+ * and see whether our OWN certificate comes back. That settles three questions
+ * in one handshake: the tunnel is up, it lands on this process, and nothing
+ * else has taken that port on the relay box. Stronger than comparing a
+ * serverId, because only the holder of our private key can finish it.
+ *
+ * `rejectUnauthorized:false` is not a hole here: the certificate is self-signed
+ * by design, nothing is sent, and the fingerprint comparison IS the check. */
+export function probeRelay(host: string, port: number, fingerprint: string, timeoutMs = NET_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: bare(host), port, rejectUnauthorized: false, timeout: timeoutMs });
+    const done = (value: boolean): void => {
+      socket.destroy();
+      resolve(value);
+    };
+    socket.once("secureConnect", () => done(
+      socket.getPeerCertificate().fingerprint256?.toUpperCase() === fingerprint.toUpperCase(),
+    ));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
 }
 
 /** The last report as stored, so a request never waits for SSDP. */
@@ -540,11 +570,16 @@ async function scan(port: number): Promise<AddressReport> {
   }
   // Read AFTER the mapping, so a freshly learnt WAN address is already in.
   const candidates = carryVerified(trusted(port), previous);
+  const relay = candidates.find((candidate) => candidate.kind === "relay");
+  if (relay && deps?.tlsFingerprint) {
+    relay.verified = await probeRelay(new URL(relay.address).hostname, port, deps.tlsFingerprint);
+  }
 
-  // The owner's own pin outranks everything; the relay outranks discovery,
-  // because a NAT'd server's other candidates reach nobody outside the flat.
-  const chosen = candidates.find((candidate) => candidate.address === validAddress(deps?.getMeta(META_PINNED)))
-    ?? candidates.find((candidate) => candidate.kind === "relay")
+  // Relay first: a NAT'd server's other candidates reach nobody outside the
+  // flat, and the owner had to build the relay by hand to have one at all. The
+  // rest is unchanged — in particular the previous choice still outranks a
+  // fresh scan, so an address a real client confirmed is never quietly reverted.
+  const chosen = candidates.find((candidate) => candidate.kind === "relay")
     ?? candidates.find((candidate) => candidate.address === previous?.current)
     ?? candidates.find((candidate) => candidate.verified)
     ?? candidates[0]

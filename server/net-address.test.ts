@@ -16,6 +16,7 @@ import {
   parseControlUrl,
   parseSoapValue,
   pinAddress,
+  probeRelay,
   readCapped,
   ssdpLocation,
 } from "./net-address.ts";
@@ -309,6 +310,24 @@ describe("noteReachedHost", () => {
 
   it("refuses a Host carrying credentials", () => {
     expect(noteReachedHost(fakeRequest("8.8.8.8", "user:pass@192.168.1.42:8799"), 8799)).toBeNull();
+  });
+});
+
+// The relay is the one candidate `noteReachedHost` can never confirm, so the
+// probe is the only thing standing between "we published it" and "it works".
+// A real handshake needs a server; what is worth pinning here is that every way
+// of failing answers false instead of hanging or throwing.
+describe("probeRelay", () => {
+  it("is false when nothing is listening, and gives up inside its timeout", async () => {
+    const started = Date.now();
+    // 127.0.0.1:1 refuses immediately on every platform we run on.
+    await expect(probeRelay("127.0.0.1", 1, "AA:BB")).resolves.toBe(false);
+    await expect(probeRelay("[::1]", 1, "AA:BB", 300)).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not throw on a host that cannot be resolved", async () => {
+    await expect(probeRelay("relay.invalid", 8799, "AA:BB", 300)).resolves.toBe(false);
   });
 });
 

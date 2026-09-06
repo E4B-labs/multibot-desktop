@@ -12,11 +12,29 @@
 # holds a key and never sees anything but ciphertext.
 set -eu
 
+# `$0` is "sh" under `curl … | sh`, so the repo root is a variable first and a
+# guess from the script path second — same rule as scripts/install-termux.sh.
+ROOT="${MULTIBOT_ROOT:-}"
+if [ -z "$ROOT" ] && [ -f "$0" ]; then ROOT="$(cd "$(dirname "$0")/.." && pwd)"; fi
+[ -n "$ROOT" ] || { echo "[relay] set MULTIBOT_ROOT=/path/to/multibot when piping this script" >&2; exit 2; }
+
+PORT="${OMB_PORT:-8799}"
+RELAY_USER=mbrelay
+
+# The data directory has to be the one the SERVER uses, or we write relay.env
+# where nothing reads it. The installers bake it into the service, so read it
+# back from there before falling back to the default.
+if [ -z "${OMB_DATA_DIR:-}" ]; then
+  for RUNFILE in "${PREFIX:-/nonexistent}/var/service/multibot/run" \
+                 "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/multibot.service"; do
+    [ -f "$RUNFILE" ] || continue
+    FOUND="$(sed -n 's/.*OMB_DATA_DIR="\{0,1\}\([^" ]*\)"\{0,1\}.*/\1/p' "$RUNFILE" | head -1)"
+    if [ -n "$FOUND" ]; then OMB_DATA_DIR="$FOUND"; break; fi
+  done
+fi
 DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}"
 KEY="$DATA_DIR/relay_key"
 ENV_FILE="$DATA_DIR/relay.env"
-PORT="${OMB_PORT:-8799}"
-RELAY_USER=mbrelay
 
 say() { printf '[relay] %s\n' "$*"; }
 die() { printf '[relay] %s\n' "$*" >&2; exit 1; }
@@ -37,7 +55,8 @@ fi
 
 # The host comes from the argument once, then from relay.env forever after — the
 # service restarts without one.
-RELAY_HOST="${1:-}"
+ARG="${1:-}"
+RELAY_HOST="$ARG"
 if [ -z "$RELAY_HOST" ] && [ -f "$ENV_FILE" ]; then
   RELAY_HOST="$(sed -n 's/^RELAY_HOST=//p' "$ENV_FILE" | head -1)"
 fi
@@ -45,17 +64,17 @@ fi
 # A host and nothing else: this string goes into a file the server reads back as
 # the address it publishes to everybody.
 case "$RELAY_HOST" in
-  *[!A-Za-z0-9._:-]*|""|-*) die "relay host must be a bare IP or DNS name: $RELAY_HOST" ;;
+  *[!A-Za-z0-9.:-]*|""|-*) die "relay host must be a bare IP or DNS name: $RELAY_HOST" ;;
 esac
 
-if [ "${1:-}" != "" ]; then
+if [ -n "$ARG" ]; then
   printf 'RELAY_HOST=%s\n' "$RELAY_HOST" > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  say "wrote $ENV_FILE — the server publishes https://$RELAY_HOST:$PORT from its next address scan"
+  say "wrote $ENV_FILE"
   say ""
   say "Run this ON THE RELAY BOX (once), as root:"
   say ""
-  printf "  sudo sh relay-setup.sh '%s'\n\n" "$(cat "$KEY.pub")"
+  printf "  curl -fsSL https://raw.githubusercontent.com/E4B-labs/multibot-desktop/main/scripts/relay-setup.sh | sudo sh -s -- '%s' %s\n\n" "$(cat "$KEY.pub")" "$PORT"
   say "…then this server keeps the tunnel up by itself."
   say ""
 fi
@@ -63,14 +82,16 @@ fi
 # ── the service ──────────────────────────────────────────────────────
 # Mirrors how scripts/install-termux.sh builds the `multibot` service, so both
 # are supervised the same way and both come back after a reboot.
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 install_service() {
   if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/var/service" ]; then
     DIR="$PREFIX/var/service/mb-relay"
     mkdir -p "$DIR/log"
+    # `exec 2>&1` or svlogger only ever files stdout, and every reconnect
+    # message this script writes goes to stderr — into nothing.
     cat > "$DIR/run" <<EOF
 #!$PREFIX/bin/sh
-exec env HOME="$HOME" OMB_DATA_DIR="$DATA_DIR" OMB_PORT="$PORT" \\
+exec 2>&1
+exec env HOME="$HOME" MULTIBOT_ROOT="$ROOT" OMB_DATA_DIR="$DATA_DIR" OMB_PORT="$PORT" \\
   sh "$ROOT/scripts/relay-connect.sh"
 EOF
     chmod +x "$DIR/run"
@@ -78,7 +99,10 @@ EOF
     # shellcheck disable=SC1091
     . "$PREFIX/etc/profile.d/start-services.sh"
     sv-enable mb-relay
-    say "runit service mb-relay enabled (sv status mb-relay / sv restart mb-relay)"
+    # Enabling an already-enabled service does not restart it, so a changed
+    # relay.env would otherwise wait for the next reboot.
+    sv restart mb-relay >/dev/null 2>&1 || true
+    say "runit service mb-relay running (sv status mb-relay)"
   elif command -v systemctl >/dev/null 2>&1; then
     DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     mkdir -p "$DIR"
@@ -90,6 +114,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=MULTIBOT_ROOT=$ROOT
 Environment=OMB_DATA_DIR=$DATA_DIR
 Environment=OMB_PORT=$PORT
 ExecStart=/bin/sh $ROOT/scripts/relay-connect.sh
@@ -101,16 +126,22 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable --now mb-relay.service
-    say "systemd user unit mb-relay.service enabled (systemctl --user status mb-relay)"
+    systemctl --user restart mb-relay.service
+    # Without lingering, the tunnel dies at logout and never comes back after a
+    # reboot — the same trap scripts/install-linux.sh works around.
+    if command -v loginctl >/dev/null 2>&1; then
+      WHO="${USER:-$(id -un)}"
+      loginctl enable-linger "$WHO" || say "enable linger manually: loginctl enable-linger $WHO"
+    fi
+    say "systemd user unit mb-relay.service running (systemctl --user status mb-relay)"
   else
-    say "no runit and no systemd here: run this script under whatever supervisor you use"
-    return 1
+    die "no runit and no systemd here: run 'sh $0' under whatever supervisor you use"
   fi
 }
 
-if [ "${1:-}" != "" ]; then
-  install_service || true
-  say "check it with: sh scripts/relay-check.sh"
+if [ -n "$ARG" ]; then
+  install_service
+  say "check it with: sh $ROOT/scripts/relay-check.sh"
   exit 0
 fi
 

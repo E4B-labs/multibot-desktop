@@ -99,6 +99,16 @@ describe("addressNote", () => {
     expect(addressNote({ ...base, portMapping: { state: "cgnat" } }, false)).toContain("carrier");
     expect(addressNote({ ...base, portMapping: { state: "cgnat" } }, true)).toContain("Operator");
   });
+
+  // The relay is in front of the carrier NAT, so the cgnat warning would be a
+  // lie; and `addressVerified` on a relay is the server's own probe, so false
+  // means "the relay is down", not "we never checked".
+  it("puts the relay ahead of the carrier-NAT warning and reports it up or down", () => {
+    const relay = { ...base, addressKind: "relay", portMapping: { state: "cgnat" as const } };
+    expect(addressNote(relay, false)).toBe("Through your relay box.");
+    expect(addressNote({ ...relay, addressVerified: false }, false)).toContain("not answering");
+    expect(addressNote({ ...relay, addressVerified: false }, true)).toContain("nie odpowiada");
+  });
 });
 
 describe("onboarding source", () => {

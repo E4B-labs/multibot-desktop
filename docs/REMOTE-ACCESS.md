@@ -73,9 +73,21 @@ Trzy kroki:
 
 1. **Weź maszynę z publicznym IP.** Dowolny VPS. Za darmo: Oracle Cloud Always Free (ARM Ampere, 4 rdzenie / 24 GB, bez limitu czasu).
 2. **Na serwerze MultiBota** uruchom `sh scripts/relay-connect.sh <IP-relaya>`. Skrypt tworzy `~/.openmausbot/relay_key` (ed25519, bez hasła), zapisuje `~/.openmausbot/relay.env`, instaluje usługę (`mb-relay` w runicie na Termuksie, `mb-relay.service` w systemd na Linuksie) i **drukuje klucz publiczny razem z gotową komendą do wklejenia**.
-3. **Na relayu**, jako root, uruchom tę komendę: `sudo sh relay-setup.sh 'ssh-ed25519 AAAA... multibot-relay'`. Zakłada użytkownika `mbrelay` bez powłoki, który umie dokładnie jedną rzecz — trzymać tunel na porcie 8799 (`command="echo relay only"`, `restrict`, `no-pty`, `permitopen="none"`, `permitlisten="8799"`), ustawia `GatewayPorts clientspecified` i `ClientAliveInterval 30` w `/etc/ssh/sshd_config.d/mbrelay.conf`, otwiera TCP 8799 (ufw / nftables / iptables) i przeładowuje sshd.
+3. **Na relayu**, jako root, wklej komendę wydrukowaną w kroku 2 — `relay-setup.sh` nie musi tam wcześniej być, bo komenda pobiera go prosto z repo:
 
-**Adres serwera to od tej chwili `https://<IP-relaya>:8799`.** Harness stawia go na szczycie drabiny jako rodzaj `relay` i publikuje w trzech miejscach naraz: `setup.json` (blok `Address / Name / Password / Fingerprint`), `GET /api/server/address` (`current`) i `GET /api/server` (`publicAddress`). `OMB_PUBLIC_URL` nadal wygrywa, jeśli ktoś je ustawił, i adres przypięty ręcznie z panelu też. Odcisk certyfikatu **się nie zmienia** — kto już zaufał serwerowi po LAN-ie, nie musi robić nic ponownie.
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/E4B-labs/multibot-desktop/main/scripts/relay-setup.sh      | sudo sh -s -- 'ssh-ed25519 AAAA... multibot-relay' 8799
+   ```
+
+   Skrypt zakłada użytkownika `mbrelay` bez powłoki, który umie dokładnie jedno: trzymać tunel na tym jednym porcie. W `authorized_keys` idzie `command="echo relay only",restrict,port-forwarding,permitlisten="8799"`. Zakaz przekierowania lokalnego (`-L`, czyli użycie relaya jako jump hosta) siedzi w `/etc/ssh/sshd_config.d/10-mbrelay.conf`, w bloku `Match User mbrelay` — `AllowTcpForwarding remote`, `AllowStreamLocalForwarding no`, `AllowAgentForwarding no`, `PermitTTY no`, `X11Forwarding no`, `GatewayPorts clientspecified`. Nic z tego nie jest globalne, więc żadne inne konto na tej maszynie nic nie zyskuje. `ClientAliveInterval 30` zostaje globalnie, bo w `Match` nie jest legalne. Do tego otwarcie TCP 8799 (ufw / nftables / iptables) i przeładowanie sshd po `sshd -t`.
+
+   Wymaga OpenSSH 7.8+ — na starszym `permitlisten` bywa po cichu ignorowane, więc skrypt odmawia zamiast zbudować coś słabszego, niż wygląda. Port jest parametrem (`$2`), nie stałą.
+
+**Adres serwera to od tej chwili `https://<IP-relaya>:8799`.** Harness stawia go na szczycie drabiny jako rodzaj `relay` i podaje w `GET /api/server/address` (`current`) oraz `GET /api/server` (`publicAddress`). `OMB_PUBLIC_URL` nadal wygrywa, jeśli ktoś je ustawił.
+
+`setup.json` **nie jest przepisywany**: powstaje raz, na pierwszym boocie serwera, i zostaje z adresem z tamtej chwili. Jeśli relay stanął później, plik nadal pokazuje stary adres — aktualny bierz z panelu albo z `GET /api/server`. Nazwa, hasło i odcisk certyfikatu są w obu miejscach te same i **nie zmieniają się**: certyfikat nie jest wymieniany, więc kto już zaufał serwerowi po LAN-ie, nie musi robić nic ponownie.
+
+Adres relaya jako jedyny nie może zostać potwierdzony przez `noteReachedHost` — ruch wychodzi z tunelu jako połączenie z `127.0.0.1`, więc nie ma publicznego rozmówcy, od którego dałoby się czegokolwiek dowiedzieć. Zamiast tego serwer sprawdza się sam przy każdym skanie: łączy się po TLS na publiczny port relaya i patrzy, czy wraca **jego własny certyfikat** (`probeRelay`, 2 s). To rozstrzyga trzy rzeczy naraz — tunel stoi, wychodzi na ten proces i nikt inny nie zajął tego portu — i jest mocniejsze niż porównanie `serverId`, bo tego uścisku dłoni nie dokończy nikt bez naszego klucza prywatnego. Panel pokazuje po tym prawdziwe UP/DOWN, a nie „nie sprawdziliśmy".
 
 Sprawdzenie: `sh scripts/relay-check.sh`. Pobiera `/api/public/server` przez relay i porównuje `serverId` z tym, co ta maszyna odpowiada po pętli zwrotnej — `ss`/`netstat` na serwerze pokazałoby tylko wychodzące ssh, które wstaje długo przed tym, zanim przekierowanie zacznie działać.
 

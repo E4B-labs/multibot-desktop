@@ -18,9 +18,19 @@ command -v curl >/dev/null 2>&1 || die "no curl: pkg install curl"
 RELAY_HOST="$(sed -n 's/^RELAY_HOST=//p' "$ENV_FILE" | head -1)"
 [ -n "$RELAY_HOST" ] || die "$ENV_FILE has no RELAY_HOST"
 
+# A bare IPv6 literal needs brackets in a URL, or curl reads the last group as
+# the port. Anything with a colon and no brackets of its own gets them.
+url_host() {
+  case "$1" in
+    \[*\]) printf '%s' "$1" ;;
+    *:*) printf '[%s]' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # `-k`: the certificate is self-signed by design, and identity is proved by the
 # serverId comparison below plus the fingerprint clients pin (docs/REMOTE-ACCESS.md).
-id_at() { curl -sk --max-time 10 "https://$1:$PORT/api/public/server" | tr ',' '\n' | sed -n 's/.*"serverId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
+id_at() { curl -sk --max-time 10 "https://$(url_host "$1"):$PORT/api/public/server" | tr ',' '\n' | sed -n 's/.*"serverId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 
 LOCAL="$(id_at 127.0.0.1 || true)"
 [ -n "$LOCAL" ] || die "the harness itself is not answering on https://127.0.0.1:$PORT — fix that before the relay"
