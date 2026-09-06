@@ -1,7 +1,7 @@
 {
   "platform": "android",
-  "version": "0.4.0",
-  "versionCode": 23,
-  "apkUrl": "https://expo.dev/artifacts/eas/grJ45IgvFXDmWVE2U9GWXZun_nVgAqVUHNXVksEkmWM.apk",
-  "notes": "HTTPS server with certificate pinning, native sign-in, Termux-assisted setup, webui 0.4.0 onboarding and admin tab. Runtime 1.5.0."
+  "version": "0.5.0",
+  "versionCode": 24,
+  "apkUrl": "https://expo.dev/artifacts/eas/zYWVd_LpEsDLLRar33XHKxTRGthXBmmqmE7RKKLmTAo.apk",
+  "notes": "Embedded Tor: the app reaches .onion servers on its own, no Orbot. Runtime 1.6.0."
 }
