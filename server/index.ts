@@ -24,7 +24,7 @@ import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.t
 import { mountAuth, requestActor } from "./auth.ts";
 import {
   IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
-  isLoopbackRequest, isSecureRequest,
+  isLoopbackAddress, isLoopbackRequest, isSecureRequest,
   type IdentityActor, type CreatedSession,
 } from "./identity.ts";
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
@@ -3002,12 +3002,16 @@ const SERVER_PASSWORD_BUCKET = "server-password";
 
 function identityRateLimited(req: IncomingMessage, operation: string): boolean {
   const now = Date.now();
-  // Behind a proxy every socket says 127.0.0.1, which would put the whole
-  // internet in one bucket; the first forwarded hop is the client. Sweeping
-  // here keeps the map from growing for the lifetime of the process.
+  // Sweeping here keeps the map from growing for the lifetime of the process.
   for (const [old, value] of identityAttempts) if (now - value.startedAt >= 60_000) identityAttempts.delete(old);
+  // Behind a proxy every socket says 127.0.0.1, which would put the whole
+  // internet in one bucket, so the first forwarded hop is the client — but ONLY
+  // when the socket peer really is loopback, i.e. there IS a proxy in front. A
+  // remote peer that sets its own `x-forwarded-for` would otherwise pick its own
+  // bucket every request: an unlimited supply of scrypt guesses at the password.
+  const peer = req.socket.remoteAddress ?? "unknown";
   const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
-  const address = (!isLoopbackRequest(req) && forwarded) || req.socket.remoteAddress || "unknown";
+  const address = (isLoopbackAddress(req.socket.remoteAddress) && forwarded) || peer;
   const key = `${operation}:${address}`;
   const current = identityAttempts.get(key);
   if (!current) {

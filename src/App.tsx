@@ -34,7 +34,7 @@ import { hasCustomWindowControls } from "@/lib/shell";
 const frameless = hasCustomWindowControls();
 // multibot: Cmd/Ctrl+K paleta komend
 import { CmdK } from "@/components/CmdK";
-import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken } from "@/lib/auth";
+import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { unreadConversationCount } from "@/lib/unread";
 
@@ -82,6 +82,8 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Read once, on mount: `takeJoinGrant` also clears it out of the URL.
+  const [shellGrant, setShellGrant] = useState(takeJoinGrant);
 
   useEffect(() => {
     let alive = true;
@@ -111,23 +113,28 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       // server name and password, and spends the 5-minute grant that proof
       // returns. PR 7 replaces this screen; this keeps it working until then.
       const deviceName = navigator.userAgent.slice(0, 80);
-      // The desktop shell joins natively and hands the grant over in the
-      // fragment (`electron/main.mjs` → `#join=…`); only a browser, which has
-      // nowhere else to get one, asks the server itself.
-      let joinGrant = new URLSearchParams(location.hash.slice(1)).get("join") ?? "";
-      if (!joinGrant) {
+      const profileCall = (joinGrant: string) => {
+        if (mode === "recover") return authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, joinGrant, deviceName }) });
+        if (mode === "login") return authFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, joinGrant, deviceName }) });
+        return authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, joinGrant, deviceName }) });
+      };
+      const freshGrant = async (): Promise<string> => {
         const joined = await authFetch("/api/auth/join", { method: "POST", body: JSON.stringify({ serverName: serverName.trim(), serverPassword }) });
         const grant = await joined.json().catch(() => ({})) as { joinGrant?: string; error?: string };
         if (!joined.ok || !grant.joinGrant) throw new Error(grant.error ?? `Join failed (${joined.status})`);
-        joinGrant = grant.joinGrant;
-      }
-      let response: Response;
-      if (mode === "recover") {
-        response = await authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, joinGrant, deviceName }) });
-      } else if (mode === "login") {
-        response = await authFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, joinGrant, deviceName }) });
-      } else {
-        response = await authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, joinGrant, deviceName }) });
+        return grant.joinGrant;
+      };
+      // The grant the desktop shell handed over is a hint, not the only way in:
+      // it is single-use and five minutes old at most, so a reload or a second
+      // attempt finds it spent. A typed server password always wins over it.
+      const usingShellGrant = Boolean(shellGrant) && !serverPassword;
+      let response = await profileCall(usingShellGrant ? shellGrant : await freshGrant());
+      if (usingShellGrant && response.status === 401) {
+        const failed = await response.clone().json().catch(() => ({})) as { error?: string };
+        if (failed.error === "join_grant_invalid") {
+          setShellGrant("");
+          response = await profileCall(await freshGrant());
+        }
       }
       const body = await response.json().catch(() => ({})) as { accessToken?: string; recoveryCode?: string; error?: string };
       if (!response.ok || !body.accessToken) throw new Error(body.error ?? `Authentication failed (${response.status})`);

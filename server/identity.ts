@@ -20,6 +20,9 @@ const PASSWORD_KEY_BYTES = 32;
 // deadline is a fixed date rather than "now + a century" so the migration below
 // is idempotent — it matches nothing on the second boot.
 const SESSION_HORIZON = 4_102_444_800_000; // 2100-01-01T00:00:00Z
+/** The pre-0.4.0 idle rule. Only used to decide which old sessions were still
+ * alive on the boot that migrates them; nothing expires by idling any more. */
+const LEGACY_SESSION_IDLE_MS = 90 * 24 * 60 * 60 * 1000;
 const ACCESS_TOKEN_MS = 15 * 60 * 1000;
 const JOIN_GRANT_MS = 5 * 60 * 1000;
 export const IDENTITY_PROTOCOL = 2;
@@ -78,8 +81,9 @@ function validText(value: unknown, max: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 
-// 32 × 32 = 1024 names. Not a secret by itself, but it IS one of the three
-// values a joining device has to know, so it never leaves /api/public/server.
+// 32 × 32 = 1024 names. Public — /api/public/server hands it out and the
+// sign-in header shows it. Of the three values a joining device types, only the
+// password is a secret; the name and address just say WHICH server.
 const ADJECTIVES = [
   "amber", "brave", "bright", "calm", "clever", "cosmic", "crisp", "dusty",
   "eager", "fair", "fierce", "gentle", "golden", "happy", "hidden", "jolly",
@@ -252,11 +256,18 @@ export class IdentityStore {
     this.addColumnIfMissing("users", "email", "TEXT");
     // Sessions minted before 0.4.0 carry a one-year deadline; nothing else in
     // the app would ever tell the user why they were signed out, so move every
-    // still-valid session out to the horizon on the boot that finds it. An
-    // already-expired session stays expired (a retired device must not come
-    // back), and the horizon is a constant, so the next boot updates nothing.
+    // session that is still alive TODAY out to the horizon on the boot that
+    // finds it. "Alive" means both old rules at once: the absolute deadline has
+    // not passed AND the 90-day idle rule had not already killed it. The
+    // horizon is a constant, so the next boot updates nothing.
+    const now = Date.now();
+    // Retire them for real, not just "stop extending them": dropping the idle
+    // rule without this would hand a laptop nobody has opened in a year its
+    // session back for however long its old deadline still had to run.
+    this.db.prepare("UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL AND last_seen_at <= ?")
+      .run(now, now - LEGACY_SESSION_IDLE_MS);
     this.db.prepare("UPDATE sessions SET absolute_expires_at = ? WHERE revoked_at IS NULL AND absolute_expires_at < ? AND absolute_expires_at > ?")
-      .run(SESSION_HORIZON, SESSION_HORIZON, Date.now());
+      .run(SESSION_HORIZON, SESSION_HORIZON, now);
     this.ensureServerIdentity();
     this.initialized = true;
   }
@@ -321,7 +332,11 @@ export class IdentityStore {
     // can actually be typed into a sign-in form with, configured or not.
     const stored = this.meta("server.name");
     if (!isServerName(stored)) this.setMeta("server.name", generateServerName());
-    if (this.meta("server.joinPasswordHash") && this.userCount() > 0) return null;
+    // Mint only when there is no password, or when the one on record is a hash
+    // nobody can read: a profile has claimed it, or setup.json is still there to
+    // read it from. Otherwise every restart before the first sign-in would hand
+    // out a new password and invalidate the one already on the screen.
+    if (this.meta("server.joinPasswordHash") && (this.userCount() > 0 || this.readSetupFile() !== null)) return null;
     const serverName = this.meta("server.name") ?? generateServerName();
     const values: ServerSetupValues = {
       serverName,
@@ -345,12 +360,18 @@ export class IdentityStore {
    * as a hash, so the setup screen has to read it back from here. The token
    * makes "can read setup.json" the actual condition. */
   setupValues(presentedToken: unknown): Omit<ServerSetupValues, "setupToken"> | null {
+    const raw = this.readSetupFile();
+    if (!raw) return null;
+    const presented = typeof presentedToken === "string" ? presentedToken : "";
+    if (!timingSafeEqual(hash(presented), hash(raw.setupToken))) return null;
+    return { serverName: raw.serverName, serverPassword: raw.serverPassword };
+  }
+
+  private readSetupFile(): ServerSetupValues | null {
     try {
       const raw = JSON.parse(readFileSync(this.setupFile, "utf8")) as Partial<ServerSetupValues>;
       if (typeof raw.serverName !== "string" || typeof raw.serverPassword !== "string" || typeof raw.setupToken !== "string") return null;
-      const presented = typeof presentedToken === "string" ? presentedToken : "";
-      if (!timingSafeEqual(hash(presented), hash(raw.setupToken))) return null;
-      return { serverName: raw.serverName, serverPassword: raw.serverPassword };
+      return { serverName: raw.serverName, serverPassword: raw.serverPassword, setupToken: raw.setupToken };
     } catch {
       /* no pending setup — the first profile already claimed the server */
       return null;
@@ -717,10 +738,14 @@ function setupBanner(address: string, serverName: string, serverPassword: string
  * here closes the hole for every caller at once. */
 const FORWARDING_HEADERS = ["x-forwarded-for", "x-real-ip", "forwarded", "cf-connecting-ip"] as const;
 
+/** Just the socket peer, ignoring what the request claims about itself. */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
 export function isLoopbackRequest(req: { socket: { remoteAddress?: string | undefined }; headers: Record<string, string | string[] | undefined> }): boolean {
   if (FORWARDING_HEADERS.some((header) => req.headers[header])) return false;
-  const address = req.socket.remoteAddress ?? "";
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  return isLoopbackAddress(req.socket.remoteAddress);
 }
 
 /** A self-hosted install often runs on plain-http loopback (no TLS terminator

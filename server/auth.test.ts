@@ -5,7 +5,7 @@ import type { Duplex } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { isPublicRoute, mountAuth } from "./auth.ts";
-import { isLoopbackRequest } from "./identity.ts";
+import { isLoopbackAddress, isLoopbackRequest } from "./identity.ts";
 
 // Jedna szyna: identity v2. Nie ma allowlisty dla parowania ani Firebase, nie
 // ma 426 — niezalogowany dostaje 401 i tyle.
@@ -51,6 +51,21 @@ describe("isLoopbackRequest", () => {
   it("jest fałszem, gdy żądanie przyszło przez pośrednika", () => {
     expect(isLoopbackRequest(req({ "x-forwarded-for": "1.2.3.4" }))).toBe(false);
     expect(isLoopbackRequest(req({ "x-real-ip": "1.2.3.4" }))).toBe(false);
+  });
+
+  // Kubełek limitu ufa `x-forwarded-for` TYLKO wtedy, gdy gniazdo naprawdę jest
+  // lokalne (czyli proxy stoi z przodu). Zdalny rozmówca, który sam wysyła ten
+  // nagłówek, dobierałby sobie własny kubełek przy każdej próbie — czyli
+  // nieograniczony zapas zgadywanek hasła serwera.
+  it("isLoopbackAddress patrzy na gniazdo, nie na to, co żądanie o sobie mówi", () => {
+    expect(isLoopbackAddress("127.0.0.1")).toBe(true);
+    expect(isLoopbackAddress("::1")).toBe(true);
+    expect(isLoopbackAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackAddress("10.0.0.7")).toBe(false);
+    expect(isLoopbackAddress(undefined)).toBe(false);
+    const proxied = req({ "x-forwarded-for": "1.2.3.4" });
+    expect(isLoopbackRequest(proxied)).toBe(false);
+    expect(isLoopbackAddress(proxied.socket.remoteAddress)).toBe(true);
   });
 });
 

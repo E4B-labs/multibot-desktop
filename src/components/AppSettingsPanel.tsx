@@ -209,7 +209,7 @@ export function WorkspaceAccessSettings() {
     // so it has to be a slug — the same rule the server enforces. Slugify what
     // was typed (the helper this file already has), and only complain when even
     // that cannot be one.
-    const name = slug(serverName).slice(0, 32).replace(/-$/, "");
+    const name = slug(serverName).slice(0, 32).replace(/^-+|-+$/g, "");
     if (!isServerName(name)) {
       setError(polish
         ? "Nazwa serwera: 3–32 znaki, małe litery, cyfry i myślniki (nie na początku ani na końcu)."

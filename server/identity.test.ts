@@ -66,10 +66,16 @@ describe("first boot", () => {
     expect(store.setupValues("not-the-setup-token")).toBeNull();
     expect(store.setupValues(undefined)).toBeNull();
 
-    // Once an owner exists, a restart must not rotate anybody's credentials.
+    // A restart BEFORE the first profile must not rotate the password either —
+    // it is already on somebody's screen, and setup.json still has it.
+    expect(await store.ensureConfigured(ADDRESS)).toBeNull();
+    expect(store.setupValues(token)?.serverPassword).toBe(password);
+
+    // …and once an owner exists, with setup.json gone, it stays a no-op.
     await store.register({ ...OWNER, serverName: name, serverPassword: password });
     expect(await store.ensureConfigured(ADDRESS)).toBeNull();
     expect(store.publicInfo().name).toBe(name);
+    expect((await store.join(name, password)).joinGrant).toBeTruthy();
     store.close();
   });
 
@@ -253,23 +259,26 @@ describe("server credentials", () => {
 });
 
 describe("sessions", () => {
-  it("revives a live 0.3.x session across the migration and leaves a dead one dead", async () => {
+  it("revives only the 0.3.x sessions that were still alive on migration day", async () => {
     const dir = mkdtempSync(join(tmpdir(), "multibot-immortal-"));
     dirs.push(dir);
     const file = join(dir, "identity.db");
     const store = new IdentityStore(file);
     const setup = await store.ensureConfigured(ADDRESS);
     const owner = await store.register({ ...OWNER, serverName: setup?.serverName, serverPassword: setup?.serverPassword });
-    const retired = store.createSessionForActor(owner.actor, "old laptop");
+    const expired = store.createSessionForActor(owner.actor, "old laptop");
+    const idle = store.createSessionForActor(owner.actor, "forgotten tablet");
     store.close();
 
-    // What a 0.3.x install holds today: last seen a year ago, with the one-year
-    // absolute deadline about to land — plus one session whose deadline passed.
-    const year = 365 * 24 * 60 * 60 * 1000;
+    // Every session gets the 0.3.x shape: a one-year absolute deadline about to
+    // land. Then two of them are made dead in the two ways 0.3.x could kill a
+    // session — deadline passed, and idle past the 90-day rule.
+    const day = 24 * 60 * 60 * 1000;
     const raw = new DatabaseSync(file);
     raw.prepare("UPDATE sessions SET created_at = ?, last_seen_at = ?, absolute_expires_at = ?")
-      .run(Date.now() - year, Date.now() - year, Date.now() + 60_000);
+      .run(Date.now() - 350 * day, Date.now() - 10 * day, Date.now() + 60_000);
     raw.prepare("UPDATE sessions SET absolute_expires_at = ? WHERE device_name = 'old laptop'").run(Date.now() - 1_000);
+    raw.prepare("UPDATE sessions SET last_seen_at = ? WHERE device_name = 'forgotten tablet'").run(Date.now() - 365 * day);
     raw.close();
 
     const reopened = new IdentityStore(file);
@@ -277,7 +286,9 @@ describe("sessions", () => {
     const cookie = identityCookie(owner.sessionToken, false);
     expect(reopened.actorForRequest({ headers: { cookie } })?.userId).toBe(owner.actor.userId);
     // An expired session is not a session; the migration must not resurrect it.
-    expect(reopened.actorForSessionToken(retired.sessionToken)).toBeNull();
+    expect(reopened.actorForSessionToken(expired.sessionToken)).toBeNull();
+    // Nor one the old idle rule had already signed out a year ago.
+    expect(reopened.actorForSessionToken(idle.sessionToken)).toBeNull();
     reopened.close();
   });
 });
