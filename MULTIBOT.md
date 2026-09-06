@@ -57,7 +57,11 @@ bash scripts/install-linux.sh
 ```
 
 Usługa `systemd --user` ma `Restart=always`; instalator próbuje `loginctl
-enable-linger`, aby start przeżył wylogowanie/restart.
+enable-linger`, aby start przeżył wylogowanie/restart. Po starcie instalator
+czeka na `~/.openmausbot/setup.json` i drukuje trzy wartości (adres, nazwa
+serwera, hasło serwera) — wpisz je w MultiBot na dowolnym urządzeniu →
+`Sign in to a server`. W trybie Docker te same wartości są w
+`docker compose -f docker-compose.selfhost.yml logs app`.
 
 ## Termux / Android
 
@@ -70,8 +74,11 @@ bash scripts/install-termux.sh
 
 `termux-services` utrzymuje usługę, a skrypt Termux:Boot źródłuje
 `$PREFIX/etc/profile.d/start-services.sh`, włącza `sv-enable multibot` i wykonuje
-`termux-wake-lock`. Komputer bota na Androidzie jest niedostępny;
-czat, memory, routines i skills działają.
+`termux-wake-lock`. Termux:Boot trzeba raz OTWORZYĆ, a Termuxowi wyłączyć
+oszczędzanie baterii — o obu instalator przypomina na końcu, razem z trzema
+wartościami z `~/.openmausbot/setup.json`. Instalator dopisuje też
+`allow-external-apps=true` do `~/.termux/termux.properties`. Komputer bota na
+Androidzie jest niedostępny; czat, memory, routines i skills działają.
 HTTPS jest wbudowany (certyfikat z własnym podpisem, `docs/REMOTE-ACCESS.md`).
 
 ## G1–G5: funkcje aplikacji

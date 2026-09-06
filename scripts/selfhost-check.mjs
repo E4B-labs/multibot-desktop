@@ -13,6 +13,8 @@ const entrypoint = read("scripts/docker-entrypoint.sh");
 const start = read("scripts/start-multibot.sh");
 const linux = read("scripts/install-linux.sh");
 const termux = read("scripts/install-termux.sh");
+const printValues = read("scripts/print-setup-values.sh");
+const windows = read("scripts/install-server-windows.mjs");
 
 must(existsSync(join(root, "public", "manifest.webmanifest")), "PWA manifest missing");
 must(compose.includes('"127.0.0.1:8799:8799"'), "compose must publish the harness on loopback only");
@@ -39,4 +41,20 @@ must(linux.includes("OMB_HOST=0.0.0.0") && termux.includes("OMB_HOST=0.0.0.0"), 
 // Bez TLS-a wolno stać tylko za reverse proxy na loopbacku — i to ma być
 // odmowa startu, nie ostrzeżenie ginące w logu.
 must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("process.exit(1)"), "OMB_TLS=off is not restricted to loopback");
+// Trzy wartości (adres, nazwa, hasło) są JEDYNĄ drogą do zalogowania się na
+// świeżym serwerze. Instalator, który ich nie pokaże, zostawia człowieka z
+// serwerem, do którego nikt nie wejdzie — plik z nimi jest 0600 i znika po
+// pierwszym profilu.
+must(printValues.includes("setup.json"), "value printer does not read setup.json");
+must(printValues.includes("server already set up"), "value printer has no message for a server with a profile");
+must(linux.includes("print-setup-values.sh") && termux.includes("print-setup-values.sh"), "installers do not print the three values");
+must(entrypoint.includes("print-setup-values.sh"), "container never prints the three values to its log");
+must(windows.includes('join(plan.dataDir, "setup.json")'), "Windows installer does not read setup.json");
+// Termux odrzuca RUN_COMMAND z innej apki bez tej właściwości — bez niej
+// aplikacja nie zrestartuje serwera na tym telefonie.
+must(termux.includes("allow-external-apps=true"), "Termux installer does not enable RUN_COMMAND from the app");
+// Zero usług trzecich: adres bierze się z samego serwera, nie z tunelu.
+for (const [name, text] of Object.entries({ "install-linux.sh": linux, "install-termux.sh": termux, "docker-entrypoint.sh": entrypoint, "print-setup-values.sh": printValues, "install-server-windows.mjs": windows })) {
+  must(!/cloudflare|tunnel/i.test(text), `${name} still points at a third-party tunnel`);
+}
 console.log("self-host install paths: OK (no services started)");
