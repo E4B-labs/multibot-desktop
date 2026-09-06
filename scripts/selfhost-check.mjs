@@ -41,6 +41,10 @@ must(linux.includes("OMB_HOST=0.0.0.0") && termux.includes("OMB_HOST=0.0.0.0"), 
 // Bez TLS-a wolno stać tylko za reverse proxy na loopbacku — i to ma być
 // odmowa startu, nie ostrzeżenie ginące w logu.
 must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("process.exit(1)"), "OMB_TLS=off is not restricted to loopback");
+// `listen(NaN)` picks a random free port, so a typo in OMB_PORT would start a
+// server nobody can find and report success. 8798 is the Tor ingress: sharing
+// it would put every direct client in the Tor rate-limit bucket.
+must(indexTs.includes("PORT > 65535 || PORT === TOR_INGRESS_PORT"), "OMB_PORT is not validated");
 // Trzy wartości (adres, nazwa, hasło) są JEDYNĄ drogą do zalogowania się na
 // świeżym serwerze. Instalator, który ich nie pokaże, zostawia człowieka z
 // serwerem, do którego nikt nie wejdzie — plik z nimi jest 0600 i znika po

@@ -1,8 +1,11 @@
 // multibot (0.4.0): "what address do I tell people to type in?" answered
 // without a single third party — no tunnel, no STUN, no echo service. The
 // ladder is: a globally routable IPv6 straight off an interface, then a public
-// IPv4 borrowed from the router over UPnP IGD, then the LAN address with an
-// honest "only on this Wi-Fi" label.
+// IPv4 borrowed from the router over UPnP IGD, then a v3 onion published by our
+// own tor (`server/tor.ts`), then the LAN address with an honest "only on this
+// Wi-Fi" label. Tor is a network, not a service we sign up to: the onion needs
+// no port, no account and nobody's permission, which is why it is always on and
+// why it beats every rung nothing has confirmed.
 //
 // EVERY address here comes from one of exactly two trusted sources: this
 // machine's own interfaces, or the owner pinning one by hand. Nothing a remote
@@ -16,16 +19,26 @@
 //
 // ponytail: UPnP only; add NAT-PMP when a real router refuses it.
 import { createSocket } from "node:dgram";
+import type { Socket } from "node:net";
 import { connect } from "node:tls";
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
+
+import { socksConnect } from "./socks5.ts";
 
 /** `relay`: a box the owner rents/owns with a public IP, reached by an outbound
  * `ssh -R` from this machine (`scripts/relay-connect.sh`). It is first because
  * it is the only rung that works behind a router with no UPnP and no IPv6, and
  * because the owner had to set it up by hand — that is a stronger statement of
  * "reach me here" than anything discovery can guess. TLS stays end to end: the
- * relay forwards TCP, so the pinned fingerprint is unchanged. */
-export type AddressKind = "relay" | "ipv6" | "ipv4-upnp" | "ipv4-lan";
+ * relay forwards TCP, so the pinned fingerprint is unchanged.
+ *
+ * `onion`: a v3 hidden service published by the tor this harness supervises
+ * (`server/tor.ts`). It is the one rung that needs nothing from the network in
+ * front of the server — no port, no IPv6, no box of the owner's own — which is
+ * why it is always on. It sits BELOW a verified public address because a direct
+ * hop is faster than six, and above the LAN address because "only on this
+ * Wi-Fi" is not an answer to "where do I reach you". */
+export type AddressKind = "relay" | "ipv6" | "ipv4-upnp" | "onion" | "ipv4-lan";
 export type AddressCandidate = { address: string; kind: AddressKind; verified: boolean };
 export type PortMapping = { state: "mapped" | "unsupported" | "cgnat" | "error"; error?: string };
 export type AddressReport = {
@@ -53,7 +66,7 @@ const IGD_SERVICE_TYPES = [
   "urn:schemas-upnp-org:service:WANIPConnection:2",
   "urn:schemas-upnp-org:service:WANPPPConnection:1",
 ];
-const KIND_ORDER: AddressKind[] = ["relay", "ipv6", "ipv4-upnp", "ipv4-lan"];
+const KIND_ORDER: AddressKind[] = ["relay", "ipv6", "ipv4-upnp", "onion", "ipv4-lan"];
 
 const META_ADDRESS = "server.publicAddress";
 const META_PINNED = "server.addressPinned";
@@ -127,7 +140,16 @@ export function isPublicRemote(address: string): boolean {
   return isGlobalIPv6(value);
 }
 
+/** A v3 onion and nothing else: 56 characters of base32 (a-z and 2-7) plus the
+ * suffix. v2 (16 characters) has been unroutable since 2021, and anything that
+ * merely ENDS in `.onion` — `evil.example.onion` — is a name tor would refuse
+ * and we must never publish. */
+export function isOnionHost(host: string): boolean {
+  return /^[a-z2-7]{56}\.onion$/.test(bare(host));
+}
+
 function kindOf(hostname: string): AddressKind {
+  if (isOnionHost(hostname)) return "onion";
   if (hostname.includes(":")) return "ipv6";
   return isPrivateIPv4(hostname) ? "ipv4-lan" : "ipv4-upnp";
 }
@@ -149,12 +171,17 @@ export function candidatesFrom(
   port: number,
   scheme: Scheme = "https",
   relayHost?: string | null,
+  onionHost?: string | null,
 ): AddressCandidate[] {
   const found = new Map<string, AddressCandidate>();
   // The relay host comes off disk (`DATA_DIR/relay.env`), so it goes through
   // the same shape check as every stored address before we advertise it.
   const relay = relayHost ? validAddress(addressFor(relayHost.trim(), port, scheme)) : null;
   if (relay) found.set(relay, { address: relay, kind: "relay", verified: false });
+  // Same rule for the onion: it comes off disk too (`DATA_DIR/tor/hs/hostname`),
+  // and a half-written or wrong-shaped file must not become an advertised name.
+  const onion = onionHost && isOnionHost(onionHost) ? validAddress(addressFor(bare(onionHost), port, scheme)) : null;
+  if (onion) found.set(onion, { address: onion, kind: "onion", verified: false });
   for (const entries of Object.values(ifaces)) {
     for (const entry of entries ?? []) {
       if (entry.internal) continue;
@@ -369,6 +396,14 @@ export type AddressDeps = {
    * server is already running: re-reading it on each scan means the new address
    * appears within a tick instead of after a restart. */
   relayHost?(): string | null;
+  /** The `.onion` this server publishes, or null until tor has. A function for
+   * the same reason as `relayHost`: tor writes `hs/hostname` a few seconds
+   * after boot, long after `initNetAddress` ran. */
+  onionHost?(): string | null;
+  /** The SOCKS port tor picked, so the onion can be self-probed through our own
+   * tor. Null while tor is still starting — the onion then stays unverified,
+   * which is the honest answer rather than a guess. */
+  socksPort?(): number | null;
   /** Our own certificate's SHA-256, so `probeRelay` can recognise us coming
    * back through the tunnel. Null with `OMB_TLS=off`, where there is nothing
    * to recognise and the relay simply stays unverified. */
@@ -414,7 +449,7 @@ function validAddress(value: string | null | undefined): string | null {
  * address the router reported for a mapping it accepted, and the owner's pin.
  * Nothing a peer sends is ever one of them. */
 function trusted(port: number): AddressCandidate[] {
-  const list = candidatesFrom(networkInterfaces(), port, deps?.scheme ?? "https", deps?.relayHost?.());
+  const list = candidatesFrom(networkInterfaces(), port, deps?.scheme ?? "https", deps?.relayHost?.(), deps?.onionHost?.());
   for (const key of [META_EXTERNAL, META_PINNED]) {
     const stored = validAddress(deps?.getMeta(key));
     if (stored && !list.some((candidate) => candidate.address === stored)) {
@@ -451,20 +486,68 @@ function persist(report: AddressReport, previous: AddressReport | null): Address
  * serverId, because only the holder of our private key can finish it.
  *
  * `rejectUnauthorized:false` is not a hole here: the certificate is self-signed
- * by design, nothing is sent, and the fingerprint comparison IS the check. */
-export function probeRelay(host: string, port: number, fingerprint: string, timeoutMs = NET_TIMEOUT_MS): Promise<boolean> {
+ * by design, nothing is sent, and the fingerprint comparison IS the check.
+ *
+ * `over` tunnels the same handshake through an already-open socket — that is
+ * how the onion is probed, through our own tor. No `servername` is sent in
+ * either case: the pin looks at `fingerprint256`, never at the SAN, so a
+ * `.onion` name that appears in no certificate on earth is not a problem. */
+export function probeRelay(
+  host: string,
+  port: number,
+  fingerprint: string,
+  timeoutMs = NET_TIMEOUT_MS,
+  over?: Socket,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connect({ host: bare(host), port, rejectUnauthorized: false, timeout: timeoutMs });
+    const socket = over
+      ? connect({ socket: over, rejectUnauthorized: false })
+      : connect({ host: bare(host), port, rejectUnauthorized: false, timeout: timeoutMs });
     const done = (value: boolean): void => {
+      over?.setTimeout(0);
       socket.destroy();
+      over?.destroy();
       resolve(value);
     };
+    // MEASURED on Node 24: `tls.connect({ socket, timeout })` silently ignores
+    // the timeout — the option only ever reaches a socket tls.connect opened
+    // itself. A Tor circuit that accepts and then goes quiet would hang this
+    // promise forever, and with it `inFlight`, which would freeze address
+    // discovery for the life of the process. So the clock goes on the socket we
+    // were handed, where it does fire.
+    over?.setTimeout(timeoutMs, () => done(false));
     socket.once("secureConnect", () => done(
       socket.getPeerCertificate().fingerprint256?.toUpperCase() === fingerprint.toUpperCase(),
     ));
     socket.once("timeout", () => done(false));
     socket.once("error", () => done(false));
   });
+}
+
+/** Six hops each way and a rendezvous to build, so the relay's 2 s budget would
+ * fail every first probe. Measured onion TTFB after bootstrap is 0.3-0.7 s
+ * (OnionPerf 2026); this is the cold case with headroom. */
+const ONION_PROBE_TIMEOUT_MS = 30_000;
+
+/** The onion's self-probe: dial our OWN hidden service through our OWN tor and
+ * see whether our own certificate comes back. Same three answers in one
+ * handshake as the relay — the service is published, it lands on this process,
+ * and nobody else holds the key. The `.onion` is handed to tor as a name
+ * (SOCKS5 domain ATYP), so nothing about it ever reaches a resolver. */
+export async function probeOnion(
+  host: string,
+  port: number,
+  fingerprint: string,
+  socksPort: number,
+  timeoutMs = ONION_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+  let tunnel: Socket;
+  try {
+    tunnel = await socksConnect(socksPort, bare(host), port, timeoutMs);
+  } catch {
+    return false; // tor not bootstrapped, or the service is not reachable yet
+  }
+  return probeRelay(host, port, fingerprint, timeoutMs, tunnel);
 }
 
 /** The last report as stored, so a request never waits for SSDP. */
@@ -507,7 +590,13 @@ export function noteReachedHost(
   const address = `${scheme}://${host.hostname}:${port}`;
   const previous = storedReport();
   const candidates = carryVerified(trusted(port), previous);
-  if (!candidates.some((candidate) => candidate.address === address)) return null;
+  // An onion is on that list too, and it is the one candidate an inbound
+  // request can NEVER be evidence for: onion traffic arrives from 127.0.0.1, so
+  // a `Host: <our-onion>` from a public peer is just a string it typed. Letting
+  // it through would hand a stranger a way to mark the onion verified and
+  // demote a public address we had really confirmed. `probeOnion` is the only
+  // thing that gets to say the onion works.
+  if (!candidates.some((candidate) => candidate.address === address && candidate.kind !== "onion")) return null;
 
   notedAt = Date.now();
   const marked = candidates.map((candidate) => (candidate.address === address ? { ...candidate, verified: true } : candidate));
@@ -538,6 +627,33 @@ export function pinAddress(port: number, address: unknown): AddressReport | null
     candidates,
     portMapping: previous?.portMapping ?? { state: "unsupported" },
   }, previous);
+}
+
+/**
+ * Which candidate becomes THE address. Pure, so the whole ladder is testable
+ * without owning a NIC.
+ *
+ * Relay first: a NAT'd server's other candidates reach nobody outside the flat,
+ * and the owner had to build the relay by hand to have one at all. Then the
+ * previous choice, so an address a real client confirmed is never quietly
+ * reverted — but no longer for an UNVERIFIED LAN address, because a LAN pick
+ * made on the very first scan (seconds before tor published anything) would
+ * otherwise keep winning forever on seniority alone. Then anything verified.
+ * Then the onion: it works from every network by construction, which an
+ * unconfirmed IPv6 or a hopeful UPnP mapping does not.
+ */
+export function chooseAddress(candidates: AddressCandidate[], previousCurrent?: string | null): AddressCandidate | null {
+  // The LAN relaxation exists ONLY to let a late onion past a first-boot LAN
+  // pick. With no onion in the list there is nothing better to move to, and
+  // dropping the sticky LAN address would make the advertised address flap on
+  // every scan for the servers that have no onion at all.
+  const hasOnion = candidates.some((candidate) => candidate.kind === "onion");
+  return candidates.find((candidate) => candidate.kind === "relay")
+    ?? candidates.find((candidate) => candidate.address === previousCurrent && (candidate.verified || candidate.kind !== "ipv4-lan" || !hasOnion))
+    ?? candidates.find((candidate) => candidate.verified)
+    ?? candidates.find((candidate) => candidate.kind === "onion")
+    ?? candidates[0]
+    ?? null;
 }
 
 /** The whole ladder in one pass: scan interfaces, ask the router, remember the
@@ -574,16 +690,13 @@ async function scan(port: number): Promise<AddressReport> {
   if (relay && deps?.tlsFingerprint) {
     relay.verified = await probeRelay(new URL(relay.address).hostname, port, deps.tlsFingerprint);
   }
+  const onion = candidates.find((candidate) => candidate.kind === "onion");
+  const socksPort = deps?.socksPort?.() ?? null;
+  if (onion && deps?.tlsFingerprint && socksPort) {
+    onion.verified = await probeOnion(new URL(onion.address).hostname, port, deps.tlsFingerprint, socksPort);
+  }
 
-  // Relay first: a NAT'd server's other candidates reach nobody outside the
-  // flat, and the owner had to build the relay by hand to have one at all. The
-  // rest is unchanged — in particular the previous choice still outranks a
-  // fresh scan, so an address a real client confirmed is never quietly reverted.
-  const chosen = candidates.find((candidate) => candidate.kind === "relay")
-    ?? candidates.find((candidate) => candidate.address === previous?.current)
-    ?? candidates.find((candidate) => candidate.verified)
-    ?? candidates[0]
-    ?? null;
+  const chosen = chooseAddress(candidates, previous?.current);
   return persist({
     current: chosen?.address ?? null,
     verified: Boolean(chosen?.verified),

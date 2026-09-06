@@ -3,14 +3,19 @@
 // pieces tested below (`ssdpLocation`, `parseControlUrl`, `parseSoapValue`,
 // `readCapped`). They stay untested — a UDP multicast test would exercise the
 // LAN it runs on, not the code.
-import { describe, expect, it } from "vitest";
+import { createServer, connect as netConnect } from "node:net";
+import { afterEach, describe, expect, it } from "vitest";
 import type { NetworkInterfaceInfo } from "node:os";
+
+import type { AddressCandidate, AddressKind } from "./net-address.ts";
 
 import {
   candidatesFrom,
+  chooseAddress,
   isCarrierGradeNat,
   isGlobalIPv6,
   isPrivateIPv4,
+  isOnionHost,
   isPublicRemote,
   noteReachedHost,
   parseControlUrl,
@@ -344,5 +349,121 @@ describe("pinAddress", () => {
   it("accepts a host with an explicit port and keeps nothing else", () => {
     expect(pinAddress(8799, "  http://8.8.8.8:9000  ")?.current).toBe("http://8.8.8.8:9000");
     expect(pinAddress(8799, "https://[2a02:a31b::42]:8799")?.current).toBe("https://[2a02:a31b::42]:8799");
+  });
+});
+
+const ONION = "a".repeat(56) + ".onion";
+
+describe("isOnionHost", () => {
+  it("accepts exactly a v3 onion", () => {
+    expect(isOnionHost(ONION)).toBe(true);
+    expect(isOnionHost(`  ${ONION.toUpperCase()}  `)).toBe(true);
+  });
+
+  it("refuses the wrong length, the wrong alphabet and anything merely ending in .onion", () => {
+    for (const host of [
+      "a".repeat(55) + ".onion", // one short
+      "a".repeat(57) + ".onion", // one long
+      "a".repeat(16) + ".onion", // v2, unroutable since 2021
+      "a".repeat(55) + "1.onion", // 1 and 8/9 are not in base32
+      "a".repeat(55) + "8.onion",
+      `evil.example.${ONION}`, // a name tor would refuse, and we must never publish
+      `${ONION}.evil.example`,
+      "a".repeat(56), // no suffix
+      "",
+    ]) {
+      expect(isOnionHost(host)).toBe(false);
+    }
+  });
+});
+
+describe("candidatesFrom with an onion", () => {
+  it("advertises the onion below IPv6 and above the LAN address", () => {
+    const kinds = candidatesFrom(FIXTURE, 8799, "https", null, ONION).map((candidate) => candidate.kind);
+    expect(kinds).toEqual(["ipv6", "onion", "ipv4-lan"]);
+  });
+
+  it("refuses a hostname that is not a real onion, however much it looks like one", () => {
+    for (const bad of ["", "  ", "evil.example", `evil.example.${ONION}`, "a".repeat(55) + ".onion"]) {
+      expect(candidatesFrom(FIXTURE, 8799, "https", null, bad).some((candidate) => candidate.kind === "onion")).toBe(false);
+    }
+  });
+});
+
+// The ladder itself, with no NIC involved: `chooseAddress` is the whole of it.
+describe("chooseAddress with an onion", () => {
+  const candidate = (kind: AddressKind, verified = false): AddressCandidate => ({ address: `https://${kind}:8799`, kind, verified });
+  const onion = candidate("onion");
+  const lan = candidate("ipv4-lan");
+  const ipv6 = candidate("ipv6");
+
+  it("keeps the onion below a verified public address", () => {
+    expect(chooseAddress([candidate("ipv6", true), onion])?.kind).toBe("ipv6");
+    expect(chooseAddress([candidate("relay"), onion])?.kind).toBe("relay");
+  });
+
+  it("puts the onion above anything unverified, LAN included", () => {
+    expect(chooseAddress([ipv6, onion, lan])?.kind).toBe("onion");
+    expect(chooseAddress([lan, onion])?.kind).toBe("onion");
+  });
+
+  // The first scan happens seconds after boot, long before tor has published
+  // anything — so the LAN address it picked must not win forever on seniority.
+  it("does not let a first-boot LAN pick outrank the onion that arrived later", () => {
+    expect(chooseAddress([ipv6, onion, lan], lan.address)?.kind).toBe("onion");
+  });
+
+  it("still refuses to revert an address a real client confirmed", () => {
+    const provenLan = candidate("ipv4-lan", true);
+    expect(chooseAddress([onion, provenLan], provenLan.address)?.kind).toBe("ipv4-lan");
+    const provenIpv6 = candidate("ipv6", true);
+    expect(chooseAddress([provenIpv6, onion], provenIpv6.address)?.kind).toBe("ipv6");
+  });
+
+  it("answers null on nothing at all", () => {
+    expect(chooseAddress([], null)).toBeNull();
+  });
+});
+
+// The onion is a candidate like any other, so `Host: <our-onion>` from a peer
+// that CAN reach us directly would otherwise mark it verified and demote a
+// public address we had really confirmed.
+describe("noteReachedHost and the onion", () => {
+  it("refuses to take an inbound request as proof of the onion", () => {
+    expect(noteReachedHost(fakeRequest("8.8.8.8", `${ONION}:8799`), 8799)).toBeNull();
+  });
+});
+
+// A Tor circuit that accepts and then goes quiet is the normal failure of a
+// hidden service that has gone away, and `tls.connect({ socket, timeout })`
+// does NOT apply the timeout to a socket it was handed (measured, Node 24).
+// Without a clock of its own this promise never settles, `inFlight` never
+// clears, and address discovery is frozen for the life of the process.
+describe("probeRelay over a pre-opened socket", () => {
+  const silent = createServer(() => {});
+  afterEach(() => silent.close());
+
+  it("gives up on a peer that accepts and never speaks", async () => {
+    await new Promise((resolve) => silent.listen(0, "127.0.0.1", () => resolve(null)));
+    const port = (silent.address() as { port: number }).port;
+    const tunnel = netConnect(port, "127.0.0.1");
+    await new Promise((resolve) => tunnel.once("connect", resolve));
+
+    const started = Date.now();
+    await expect(probeRelay("anything.onion", 8799, "AA:BB", 400, tunnel)).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(tunnel.destroyed).toBe(true);
+  });
+});
+
+describe("chooseAddress stickiness without an onion", () => {
+  const candidate = (kind: AddressKind, verified = false): AddressCandidate => ({ address: `https://${kind}:8799`, kind, verified });
+
+  // The LAN relaxation is there ONLY to let a late onion past a first-boot LAN
+  // pick. On a server that has no onion at all it would just make the published
+  // address flap between the LAN one and an unverified IPv6 on every scan.
+  it("keeps a sticky LAN address when there is no onion to move to", () => {
+    const lan = candidate("ipv4-lan");
+    expect(chooseAddress([candidate("ipv6"), lan], lan.address)?.kind).toBe("ipv4-lan");
   });
 });

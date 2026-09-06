@@ -7,6 +7,9 @@ import { createHash, generateKeyPairSync, randomBytes, randomInt, scrypt, timing
 import { dirname, join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
+// One-way: `server/tor.ts` does not import this file. The port is what tells
+// "a person at this keyboard" apart from "anyone on the internet, via Tor".
+import { TOR_BUCKET, TOR_INGRESS_PORT } from "./tor.ts";
 
 const scryptAsync = (password: string, salt: Buffer, keylen: number, options: ScryptOptions): Promise<Buffer> =>
   new Promise((resolve, reject) => scrypt(password, salt, keylen, options, (error, derivedKey) => error ? reject(error) : resolve(derivedKey)));
@@ -381,6 +384,30 @@ export class IdentityStore {
     this.audit(null, "server.created", this.publicInfo().serverId);
     console.log(setupBanner(address, serverName, values.serverPassword, this.setupFile));
     return values;
+  }
+
+  /** `setup.json` is written once, on the first boot, with the address the
+   * ladder knew at that second — which on a fresh Termux install is the LAN
+   * one, because tor has not published the onion yet and the router has not
+   * been asked. Ten seconds later the answer is a different, better address,
+   * and the person reading the file would type the wrong one.
+   *
+   * So the ADDRESS, and only the address, is rewritten whenever the ladder
+   * changes its mind. Never the password, the name or the token: those are
+   * minted once and a restart must not invalidate what is already on somebody's
+   * screen. And only while the file still exists — it disappears once the first
+   * profile claims the server, and recreating it there would put a live
+   * password back on disk. */
+  updateSetupAddress(address: string): void {
+    let raw: Record<string, unknown>;
+    try {
+      raw = JSON.parse(readFileSync(this.setupFile, "utf8")) as Record<string, unknown>;
+    } catch {
+      return; // no pending setup, or a file we did not write — leave it alone
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.address === address) return;
+    writeFileSync(this.setupFile, JSON.stringify({ ...raw, address }, null, 2), { mode: 0o600 });
+    if (process.platform !== "win32") chmodSync(this.setupFile, 0o600);
   }
 
   /** Where the pending setup values live. A PATH, never the values: a browser
@@ -891,9 +918,37 @@ export function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
-export function isLoopbackRequest(req: { socket: { remoteAddress?: string | undefined }; headers: Record<string, string | string[] | undefined> }): boolean {
+export function isLoopbackRequest(
+  req: { socket: { remoteAddress?: string | undefined; localPort?: number | undefined }; headers: Record<string, string | string[] | undefined> },
+): boolean {
+  // A request off the Tor ingress arrives from 127.0.0.1 like every other
+  // onion client, and is the exact opposite of local: the sender could be
+  // anywhere on earth. Every route behind this gate means "physically at this
+  // device" by it — `/api/internal/*`, the setup values, the setup path — so
+  // the ingress port is checked FIRST and no header can talk it out of this.
+  if (req.socket.localPort === TOR_INGRESS_PORT) return false;
   if (FORWARDING_HEADERS.some((header) => req.headers[header])) return false;
   return isLoopbackAddress(req.socket.remoteAddress);
+}
+
+/**
+ * Which rate-limit bucket a request counts against.
+ *
+ * Over the Tor ingress the answer is the literal `"tor"` and `x-forwarded-for`
+ * is not even read: every onion client arrives from 127.0.0.1, so honouring the
+ * header there would let a client name its own bucket and buy an unlimited
+ * supply of scrypt guesses at the server password. Everywhere else the old rule
+ * stands — the first forwarded hop, but ONLY when the socket peer really is
+ * loopback, i.e. there is a reverse proxy in front.
+ */
+export function rateLimitAddress(
+  socket: { localPort?: number | undefined; remoteAddress?: string | undefined },
+  forwardedFor: string | string[] | undefined,
+): string {
+  if (socket.localPort === TOR_INGRESS_PORT) return TOR_BUCKET;
+  const peer = socket.remoteAddress ?? "unknown";
+  const forwarded = String(forwardedFor ?? "").split(",")[0].trim();
+  return (isLoopbackAddress(socket.remoteAddress) && forwarded) || peer;
 }
 
 /** A self-hosted install often runs on plain-http loopback (no TLS terminator
@@ -909,6 +964,11 @@ export function isLoopbackRequest(req: { socket: { remoteAddress?: string | unde
  * nie dostałaby `Secure`. */
 export function isSecureRequest(req: { socket: unknown; headers: Record<string, string | string[] | undefined> }): boolean {
   if ((req.socket as { encrypted?: boolean } | null)?.encrypted) return true;
+  // The same gate as `isLoopbackRequest`, one step later: a real TLS connection
+  // is secure however it arrived, but the `x-forwarded-proto` branch below
+  // trusts a loopback peer — and every onion client is one. A Tor client must
+  // not be able to talk us into a `Secure` cookie on a plaintext socket.
+  if ((req.socket as { localPort?: number } | null)?.localPort === TOR_INGRESS_PORT) return false;
   const peer = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
   return isLoopbackAddress(peer) && String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
 }

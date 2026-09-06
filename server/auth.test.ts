@@ -5,7 +5,8 @@ import type { Duplex } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { isPublicRoute, mountAuth } from "./auth.ts";
-import { isLoopbackAddress, isLoopbackRequest } from "./identity.ts";
+import { isLoopbackAddress, isLoopbackRequest, isSecureRequest } from "./identity.ts";
+import { TOR_INGRESS_PORT } from "./tor.ts";
 
 // Jedna szyna: identity v2. Nie ma allowlisty dla parowania ani Firebase, nie
 // ma 426 — niezalogowany dostaje 401 i tyle.
@@ -38,8 +39,8 @@ describe("public allowlist", () => {
 // Tunel albo reverse proxy sprawia, że KAŻDE żądanie wygląda na 127.0.0.1.
 // Nagłówek przekazujący adres jest dowodem, że rozmówca lokalny NIE jest.
 describe("isLoopbackRequest", () => {
-  const req = (headers: Record<string, string>, remoteAddress = "127.0.0.1") =>
-    ({ socket: { remoteAddress }, headers }) as unknown as IncomingMessage;
+  const req = (headers: Record<string, string>, remoteAddress = "127.0.0.1", localPort = 8799) =>
+    ({ socket: { remoteAddress, localPort }, headers }) as unknown as IncomingMessage;
 
   it("jest prawdą tylko dla gołego loopbacku", () => {
     expect(isLoopbackRequest(req({}))).toBe(true);
@@ -51,6 +52,14 @@ describe("isLoopbackRequest", () => {
   it("jest fałszem, gdy żądanie przyszło przez pośrednika", () => {
     expect(isLoopbackRequest(req({ "x-forwarded-for": "1.2.3.4" }))).toBe(false);
     expect(isLoopbackRequest(req({ "x-real-ip": "1.2.3.4" }))).toBe(false);
+  });
+
+  // Klient onionowy przychodzi z 127.0.0.1 jak każdy inny — a jest dokładnym
+  // przeciwieństwem lokalnego. Za tą bramką stoją `/api/internal/*` i wartości
+  // setupu, czyli trasy, które znaczą „człowiek przy TEJ klawiaturze".
+  it("jest fałszem dla wejścia z Tora, choć gniazdo jest z pętli zwrotnej", () => {
+    expect(isLoopbackRequest(req({}, "127.0.0.1", TOR_INGRESS_PORT))).toBe(false);
+    expect(isLoopbackRequest(req({}, "::1", TOR_INGRESS_PORT))).toBe(false);
   });
 
   // Kubełek limitu ufa `x-forwarded-for` TYLKO wtedy, gdy gniazdo naprawdę jest
@@ -165,5 +174,24 @@ describe("mountAuth", () => {
     } finally {
       await new Promise((r) => server.close(r));
     }
+  });
+});
+
+// `x-forwarded-proto` counts only from a loopback peer, i.e. from a reverse
+// proxy on this machine — and every onion client looks exactly like one.
+describe("isSecureRequest over the tor ingress", () => {
+  const req = (headers: Record<string, string>, socket: Record<string, unknown>) =>
+    ({ socket, headers }) as unknown as IncomingMessage;
+
+  it("ignores x-forwarded-proto from a Tor client on a plaintext socket", () => {
+    expect(isSecureRequest(req({ "x-forwarded-proto": "https" }, { remoteAddress: "127.0.0.1", localPort: TOR_INGRESS_PORT }))).toBe(false);
+    // Same header from a real reverse proxy on the normal port still counts.
+    expect(isSecureRequest(req({ "x-forwarded-proto": "https" }, { remoteAddress: "127.0.0.1", localPort: 8799 }))).toBe(true);
+  });
+
+  // TLS is on for every onion in practice, and a real TLS socket is secure
+  // however it arrived — the guard above must not take that away.
+  it("still says secure for a real TLS connection over the ingress", () => {
+    expect(isSecureRequest(req({}, { encrypted: true, remoteAddress: "127.0.0.1", localPort: TOR_INGRESS_PORT }))).toBe(true);
   });
 });
