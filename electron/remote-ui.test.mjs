@@ -111,7 +111,10 @@ test("index.html z proxy niesie flagę trybu zdalnego, inne pliki nie", async ()
     assert.match(res.body, /window\.__MULTIBOT_REMOTE__=true/, `${path} musi nieść flagę`);
     // Bez tego przeglądarka ucina koniec dokumentu o długość flagi.
     assert.equal(Number(res.headers["content-length"]), Buffer.byteLength(res.body), "długość liczona po wstrzyknięciu");
-    assert.match(res.body, /<script>window\.__MULTIBOT_REMOTE__=true<\/script><\/head>/, "flaga przed </head>");
+    assert.match(res.body, /<script>window\.__MULTIBOT_REMOTE__=true;window\.__MULTIBOT_HOST__=".+?"<\/script><\/head>/, "flaga przed </head>");
+    // Bez adresu hosta ekran logowania pokazywałby origin proxy i nie miałby
+    // dokąd wysłać `joinHost` — czyli ekran wyboru zamiast wejścia na serwer.
+    assert.ok(res.body.includes(`window.__MULTIBOT_HOST__=${JSON.stringify(host.url)}`), `${path} musi nieść adres hosta`);
   }
   const asset = await get(`${ui.url}/assets/index-abc123.js`);
   assert.doesNotMatch(asset.body, /__MULTIBOT_REMOTE__/, "pliki statyczne zostają nietknięte");
@@ -229,6 +232,15 @@ test("host po https bez przypiętego certyfikatu nie dostaje proxy w ogóle", as
     /certificate pin/,
     "bez przypięcia `rejectUnauthorized:false` znaczyłoby „ufam każdemu\"",
   );
+});
+
+test("adres hosta wstrzykiwany jest jako literał, więc `</script>` w nim nic nie zamyka", async () => {
+  const zlosliwy = await startRemoteUiServer({ staticDir, remoteUrl: "http://zly.invalid/</script><script>window.x=1" });
+  const res = await get(`${zlosliwy.url}/`);
+  await zlosliwy.close();
+  const glowa = res.body.slice(0, res.body.indexOf("</head>"));
+  assert.doesNotMatch(glowa, /<\/script><script>window\.x=1/, "adres nie może wyjść z bloku skryptu");
+  assert.match(glowa, /\\u003c\/script>/, "`<` ucieka jako \\u003c");
 });
 
 test("brak zapakowanego interfejsu degraduje do trybu sprzed zmiany, nie do białego ekranu", async () => {

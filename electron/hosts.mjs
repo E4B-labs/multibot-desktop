@@ -107,7 +107,13 @@ export function addRemoteHost({ name, url, token, tlsFingerprint, assumeHttps = 
   // reguła siedzi w host-resolve.mjs, żeby dało się ją sprawdzić testem.
   const hosts = mergeRemoteHost(config.hosts ?? [], host);
   writeRaw({ activeId: config.activeId, hosts });
-  return { id: host.id, name: host.name, url: host.url, createdAt: host.createdAt };
+  // ZAPISANY rekord, nie ten wejściowy: przy ponownym logowaniu do znanego już
+  // serwera scalanie zachowuje STARE id, a wołający ustawia nim activeId
+  // (`hosts:join`). Oddanie świeżo wylosowanego id zostawiało activeId, do
+  // którego nie pasuje żaden host — czyli ciche „mode: local" i powrót na ekran
+  // wyboru zamiast wejścia na serwer.
+  const saved = hosts.find((h) => sameOrigin(h.url, normalized)) ?? host;
+  return { id: saved.id, name: saved.name, url: saved.url, createdAt: saved.createdAt };
 }
 
 export function removeHost(id) {

@@ -67,6 +67,14 @@ export function mergeRemoteHost(hosts, host) {
   return [merged, ...hosts.filter((h) => !sameOrigin(h.url, host.url))];
 }
 
+/** Czy oba adresy wskazują ten sam DOKUMENT, czyli różnią się najwyżej
+ * fragmentem. Ponowne wejście na tego samego hosta zmienia w adresie tylko
+ * `#join=<grant>`, a taka nawigacja NIE przeładowuje strony — grant nigdy nie
+ * zostaje odczytany. Pusty adres (świeże okno) to nie jest ten sam dokument. */
+export function sameDocument(a, b) {
+  return Boolean(a) && String(a).split("#")[0] === String(b).split("#")[0];
+}
+
 export function removeRemoteHost(hosts, id) {
   return hosts.filter((h) => h.id !== id);
 }

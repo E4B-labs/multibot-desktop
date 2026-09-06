@@ -7,6 +7,10 @@ declare global {
      * `index.html`. Nieobecne wszędzie indziej: w przeglądarce i pod
      * Electronem z lokalnym serwerem. */
     __MULTIBOT_REMOTE__?: true;
+    /** Adres hosta, dla którego stoi to proxy — wstrzykiwany obok flagi wyżej.
+     * Ekran logowania musi go pokazać zamiast originu proxy i wysłać go do
+     * `joinHost`; `location.origin` to tutaj `http://127.0.0.1:<port>`. */
+    __MULTIBOT_HOST__?: string;
     /** Wstrzykiwane przez powłokę mobilną przy ładowaniu strony. Każda
      * wiadomość do mostu wiezie tę wartość (`shellPost` w `src/lib/shell.ts`),
      * a powłoka reaguje tylko na te, które ją mają. Nieobecne wszędzie indziej. */

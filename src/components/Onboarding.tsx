@@ -107,6 +107,17 @@ export function joinPlan(path: OnboardingPath, grant: string, values: SetupValue
   return { kind: "blocked" };
 }
 
+/** Gdzie onboarding zaczyna i z jakim adresem serwera.
+ *
+ * Powłoka desktopowa w trybie zdalnym MA już wybrany serwer (proxy w
+ * `electron/remote-ui.mjs` wstrzykuje jego adres), więc pytanie „postawić serwer
+ * czy zalogować się" jest tam ślepą uliczką: po restarcie apka pokazywała ekran
+ * wyboru zamiast logowania do hosta, na którym stoi. `location.origin` też się
+ * do niczego nie nadaje — to origin proxy na pętli zwrotnej, nie adres serwera. */
+export function startingPoint(remoteHost: string, origin: string): { step: OnboardingStep; address: string } {
+  return remoteHost ? { step: "signin", address: remoteHost } : { step: "choice", address: origin };
+}
+
 export type AuthMode = "register" | "login" | "recover";
 
 /** Exactly what the working step sends. Pure so the things that must never
@@ -203,13 +214,18 @@ function CopyRow({ label, value, polish, width = "w-[74px]" }: { label: string; 
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const polish = useLanguage() === "pl";
+  // Adres hosta, dla którego stoi lokalne proxy powłoki desktopowej — pusty
+  // wszędzie indziej. Wstrzykiwany synchronicznie, więc decyzja o pierwszym
+  // ekranie zapada przy pierwszym renderze, bez mignięcia ekranem wyboru.
+  const remoteHost = (typeof window === "undefined" ? "" : window.__MULTIBOT_HOST__) ?? "";
+  const start = startingPoint(remoteHost, typeof location === "undefined" ? "" : location.origin);
   const [path, setPath] = useState<OnboardingPath>("join");
-  const [step, setStep] = useState<OnboardingStep>("choice");
+  const [step, setStep] = useState<OnboardingStep>(start.step);
   const [values, setValues] = useState<SetupValues | null>(null);
   const [setupUnreadable, setSetupUnreadable] = useState(false);
   const [setupPath, setSetupPath] = useState<string | null>(null);
   const [devHint, setDevHint] = useState(false);
-  const [address, setAddress] = useState(typeof location === "undefined" ? "" : location.origin);
+  const [address, setAddress] = useState(start.address);
   const [serverName, setServerName] = useState("");
   const [serverPassword, setServerPassword] = useState("");
   const [grant, setGrant] = useState("");

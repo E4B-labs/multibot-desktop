@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { addressNote, authRequest, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep } from "./Onboarding";
+import { addressNote, authRequest, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, startingPoint } from "./Onboarding";
 
 // Vitest runs in `node` here and the repo has no jsdom, so the screens
 // themselves are not rendered (same as WindowControls.test.ts). Everything that
@@ -182,5 +182,21 @@ describe("joinErrorText", () => {
     const text = joinErrorText("some_new_code", false);
     expect(text).toContain("some_new_code");
     expect(text).not.toContain("connect");
+  });
+});
+
+describe("where onboarding starts", () => {
+  // Objaw: po restarcie apki z wybranym hostem zdalnym pokazywał się ekran
+  // „postaw serwer / zaloguj się", choć serwer jest już wybrany — a w polu
+  // adresu siedziałby origin lokalnego proxy zamiast adresu hosta.
+  it("goes straight to sign-in on the host the shell already picked", () => {
+    expect(startingPoint("https://192.168.1.42:8799", "http://127.0.0.1:47820")).toEqual({
+      step: "signin",
+      address: "https://192.168.1.42:8799",
+    });
+  });
+
+  it("keeps the choice screen everywhere else", () => {
+    expect(startingPoint("", "https://127.0.0.1:8799")).toEqual({ step: "choice", address: "https://127.0.0.1:8799" });
   });
 });
