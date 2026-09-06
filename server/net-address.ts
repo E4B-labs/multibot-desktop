@@ -34,6 +34,8 @@ const NET_TIMEOUT_MS = 2_000;
 /** `AbortSignal.timeout` caps time, not size: a device that dribbles bytes
  * forever stays inside its timeout while filling our heap. */
 const MAX_BODY_BYTES = 256 * 1024;
+/** A real IGD description is a few kilobytes; nothing legitimate is near this. */
+const MAX_DESCRIPTION_BYTES = 64 * 1024;
 /** A machine with a dozen virtual switches already produces a long list; a cap
  * keeps one stored row bounded no matter what shows up. */
 const MAX_CANDIDATES = 16;
@@ -48,6 +50,11 @@ const KIND_ORDER: AddressKind[] = ["ipv6", "ipv4-upnp", "ipv4-lan"];
 
 const META_ADDRESS = "server.publicAddress";
 const META_PINNED = "server.addressPinned";
+const META_EXTERNAL = "server.addressExternal";
+/** Written, never read back for a trust decision — that was the round-2 bug.
+ * It exists because the admin overview (`server/admin.ts`) shows whether the
+ * address was ever confirmed, and when. */
+const META_VERIFIED_AT = "server.addressVerifiedAt";
 const META_REPORT = "server.addressReport";
 
 // ── address classification (pure) ────────────────────────────────────
@@ -66,16 +73,20 @@ function octets(address: string): number[] | null {
   return values.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? values : null;
 }
 
-/** Everything nobody on the internet can route to: RFC1918, loopback,
- * link-local, benchmarking (198.18/15), IETF protocol assignments (192.0.0/24)
- * and the whole multicast/reserved top end. */
+/** Everything nobody on the internet can route to us at: RFC1918, loopback,
+ * link-local, benchmarking (198.18/15), IETF protocol assignments (192.0.0/24),
+ * the deprecated 6to4 anycast relay (192.88.99/24), the three documentation
+ * ranges (they turn up in copied config, never on a real NIC) and the whole
+ * multicast/reserved top end. */
 export function isPrivateIPv4(address: string): boolean {
   const parts = octets(bare(address));
   if (!parts) return false;
   const [a, b, c] = parts;
   return a === 0 || a === 10 || a === 127 || a >= 224 ||
     (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) ||
-    (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0 && c === 0);
+    (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 88 && c === 99) ||
+    (a === 192 && b === 0 && c === 2) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113);
 }
 
 /** 100.64.0.0/10 — the carrier's own NAT. An "external" IP in this range means
@@ -166,8 +177,30 @@ export function ssdpLocation(response: { rinfo: { address: string }; datagram: s
 /** The IGD lists several services; only the WAN connection ones can map a port.
  * `controlURL` may be relative, so it is resolved against the LOCATION — and
  * then re-checked, because an absolute one is free to point elsewhere. */
+/** Cut the description into `<service>` blocks WITHOUT a regex spanning them.
+ * Measured on `"<service>".repeat(n)` (n unmatched openers, the shape a hostile
+ * device sends): the obvious `<service\b[\s\S]*?</service>` takes 1.4 s at
+ * 180 KB and 10.9 s at 540 KB, and the usual "non-backtracking" rewrite
+ * `<service\b[^<]*(?:<(?!/service>)[^<]*)*</service>` is four times WORSE
+ * (4.8 s / 43.9 s) — both are quadratic, because every opener rescans to the
+ * end looking for a close that never comes. Splitting on the closer and taking
+ * the last opener before it is linear: 0 ms at both sizes. */
+function serviceBlocks(xml: string): string[] {
+  const blocks: string[] = [];
+  const parts = xml.split("</service>");
+  for (let index = 0; index < parts.length - 1; index++) {
+    // `<service[\s>]` and not `<service`, or `<serviceId>` would win and the
+    // block would start after the `<serviceType>` we came for.
+    let open = -1;
+    for (const match of parts[index].matchAll(/<service[\s>]/g)) open = match.index;
+    if (open >= 0) blocks.push(parts[index].slice(open));
+  }
+  return blocks;
+}
+
 export function parseControlUrl(xml: string, base: string): { url: string; serviceType: string } | null {
-  for (const block of xml.match(/<service\b[\s\S]*?<\/service>/gi) ?? []) {
+  if (xml.length > MAX_DESCRIPTION_BYTES) return null;
+  for (const block of serviceBlocks(xml)) {
     const serviceType = /<serviceType>\s*([^<]+?)\s*<\/serviceType>/i.exec(block)?.[1];
     const control = /<controlURL>\s*([^<]+?)\s*<\/controlURL>/i.exec(block)?.[1];
     if (!serviceType || !control || !IGD_SERVICE_TYPES.includes(serviceType)) continue;
@@ -202,10 +235,10 @@ export async function readCapped(chunks: AsyncIterable<Uint8Array>, cap = MAX_BO
   return Buffer.concat(parts).toString("utf8");
 }
 
-async function getCapped(url: string, init?: RequestInit): Promise<string | null> {
+async function getCapped(url: string, init?: RequestInit, cap = MAX_BODY_BYTES): Promise<string | null> {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(NET_TIMEOUT_MS) });
   if (!response.ok || !response.body) return null;
-  return readCapped(response.body);
+  return readCapped(response.body, cap);
 }
 
 /** One M-SEARCH shout on the LAN; the first router that answers credibly wins.
@@ -257,31 +290,54 @@ export function discoverGateway(timeoutMs = NET_TIMEOUT_MS): Promise<string | nu
  * internet, punch TCP `port` through to `lanIp`. Lease 0 = "until I say
  * otherwise", which is why the refresh tick re-issues it: plenty of routers
  * quietly drop permanent mappings on reboot. */
+type Control = { url: string; serviceType: string };
+
+function soap(control: Control, action: string, args: string): Promise<string | null> {
+  return getCapped(control.url, {
+    method: "POST",
+    headers: { "content-type": 'text/xml; charset="utf-8"', soapaction: `"${control.serviceType}#${action}"` },
+    body: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
+      `<s:Body><u:${action} xmlns:u="${control.serviceType}">${args}</u:${action}></s:Body></s:Envelope>`,
+  });
+}
+
+/** The mapping this process owns, so shutdown can hand the port back. */
+let ownedMapping: { control: Control; port: number } | null = null;
+
 export async function mapPort(gateway: string, port: number, lanIp: string): Promise<{ mapping: PortMapping; externalIp?: string }> {
   try {
-    const description = await getCapped(gateway);
+    const description = await getCapped(gateway, undefined, MAX_DESCRIPTION_BYTES);
     const control = description ? parseControlUrl(description, gateway) : null;
     if (!control) return { mapping: { state: "unsupported" } };
-    const soap = (action: string, args: string) => getCapped(control.url, {
-      method: "POST",
-      headers: { "content-type": 'text/xml; charset="utf-8"', soapaction: `"${control.serviceType}#${action}"` },
-      body: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
-        `<s:Body><u:${action} xmlns:u="${control.serviceType}">${args}</u:${action}></s:Body></s:Envelope>`,
-    });
 
-    const externalIp = parseSoapValue((await soap("GetExternalIPAddress", "")) ?? "", "NewExternalIPAddress");
+    const externalIp = parseSoapValue((await soap(control, "GetExternalIPAddress", "")) ?? "", "NewExternalIPAddress");
     if (!externalIp || !octets(externalIp)) return { mapping: { state: "unsupported" } };
     if (isPrivateIPv4(externalIp) || isCarrierGradeNat(externalIp)) return { mapping: { state: "cgnat" } };
 
-    const added = await soap("AddPortMapping",
+    const added = await soap(control, "AddPortMapping",
       `<NewRemoteHost></NewRemoteHost><NewExternalPort>${port}</NewExternalPort><NewProtocol>TCP</NewProtocol>` +
       `<NewInternalPort>${port}</NewInternalPort><NewInternalClient>${lanIp}</NewInternalClient>` +
       `<NewEnabled>1</NewEnabled><NewPortMappingDescription>MultiBot</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>`);
-    return added === null
-      ? { mapping: { state: "error", error: "AddPortMapping refused" }, externalIp }
-      : { mapping: { state: "mapped" }, externalIp };
+    if (added === null) return { mapping: { state: "error", error: "AddPortMapping refused" }, externalIp };
+    ownedMapping = { control, port };
+    return { mapping: { state: "mapped" }, externalIp };
   } catch (error) {
     return { mapping: { state: "error", error: error instanceof Error ? error.message : "upnp failed" } };
+  }
+}
+
+/** Hand the port back on the way out, so a moved or retired server does not
+ * leave the router forwarding to an address nothing answers on. Best effort:
+ * one SOAP call under the usual 2 s cap, and a shutdown never waits for it. */
+export async function unmapPort(): Promise<void> {
+  const owned = ownedMapping;
+  ownedMapping = null;
+  if (!owned) return;
+  try {
+    await soap(owned.control, "DeletePortMapping",
+      `<NewRemoteHost></NewRemoteHost><NewExternalPort>${owned.port}</NewExternalPort><NewProtocol>TCP</NewProtocol>`);
+  } catch {
+    /* the router is gone or refused — nothing left to do about it here */
   }
 }
 
@@ -289,6 +345,9 @@ export async function mapPort(gateway: string, port: number, lanIp: string): Pro
 
 export type AddressDeps = {
   scheme: Scheme;
+  /** False on a loopback-only bind: forwarding a router port to 127.0.0.1 would
+   * hand the internet a door onto nothing. */
+  mapPorts: boolean;
   getMeta(key: string): string | null;
   setMeta(key: string, value: string): void;
   onChange(report: AddressReport): void;
@@ -311,25 +370,49 @@ function storedReport(): AddressReport | null {
   }
 }
 
-/** The only two address sources that exist: our own interfaces, and whatever
- * the owner pinned. */
+/** Host and port, nothing else — the shape every stored address must have.
+ * Applied on write AND on read: a meta row is not a trust boundary we get to
+ * assume, and a value that no longer passes is dropped rather than served. */
+function validAddress(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash || !url.port) return null;
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The three address sources that exist: this machine's interfaces, the WAN
+ * address the router reported for a mapping it accepted, and the owner's pin.
+ * Nothing a peer sends is ever one of them. */
 function trusted(port: number): AddressCandidate[] {
   const list = candidatesFrom(networkInterfaces(), port, deps?.scheme ?? "https");
-  const pinned = deps?.getMeta(META_PINNED);
-  if (pinned && !list.some((candidate) => candidate.address === pinned)) {
-    try {
-      list.unshift({ address: pinned, kind: kindOf(new URL(pinned).hostname), verified: false });
-    } catch {
-      /* only pinAddress writes this key, so a bad value cannot normally get in */
+  for (const key of [META_EXTERNAL, META_PINNED]) {
+    const stored = validAddress(deps?.getMeta(key));
+    if (stored && !list.some((candidate) => candidate.address === stored)) {
+      list.unshift({ address: stored, kind: kindOf(new URL(stored).hostname), verified: false });
     }
   }
-  return list.slice(0, MAX_CANDIDATES);
+  // Stable sort: the pin and the WAN address keep their place within their kind.
+  return list.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)).slice(0, MAX_CANDIDATES);
+}
+
+/** Verification survives a rescan: it was earned by a real remote client, and
+ * re-reading our own interfaces does not take it away. */
+function carryVerified(candidates: AddressCandidate[], previous: AddressReport | null): AddressCandidate[] {
+  const proven = new Set((previous?.candidates ?? []).filter((candidate) => candidate.verified).map((candidate) => candidate.address));
+  return candidates.map((candidate) => ({ ...candidate, verified: proven.has(candidate.address) }));
 }
 
 function persist(report: AddressReport, previous: AddressReport | null): AddressReport {
   if (!deps) return report;
   deps.setMeta(META_REPORT, JSON.stringify(report));
   if (report.current) deps.setMeta(META_ADDRESS, report.current);
+  if (report.verified) deps.setMeta(META_VERIFIED_AT, String(report.checkedAt));
+  else if (previous?.verified) deps.setMeta(META_VERIFIED_AT, "");
   if (previous?.current !== report.current || previous?.verified !== report.verified) deps.onChange(report);
   return report;
 }
@@ -345,8 +428,9 @@ export function currentReport(port: number): AddressReport {
 /** A request that arrived from a genuinely public remote address is free proof
  * of reachability — the client just did what we were trying to test. But the
  * `Host:` header is attacker-controlled, so it can only CONFIRM an address we
- * already trust: its hostname must be one of our own interface addresses or the
- * owner's pin. Anything else is dropped on the floor.
+ * already produced ourselves: scheme, host AND port must equal one of them.
+ * Matching the hostname alone was not enough — `Host: <our-ip>:1` then rewrote
+ * the advertised address to a port nothing listens on.
  *
  * ponytail: behind a reverse proxy `remoteAddress` is the proxy's private
  * address, so this never fires there and the address simply stays unverified —
@@ -367,17 +451,16 @@ export function noteReachedHost(
   } catch {
     return null;
   }
-  const candidates = trusted(port);
   if (host.username || host.password) return null;
-  if (!candidates.some((candidate) => new URL(candidate.address).hostname === host.hostname)) return null;
+  // No port in `Host:` means the scheme default; any other port is not us.
+  if (host.port && Number(host.port) !== port) return null;
+  const address = `${scheme}://${host.hostname}:${port}`;
+  const previous = storedReport();
+  const candidates = carryVerified(trusted(port), previous);
+  if (!candidates.some((candidate) => candidate.address === address)) return null;
 
   notedAt = Date.now();
-  const address = host.port ? `${scheme}://${host.host}` : `${scheme}://${host.host}:${port}`;
-  const previous = storedReport();
   const marked = candidates.map((candidate) => (candidate.address === address ? { ...candidate, verified: true } : candidate));
-  if (!marked.some((candidate) => candidate.address === address)) {
-    marked.unshift({ address, kind: kindOf(host.hostname), verified: true });
-  }
   persist({
     current: address,
     verified: true,
@@ -392,20 +475,12 @@ export function noteReachedHost(
  * path, nothing that could smuggle a second meaning into a value the setup
  * screen tells people to type. */
 export function pinAddress(port: number, address: unknown): AddressReport | null {
-  if (typeof address !== "string") return null;
-  let url: URL;
-  try {
-    url = new URL(address.trim());
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash || !url.port) return null;
+  const value = typeof address === "string" ? validAddress(address.trim()) : null;
+  if (!value) return null;
 
-  const value = `${url.protocol}//${url.host}`;
   const previous = storedReport();
   deps?.setMeta(META_PINNED, value);
-  const candidates = trusted(port);
+  const candidates = carryVerified(trusted(port), previous);
   return persist({
     current: value,
     verified: candidates.find((candidate) => candidate.address === value)?.verified ?? false,
@@ -427,28 +502,24 @@ export function refreshAddress(port: number): Promise<AddressReport> {
 
 async function scan(port: number): Promise<AddressReport> {
   const previous = storedReport();
-  const candidates = trusted(port);
-  // An address counts as verified only once something outside reached us on it.
-  const proven = new Set((previous?.candidates ?? []).filter((candidate) => candidate.verified).map((candidate) => candidate.address));
-  for (const candidate of candidates) candidate.verified = proven.has(candidate.address);
-
   let portMapping: PortMapping = { state: "unsupported" };
-  const lan = candidates.find((candidate) => candidate.kind === "ipv4-lan");
-  if (lan) {
+
+  const lan = trusted(port).find((candidate) => candidate.kind === "ipv4-lan");
+  if (lan && deps?.mapPorts) {
     const gateway = await discoverGateway();
     if (gateway) {
       const mapped = await mapPort(gateway, port, new URL(lan.address).hostname);
       portMapping = mapped.mapping;
-      // The router's WAN address is not one of ours, so it is offered as a
-      // candidate and never as verified; the owner can pin it.
-      const external = mapped.externalIp && mapped.mapping.state === "mapped"
-        ? addressFor(mapped.externalIp, port, deps?.scheme ?? "https")
-        : null;
-      if (external && !candidates.some((candidate) => candidate.address === external)) {
-        candidates.unshift({ address: external, kind: "ipv4-upnp", verified: false });
-      }
+      // The router is a trusted source, so its WAN address is remembered: that
+      // is the only thing that lets a NAT'd server ever be confirmed, once a
+      // real client reaches us there.
+      deps.setMeta(META_EXTERNAL, mapped.mapping.state === "mapped" && mapped.externalIp
+        ? addressFor(mapped.externalIp, port, deps.scheme)
+        : "");
     }
   }
+  // Read AFTER the mapping, so a freshly learnt WAN address is already in.
+  const candidates = carryVerified(trusted(port), previous);
 
   const chosen = candidates.find((candidate) => candidate.address === previous?.current)
     ?? candidates.find((candidate) => candidate.verified)

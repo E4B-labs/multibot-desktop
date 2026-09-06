@@ -45,8 +45,8 @@ describe("candidatesFrom", () => {
   });
 
   it("falls back to http only when told to (OMB_TLS=off behind a proxy)", () => {
-    expect(candidatesFrom({ eth0: [iface("203.0.113.9", "IPv4")] }, 8799, "http")[0].address)
-      .toBe("http://203.0.113.9:8799");
+    expect(candidatesFrom({ eth0: [iface("1.1.1.1", "IPv4")] }, 8799, "http")[0].address)
+      .toBe("http://1.1.1.1:8799");
   });
 
   it("drops loopback, link-local and unique-local addresses", () => {
@@ -66,8 +66,8 @@ describe("candidatesFrom", () => {
   });
 
   it("treats a public IPv4 on an interface as reachable, not LAN-only", () => {
-    expect(candidatesFrom({ eth0: [iface("203.0.113.9", "IPv4")] }, 8799))
-      .toEqual([{ address: "https://203.0.113.9:8799", kind: "ipv4-upnp", verified: false }]);
+    expect(candidatesFrom({ eth0: [iface("8.8.8.8", "IPv4")] }, 8799))
+      .toEqual([{ address: "https://8.8.8.8:8799", kind: "ipv4-upnp", verified: false }]);
   });
 });
 
@@ -76,10 +76,13 @@ describe("address classification", () => {
     for (const address of [
       "10.0.0.1", "172.16.4.5", "172.31.255.254", "192.168.0.1", "127.0.0.1", "169.254.7.7",
       "0.0.0.0", "198.18.0.1", "198.19.255.254", "192.0.0.8", "224.0.0.1", "239.255.255.250", "255.255.255.255",
+      // Documentation ranges and the retired 6to4 anycast relay: they show up in
+      // copied config, never as a machine anyone can reach.
+      "192.0.2.5", "198.51.100.7", "203.0.113.9", "192.88.99.1",
     ]) {
       expect(isPrivateIPv4(address)).toBe(true);
     }
-    for (const address of ["172.15.0.1", "172.32.0.1", "8.8.8.8", "203.0.113.9", "198.17.0.1", "192.0.1.1", "223.255.255.255"]) {
+    for (const address of ["172.15.0.1", "172.32.0.1", "8.8.8.8", "1.1.1.1", "198.17.0.1", "192.0.1.1", "203.0.114.1", "223.255.255.255"]) {
       expect(isPrivateIPv4(address)).toBe(false);
     }
   });
@@ -106,9 +109,9 @@ describe("address classification", () => {
   });
 
   it("calls a remote public only when a stranger could really be there", () => {
-    expect(isPublicRemote("::ffff:203.0.113.9")).toBe(true);
+    expect(isPublicRemote("::ffff:8.8.8.8")).toBe(true);
     expect(isPublicRemote("2a02:a31b::9")).toBe(true);
-    for (const address of ["", "127.0.0.1", "::1", "192.168.1.5", "100.90.1.7", "fe80::1", "::ffff:10.1.2.3", "224.0.0.1"]) {
+    for (const address of ["", "127.0.0.1", "::1", "192.168.1.5", "100.90.1.7", "fe80::1", "::ffff:10.1.2.3", "224.0.0.1", "203.0.113.9"]) {
       expect(isPublicRemote(address)).toBe(false);
     }
   });
@@ -196,6 +199,25 @@ describe("parseControlUrl", () => {
   it("returns null when nothing on the device can map a port", () => {
     expect(parseControlUrl(IGD_XML.replace(/WANIPConnection:1/g, "WANCommonInterfaceConfig:1"), LOCATION)).toBeNull();
   });
+
+  it("refuses an oversized description instead of chewing on it", () => {
+    expect(parseControlUrl(IGD_XML + " ".repeat(64 * 1024), LOCATION)).toBeNull();
+  });
+
+  it("stays linear on the description shape that made the regex quadratic", () => {
+    // Unmatched openers: every one of them sent the old `[\s\S]*?` body
+    // scanning to the end of the string. 1.4 s measured at this size.
+    const hostile = "<service>".repeat(20_000);
+    const started = Date.now();
+    expect(parseControlUrl(hostile, LOCATION)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it("starts a block at <service>, not at <serviceId>", () => {
+    // `lastIndexOf("<service")` would land on `<serviceId>` and lose the
+    // `<serviceType>` that decides whether the service can map a port at all.
+    expect(parseControlUrl(IGD_XML, LOCATION)?.serviceType).toBe("urn:schemas-upnp-org:service:WANIPConnection:1");
+  });
 });
 
 describe("parseSoapValue", () => {
@@ -250,13 +272,21 @@ describe("noteReachedHost", () => {
   });
 
   it("refuses a Host that is not one of our own addresses, however plausible", () => {
-    for (const host of ["evil.example", "evil.example:8799", "198.51.100.7:8799", "[2a02:dead::1]:8799", "0.0.0.0:8799", ""]) {
-      expect(noteReachedHost(fakeRequest("203.0.113.9", host), 8799)).toBeNull();
+    for (const host of ["evil.example", "evil.example:8799", "8.8.4.4:8799", "[2a02:dead::1]:8799", "0.0.0.0:8799", ""]) {
+      expect(noteReachedHost(fakeRequest("8.8.8.8", host), 8799)).toBeNull();
+    }
+  });
+
+  // Matching the hostname alone let `Host: <our-own-ip>:1` through and rewrote
+  // the advertised address to a port nothing listens on.
+  it("refuses our own host on a port we do not listen on", () => {
+    for (const port of ["1", "80", "9999"]) {
+      expect(noteReachedHost(fakeRequest("8.8.8.8", `192.168.1.42:${port}`), 8799)).toBeNull();
     }
   });
 
   it("refuses a Host carrying credentials", () => {
-    expect(noteReachedHost(fakeRequest("203.0.113.9", "user:pass@192.168.1.42:8799"), 8799)).toBeNull();
+    expect(noteReachedHost(fakeRequest("8.8.8.8", "user:pass@192.168.1.42:8799"), 8799)).toBeNull();
   });
 });
 
@@ -271,7 +301,7 @@ describe("pinAddress", () => {
   });
 
   it("accepts a host with an explicit port and keeps nothing else", () => {
-    expect(pinAddress(8799, "  http://198.51.100.7:9000  ")?.current).toBe("http://198.51.100.7:9000");
+    expect(pinAddress(8799, "  http://8.8.8.8:9000  ")?.current).toBe("http://8.8.8.8:9000");
     expect(pinAddress(8799, "https://[2a02:a31b::42]:8799")?.current).toBe("https://[2a02:a31b::42]:8799");
   });
 });

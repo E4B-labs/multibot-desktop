@@ -911,7 +911,7 @@ describe("harness HTTP API", () => {
     }
 
     expect((await api("POST", "/api/server/address", { address: "not a url" })).status).toBe(422);
-    const pin = `http://198.51.100.7:${PORT}`;
+    const pin = `https://8.8.8.8:${PORT}`;
     expect((await api("POST", "/api/server/address", { address: pin })).body).toMatchObject({ current: pin, verified: false });
     expect((await api("GET", "/api/server")).body.publicAddress).toBe(pin);
 

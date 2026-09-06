@@ -91,7 +91,7 @@ import { webMcpIntegration } from "./drivers/web-proxy.ts";
 import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts";
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
-import { currentReport, initNetAddress, noteReachedHost, pinAddress, refreshAddress } from "./net-address.ts";
+import { currentReport, initNetAddress, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
@@ -173,6 +173,7 @@ identity.init();
 // owner's phone gets one push so a new address never goes unnoticed.
 initNetAddress({
   scheme: SCHEME,
+  mapPorts: !LOOPBACK_HOST,
   getMeta: (key) => identity.getMeta(key),
   setMeta: (key, value) => identity.putMeta(key, value),
   onChange: (report) => {
@@ -3172,10 +3173,11 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { ok: true });
       }
       if (method === "GET" && path === "/api/auth/me") {
-        // A signed-in client that got here from a public remote address just
-        // proved that address works. Authenticated only: an unauthenticated
-        // route would let anyone drive this.
-        noteReachedHost(req, PORT);
+        // A signed-in OWNER that got here from a public remote address just
+        // proved that address works. Owner only: this rewrites the server-wide
+        // address and pushes to the owner's phone, which is not a member's to
+        // trigger — and not a public route's either.
+        if (actor.role === "owner") noteReachedHost(req, PORT);
         return identityHandled(res, 200, { user: identityUser(actor), server: identity.publicInfo() });
       }
       if (method === "POST" && (path === "/api/auth/logout" || path === "/api/auth/logout-all")) {
@@ -5418,6 +5420,9 @@ server.listen(PORT, HOST, () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     harnessRoutines.stop();
+    // Give the router its port back. Best effort by design: the exit below does
+    // not wait for it, and a router that has gone away costs us nothing.
+    void unmapPort().catch(() => {});
     // taskkill /T is asynchronous on Windows. Exiting immediately abandoned
     // CLI children (and kept their profile files locked), so give it one
     // short reap window after all adapters requested disposal.
