@@ -3,7 +3,7 @@
 // app depends on. A deliberately-unknown overlay pins shadow-instance
 // behavior without replacing the built-in fleet.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,7 +17,11 @@ const BASE = `http://127.0.0.1:${PORT}`;
 // Real identity v2 credential, minted in beforeAll by actually setting the
 // server up and registering its first (owner) profile.
 let TOKEN = "";
+let serverName = "";
 let serverPassword = "";
+let setupAddress = "";
+let setupValuesBehindProxy = 0;
+let setupValuesWithoutToken = 0;
 
 let child: ChildProcess;
 let home: string;
@@ -135,17 +139,24 @@ beforeAll(async () => {
     await new Promise((r) => setTimeout(r, 150));
   }
 
-  // Bootstrap for real: there is no installation-wide bearer any more, so the
-  // suite sets the server up over loopback and registers the first profile —
+  // Bootstrap for real: the server configured itself on boot, so the suite
+  // reads the three values back over loopback and registers the first profile —
   // exactly what a fresh install does. The returned access token is the only
   // credential every test below uses.
-  const setup = await fetch(`${BASE}/api/setup/server`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "Index test server" }),
-  });
-  if (setup.status !== 201) throw new Error(`server setup failed (${setup.status}): ${await setup.text()}`);
-  serverPassword = (await setup.json() as { serverPassword: string }).serverPassword;
+  // The proxy check belongs here: `/api/setup/values` stops answering the
+  // moment a profile exists, so no later `it` could observe this state.
+  // The setup token lives in the server's own setup.json — reading that file is
+  // the actual permission, because loopback is not per-app on a phone.
+  const setupToken = (JSON.parse(readFileSync(join(home, ".openmausbot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
+  const withToken = { "x-multibot-setup": setupToken };
+  setupValuesBehindProxy = (await fetch(`${BASE}/api/setup/values`, { headers: { ...withToken, "x-forwarded-for": "1.2.3.4" } })).status;
+  setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
+  const setup = await fetch(`${BASE}/api/setup/values`, { headers: withToken });
+  if (setup.status !== 200) throw new Error(`setup values unavailable (${setup.status}): ${await setup.text()}`);
+  const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[] };
+  serverName = values.serverName;
+  serverPassword = values.serverPassword;
+  setupAddress = values.address;
   const registered = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -153,6 +164,7 @@ beforeAll(async () => {
       username: "index-tester",
       password: "index-test-profile-password",
       displayName: "Index Tester",
+      serverName,
       serverPassword,
       deviceName: "vitest",
     }),
@@ -814,6 +826,7 @@ describe("harness HTTP API", () => {
         username: "index-member",
         password: "index-member-profile-pass",
         displayName: "Index Member",
+        serverName,
         serverPassword,
         deviceName: "vitest-member",
       }),
@@ -864,5 +877,62 @@ describe("harness HTTP API", () => {
     for (const path of ["/api/auth/token", "/api/pair", "/api/auth/status", "/api/bots"]) {
       expect((await fetch(`${BASE}${path}`, { headers: { authorization: "Bearer index-test-legacy-token" } })).status).toBe(401);
     }
+  });
+
+  // The three values are credentials. A port scan sees that a MultiBot server
+  // is there and nothing that helps join it.
+  it("publishes the server name and id, never the password", async () => {
+    for (const path of ["/api/public/server", "/api/public/handshake"]) {
+      const info = await (await fetch(`${BASE}${path}`)).json() as Record<string, unknown>;
+      expect(info.configured).toBe(true);
+      expect(info.serverId).toBeTruthy();
+      // The sign-in header shows the name, so the public route carries it.
+      expect(info.name).toBe(serverName);
+      expect(JSON.stringify(info)).not.toContain(serverPassword);
+    }
+    const own = (await api("GET", "/api/server")).body;
+    expect(own.name).toBe(serverName);
+    expect(own.publicAddress).toBeNull();
+  });
+
+  it("hands the setup values to loopback only, and only until a profile exists", async () => {
+    expect(setupValuesBehindProxy).toBe(404);
+    // …and a local app that cannot read setup.json gets nothing either.
+    expect(setupValuesWithoutToken).toBe(404);
+    expect(setupAddress).toMatch(/^http:\/\//);
+    // beforeAll already registered the owner, so the route is closed for good.
+    expect((await fetch(`${BASE}/api/setup/values`)).status).toBe(404);
+    expect(existsSync(join(home, ".openmausbot", "setup.json"))).toBe(false);
+    // …and the retired setup route is gone with it.
+    expect((await api("POST", "/api/setup/server", { name: "nope" })).status).toBe(404);
+  });
+
+  it("joins with the three values, spends the grant once, and names the wrong field", async () => {
+    const join = async (body: unknown) => {
+      const res = await fetch(`${BASE}/api/auth/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, body: await res.json() as { joinGrant?: string; hasUsers?: boolean; error?: string } };
+    };
+    expect(await join({ serverName: "not-this-server", serverPassword })).toMatchObject({ status: 401, body: { error: "wrong_server_name" } });
+    expect(await join({ serverName, serverPassword: "not-the-password" })).toMatchObject({ status: 401, body: { error: "wrong_server_password" } });
+
+    const ok = await join({ serverName, serverPassword });
+    expect(ok.status).toBe(200);
+    expect(ok.body.hasUsers).toBe(true);
+    const signIn = async () => fetch(`${BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "index-tester", password: "index-test-profile-password", joinGrant: ok.body.joinGrant }),
+    });
+    expect((await signIn()).status).toBe(200);
+    expect((await signIn()).status).toBe(401); // single use
+  });
+
+  it("stores an e-mail on the profile and hands it back with the account", async () => {
+    expect((await api("PATCH", "/api/profile", { displayName: "Index Tester", email: "index@example.test" })).body.user.email).toBe("index@example.test");
+    expect((await api("GET", "/api/auth/me")).body.user.email).toBe("index@example.test");
   });
 });

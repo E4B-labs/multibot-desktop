@@ -112,7 +112,7 @@ const startHarness = async (extraEnv: Record<string, string>) => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
-  token = await bootstrapAccessToken(base);
+  token = await bootstrapAccessToken(base, home);
 };
 
 const stopHarness = async () => {

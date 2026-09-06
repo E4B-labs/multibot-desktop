@@ -34,7 +34,7 @@ import { hasCustomWindowControls } from "@/lib/shell";
 const frameless = hasCustomWindowControls();
 // multibot: Cmd/Ctrl+K paleta komend
 import { CmdK } from "@/components/CmdK";
-import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken } from "@/lib/auth";
+import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { unreadConversationCount } from "@/lib/unread";
 
@@ -82,6 +82,8 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Read once, on mount: `takeJoinGrant` also clears it out of the URL.
+  const [shellGrant, setShellGrant] = useState(takeJoinGrant);
 
   useEffect(() => {
     let alive = true;
@@ -92,6 +94,9 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       .then((server) => {
         if (!alive) return;
         setStatus({ server });
+        // The name is public and the user has to send it back with the join, so
+        // prefill it instead of making them retype what is on the screen.
+        setServerName((previous) => previous || server.name || "");
         if (!server.configured) setMode("host");
       })
       .catch(() => setError(polish ? "Nie można odczytać stanu serwera." : "Could not read server status."));
@@ -103,24 +108,33 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      let response: Response;
-      if (mode === "host") {
-        if (!configured) {
-          response = await authFetch("/api/setup/server", { method: "POST", body: JSON.stringify({ name: serverName, serverPassword }) });
-          if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `Setup failed (${response.status})`);
-          // serwer od tej chwili ISTNIEJE, nawet jeśli rejestracja profilu za
-          // moment padnie — bez tego stopka proponowałaby drugi setup, a ten
-          // odpowiada już tylko 409. Nazwa idzie z formularza: użytkownik
-          // właśnie ją nadał, a `status` pamięta jeszcze domyślną.
-          setStatus((prev) => ({ ...prev, server: { serverId: "", ...prev?.server, name: serverName, configured: true } }));
+      // 0.4.0: the server sets itself up on its first boot, so there is nothing
+      // to create here. Every profile call first proves the device knows the
+      // server name and password, and spends the 5-minute grant that proof
+      // returns. PR 7 replaces this screen; this keeps it working until then.
+      const deviceName = navigator.userAgent.slice(0, 80);
+      const profileCall = (joinGrant: string) => {
+        if (mode === "recover") return authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, joinGrant, deviceName }) });
+        if (mode === "login") return authFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, joinGrant, deviceName }) });
+        return authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, joinGrant, deviceName }) });
+      };
+      const freshGrant = async (): Promise<string> => {
+        const joined = await authFetch("/api/auth/join", { method: "POST", body: JSON.stringify({ serverName: serverName.trim(), serverPassword }) });
+        const grant = await joined.json().catch(() => ({})) as { joinGrant?: string; error?: string };
+        if (!joined.ok || !grant.joinGrant) throw new Error(grant.error ?? `Join failed (${joined.status})`);
+        return grant.joinGrant;
+      };
+      // The grant the desktop shell handed over is a hint, not the only way in:
+      // it is single-use and five minutes old at most, so a reload or a second
+      // attempt finds it spent. A typed server password always wins over it.
+      const usingShellGrant = Boolean(shellGrant) && !serverPassword;
+      let response = await profileCall(usingShellGrant ? shellGrant : await freshGrant());
+      if (usingShellGrant && response.status === 401) {
+        const failed = await response.clone().json().catch(() => ({})) as { error?: string };
+        if (failed.error === "join_grant_invalid") {
+          setShellGrant("");
+          response = await profileCall(await freshGrant());
         }
-        response = await authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, serverPassword, deviceName: navigator.userAgent.slice(0, 80) }) });
-      } else if (mode === "register") {
-        response = await authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, serverPassword, deviceName: navigator.userAgent.slice(0, 80) }) });
-      } else if (mode === "recover") {
-        response = await authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, deviceName: navigator.userAgent.slice(0, 80) }) });
-      } else {
-        response = await authFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, deviceName: navigator.userAgent.slice(0, 80) }) });
       }
       const body = await response.json().catch(() => ({})) as { accessToken?: string; recoveryCode?: string; error?: string };
       if (!response.ok || !body.accessToken) throw new Error(body.error ?? `Authentication failed (${response.status})`);
@@ -151,11 +165,13 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
         </button>}
         <h1 className="text-[18px] font-semibold">{loginTitle(mode, polish)}</h1>
         <p className="mt-1 text-[13px] text-ink-secondary">{status?.server?.name ?? (polish ? "Bezpieczny wspólny workspace" : "Secure shared workspace")}</p>
-        {mode === "host" && <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} aria-label="Server name" className={field} autoFocus />}
+        {/* Name and password are needed by every mode now: they are the two
+            values `/api/auth/join` checks before a profile call is allowed. */}
+        <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} aria-label="Server name" className={field} />
         {(mode === "register" || mode === "host") && <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={polish ? "Nazwa profilu" : "Display name"} aria-label="Display name" className={field} />}
         <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" aria-label="Username" autoComplete="username" className={field} />
         <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "recover" ? polish ? "Nowe hasło profilu" : "New profile password" : polish ? "Hasło profilu" : "Profile password"} aria-label="Profile password" autoComplete={mode === "login" ? "current-password" : "new-password"} className={field} />
-        {(mode === "host" || mode === "register") && <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Hasło serwera" : "Server password"} aria-label="Server password" autoComplete="off" className={field} />}
+        <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Hasło serwera" : "Server password"} aria-label="Server password" autoComplete="off" className={field} />
         {mode === "recover" && <input value={recoveryCode} onChange={(event) => setRecoveryCode(event.target.value)} placeholder={polish ? "Jednorazowy recovery code" : "One-time recovery code"} aria-label="Recovery code" autoComplete="one-time-code" className={field} />}
         {/* rejestracja na serwerze bez właściciela kończy się 409 „server setup
             required" (server/identity.ts) — nie ma tu żadnego adresu obcego

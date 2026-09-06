@@ -1,7 +1,10 @@
-// There is no installation-wide bearer token any more, so a spawned harness
-// has to be bootstrapped the way a real first run is: set the server up over
-// loopback, register the first (owner) profile, keep its access token. A test
-// that reuses a data dir finds the server already configured and just signs in.
+// There is no installation-wide bearer token any more, so a spawned harness is
+// bootstrapped the way a real first run is: read the setup token out of the
+// server's own setup.json, ask it for the three values, join with them, register
+// the first (owner) profile, keep its access token.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 export const TEST_USERNAME = "test-owner";
 export const TEST_PASSWORD = "test-owner-password";
 
@@ -56,32 +59,40 @@ function installExpiryRetry(): void {
 }
 
 /** Returns the identity access token every authenticated call in the suite
- * should carry as `Authorization: Bearer …`. */
-export async function bootstrapAccessToken(base: string, deviceName = "vitest"): Promise<string> {
-  const info = await (await fetch(`${base}/api/public/server`)).json() as { configured?: boolean };
+ * should carry as `Authorization: Bearer …`. `home` is the throwaway HOME the
+ * harness was spawned with — the server's own `setup.json` lives under it, and
+ * that file is the only place its generated password exists in the clear. */
+export async function bootstrapAccessToken(base: string, home: string, deviceName = "vitest"): Promise<string> {
+  const dataDir = join(home, ".openmausbot");
+  // A suite that reboots a harness against the same data dir finds the owner
+  // already registered and `setup.json` deleted with the registration. Sessions
+  // never expire now, so the one from the first boot is still the way back in.
+  const sessionFile = join(dataDir, "vitest-owner-session");
+  if (existsSync(sessionFile)) {
+    installExpiryRetry();
+    return mintAccessToken({ base, session: readFileSync(sessionFile, "utf8").trim() });
+  }
+  const setup = JSON.parse(readFileSync(join(dataDir, "setup.json"), "utf8")) as { setupToken: string };
+  const values = await fetch(`${base}/api/setup/values`, { headers: { "x-multibot-setup": setup.setupToken } });
+  if (!values.ok) throw new Error(`setup values unavailable (${values.status}): ${await values.text()}`);
+  const { serverName, serverPassword } = await values.json() as { serverName: string; serverPassword: string };
+  const joined = await postJson(base, "/api/auth/join", { serverName, serverPassword });
+  if (joined.status !== 200 || !joined.body?.joinGrant) {
+    throw new Error(`join failed (${joined.status}): ${JSON.stringify(joined.body)}`);
+  }
   // `x-multibot-client: native` makes the server return the session token as
   // well — that is what outlives the 15-minute access token.
-  const native = { "x-multibot-client": "native" };
-  let result: { status: number; body: any };
-  if (info?.configured) {
-    result = await postJson(base, "/api/auth/login", { username: TEST_USERNAME, password: TEST_PASSWORD, deviceName }, native);
-    if (result.status !== 200) throw new Error(`sign-in failed (${result.status}): ${JSON.stringify(result.body)}`);
-  } else {
-    const setup = await postJson(base, "/api/setup/server", { name: "Test server" });
-    if (setup.status !== 201 || !setup.body?.serverPassword) {
-      throw new Error(`server setup failed (${setup.status}): ${JSON.stringify(setup.body)}`);
-    }
-    result = await postJson(base, "/api/auth/register", {
-      username: TEST_USERNAME,
-      password: TEST_PASSWORD,
-      displayName: "Test Owner",
-      serverPassword: setup.body.serverPassword,
-      deviceName,
-    }, native);
-    if (result.status !== 201) throw new Error(`owner registration failed (${result.status}): ${JSON.stringify(result.body)}`);
-  }
+  const result = await postJson(base, "/api/auth/register", {
+    username: TEST_USERNAME,
+    password: TEST_PASSWORD,
+    displayName: "Test Owner",
+    joinGrant: joined.body.joinGrant,
+    deviceName,
+  }, { "x-multibot-client": "native" });
+  if (result.status !== 201) throw new Error(`owner registration failed (${result.status}): ${JSON.stringify(result.body)}`);
   const { accessToken, sessionToken } = result.body ?? {};
   if (!accessToken || !sessionToken) throw new Error(`bootstrap returned no credentials: ${JSON.stringify(result.body)}`);
+  writeFileSync(sessionFile, sessionToken, { mode: 0o600 });
   minted.set(accessToken, { base, session: sessionToken });
   installExpiryRetry();
   return accessToken;

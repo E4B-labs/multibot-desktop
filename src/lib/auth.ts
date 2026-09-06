@@ -39,6 +39,21 @@ export function bootstrapLocalAuthToken(): void {
   history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
 }
 
+/** The desktop shell trades the server name and password for a grant natively
+ * and lands the webui with `#join=<grant>` (`electron/main.mjs`). Read it once
+ * and take it out of the URL: it is single-use, and a credential left in the
+ * hash rides along into every history entry and every copied link. Other
+ * fragment keys are left alone. */
+export function takeJoinGrant(): string {
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const grant = fragment.get("join") ?? "";
+  if (!grant) return "";
+  fragment.delete("join");
+  const rest = fragment.toString();
+  history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
+  return grant;
+}
+
 export function setV2AuthToken(token: string): void {
   try {
     const value = token.trim();

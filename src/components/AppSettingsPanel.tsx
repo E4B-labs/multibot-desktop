@@ -1,7 +1,7 @@
 // App-level settings screen: who you are + credentials
 // shared by all bots. Per-bot settings (name, persona, model, computer)
 // live in SettingsPanel; contextual Box-token entry stays in ComputerPanel.
-import { ArrowLeft, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Copy, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
 // multibot: ikony szyny sekcji przerysowane z lucide, żeby dało się animować
 // ich części na kliknięcie (suwaki jeżdżą, strzałki się kręcą, klucz dokręca).
 import { RefreshTabIcon, SlidersTabIcon, WrenchTabIcon } from "./SettingsTabIcons";
@@ -177,6 +177,12 @@ export function AccessTokenSettings() {
   );
 }
 
+/** Same rule as `isServerName` in server/identity.ts. Duplicated rather than
+ * imported: that module pulls in node:sqlite and has no business in the bundle. */
+function isServerName(value: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]{1,30})[a-z0-9]$/.test(value);
+}
+
 export function WorkspaceAccessSettings() {
   const polish = useLanguage() === "pl";
   const [workspace, setWorkspace] = useState<{
@@ -199,12 +205,38 @@ export function WorkspaceAccessSettings() {
   }, []);
 
   const saveServer = async () => {
+    // The name is one of the three values somebody types into another device,
+    // so it has to be a slug — the same rule the server enforces. Slugify what
+    // was typed (the helper this file already has), and only complain when even
+    // that cannot be one.
+    const name = slug(serverName).slice(0, 32).replace(/^-+|-+$/g, "");
+    if (!isServerName(name)) {
+      setError(polish
+        ? "Nazwa serwera: 3–32 znaki, małe litery, cyfry i myślniki (nie na początku ani na końcu)."
+        : "Server name: 3–32 characters, lowercase letters, digits and dashes (not at either end).");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const value = await api("/api/server", { method: "PATCH", body: JSON.stringify({ name: serverName.trim(), ...(serverPassword ? { serverPassword } : {}) }) });
+      const value = await api("/api/server", { method: "PATCH", body: JSON.stringify({ name }) });
+      setServerName(value.name ?? name);
       setWorkspace((current) => current ? { ...current, name: value.name } : current);
-      setServerPassword("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Rotating shows the new password once — the server only keeps its hash, so
+   * there is no second chance to read it. */
+  const rotatePassword = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const value = await api("/api/server/password", { method: "POST", body: "{}" });
+      setServerPassword(String(value.serverPassword ?? ""));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -237,11 +269,27 @@ export function WorkspaceAccessSettings() {
       )}
       {workspace?.currentUser?.role === "owner" && (
         <div className="mt-3 space-y-2">
-          <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink outline-none" />
-          <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Nowe hasło serwera (opcjonalnie)" : "New server password (optional)"} className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink outline-none" />
-          <button type="button" onClick={() => void saveServer()} disabled={busy} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            {busy ? polish ? "Zapisywanie…" : "Saving…" : polish ? "Zapisz ustawienia serwera" : "Save server settings"}
-          </button>
+          <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera (np. brave-otter)" : "Server name (e.g. brave-otter)"} className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink outline-none" />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void saveServer()} disabled={busy} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
+              {busy ? polish ? "Zapisywanie…" : "Saving…" : polish ? "Zapisz nazwę serwera" : "Save server name"}
+            </button>
+            <button type="button" onClick={() => void rotatePassword()} disabled={busy} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
+              {polish ? "Nowe hasło serwera" : "New server password"}
+            </button>
+          </div>
+          {serverPassword && (
+            <div className="rounded-lg bg-inset px-3 py-2 text-[12px] text-ink-secondary">
+              <div>{polish ? "Nowe hasło serwera — pokazujemy je tylko raz:" : "New server password — shown only once:"}</div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="select-all break-all text-[13px] text-ink">{serverPassword}</code>
+                <button type="button" title={polish ? "Kopiuj" : "Copy"} onClick={() => void navigator.clipboard?.writeText(serverPassword)} className="shrink-0 text-ink-secondary hover:text-ink">
+                  <Copy size={12} />
+                </button>
+              </div>
+              <div className="mt-1">{polish ? "Stare hasło już nie działa — urządzenia dołączają nowym." : "The old password no longer works; devices join with this one."}</div>
+            </div>
+          )}
         </div>
       )}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}

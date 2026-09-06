@@ -71,7 +71,7 @@ beforeAll(async () => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
-  TOKEN = await bootstrapAccessToken(BASE);
+  TOKEN = await bootstrapAccessToken(BASE, home);
 }, 120_000);
 
 afterAll(async () => {
