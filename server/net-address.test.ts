@@ -3,7 +3,8 @@
 // pieces tested below (`ssdpLocation`, `parseControlUrl`, `parseSoapValue`,
 // `readCapped`). They stay untested — a UDP multicast test would exercise the
 // LAN it runs on, not the code.
-import { describe, expect, it } from "vitest";
+import { createServer, connect as netConnect } from "node:net";
+import { afterEach, describe, expect, it } from "vitest";
 import type { NetworkInterfaceInfo } from "node:os";
 
 import type { AddressCandidate, AddressKind } from "./net-address.ts";
@@ -430,5 +431,39 @@ describe("chooseAddress with an onion", () => {
 describe("noteReachedHost and the onion", () => {
   it("refuses to take an inbound request as proof of the onion", () => {
     expect(noteReachedHost(fakeRequest("8.8.8.8", `${ONION}:8799`), 8799)).toBeNull();
+  });
+});
+
+// A Tor circuit that accepts and then goes quiet is the normal failure of a
+// hidden service that has gone away, and `tls.connect({ socket, timeout })`
+// does NOT apply the timeout to a socket it was handed (measured, Node 24).
+// Without a clock of its own this promise never settles, `inFlight` never
+// clears, and address discovery is frozen for the life of the process.
+describe("probeRelay over a pre-opened socket", () => {
+  const silent = createServer(() => {});
+  afterEach(() => silent.close());
+
+  it("gives up on a peer that accepts and never speaks", async () => {
+    await new Promise((resolve) => silent.listen(0, "127.0.0.1", () => resolve(null)));
+    const port = (silent.address() as { port: number }).port;
+    const tunnel = netConnect(port, "127.0.0.1");
+    await new Promise((resolve) => tunnel.once("connect", resolve));
+
+    const started = Date.now();
+    await expect(probeRelay("anything.onion", 8799, "AA:BB", 400, tunnel)).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(tunnel.destroyed).toBe(true);
+  });
+});
+
+describe("chooseAddress stickiness without an onion", () => {
+  const candidate = (kind: AddressKind, verified = false): AddressCandidate => ({ address: `https://${kind}:8799`, kind, verified });
+
+  // The LAN relaxation is there ONLY to let a late onion past a first-boot LAN
+  // pick. On a server that has no onion at all it would just make the published
+  // address flap between the LAN one and an unverified IPv6 on every scan.
+  it("keeps a sticky LAN address when there is no onion to move to", () => {
+    const lan = candidate("ipv4-lan");
+    expect(chooseAddress([candidate("ipv6"), lan], lan.address)?.kind).toBe("ipv4-lan");
   });
 });

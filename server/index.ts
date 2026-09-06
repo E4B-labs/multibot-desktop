@@ -91,9 +91,17 @@ import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
-import { startTor, torBinary, torEnabled, type Tor } from "./tor.ts";
+import { onionSuppressed, startTor, torBinary, torEnabled, TOR_INGRESS_PORT, type Tor } from "./tor.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
+// `Number("eight")` is NaN and `server.listen(NaN)` quietly picks a RANDOM free
+// port — a server nobody can find, reported as running. And 8798 is the Tor
+// ingress: sharing it would put every direct client in the Tor rate-limit
+// bucket and, worse, make `isLoopbackRequest` false for the local browser.
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535 || PORT === TOR_INGRESS_PORT) {
+  console.error(`[multibot] OMB_PORT=${process.env.OMB_PORT ?? process.env.OGB_PORT ?? ""} is not usable — give a whole number from 1 to 65535, and not ${TOR_INGRESS_PORT} (that one belongs to the Tor ingress).`);
+  process.exit(1);
+}
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
 const LOOPBACK_HOST = new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
 // TLS jest ZAWSZE, poza jednym świadomym wyjątkiem: reverse proxy, które samo
@@ -153,8 +161,11 @@ function relayHost(): string | null {
 // With a relay in front, a loopback bind is still serving the whole internet —
 // without this the tunnel would publish an API with no UI behind it.
 // An onion is a public address like any other, so a server that is about to
-// publish one is serving the whole internet even on a loopback bind.
-const TOR_POSSIBLE = torEnabled() && torBinary() !== null;
+// publish one is serving the whole internet even on a loopback bind. Which is
+// exactly why it is refused for the two deployments that chose to be private —
+// see `onionSuppressed`; that check also decides whether the built UI is served.
+const ONION_SUPPRESSED = onionSuppressed(LOOPBACK_HOST, TLS_OFF);
+const TOR_POSSIBLE = !ONION_SUPPRESSED && torEnabled() && torBinary() !== null;
 const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
 const MIME: Record<string, string> = {
   ".html": "text/html",
@@ -5409,14 +5420,19 @@ revokeAuthSessions = mountAuth(server, identityActorForRequest).revokeSessions;
 // Tor last, so the onion ingress hands connections to a server that already has
 // every wrapper on it. Started before `listen`: bootstrapping takes 10-30 s and
 // nothing about the boot waits for it.
-tor = startTor({
-  dataDir: DATA_DIR,
-  server,
-  onionPort: PORT,
-  // The hostname appears seconds after boot; without this nudge the badge would
-  // wait out the ten-minute rescan tick before showing the address that works.
-  onReady: () => void refreshAddress(PORT).catch(() => {}),
-});
+if (ONION_SUPPRESSED) {
+  console.log(`[multibot] no onion address: ${ONION_SUPPRESSED}`);
+} else {
+  tor = startTor({
+    dataDir: DATA_DIR,
+    server,
+    onionPort: PORT,
+    // The hostname appears seconds after boot; without this nudge the badge
+    // would wait out the ten-minute rescan tick before showing the address that
+    // actually works.
+    onReady: () => void refreshAddress(PORT).catch(() => {}),
+  });
+}
 
 // multibot (H1): every bot has a computer, so boot makes that true again.
 // Containers survive a harness restart on their own restart policy; this only

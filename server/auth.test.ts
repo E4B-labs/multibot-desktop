@@ -5,7 +5,7 @@ import type { Duplex } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { isPublicRoute, mountAuth } from "./auth.ts";
-import { isLoopbackAddress, isLoopbackRequest } from "./identity.ts";
+import { isLoopbackAddress, isLoopbackRequest, isSecureRequest } from "./identity.ts";
 import { TOR_INGRESS_PORT } from "./tor.ts";
 
 // Jedna szyna: identity v2. Nie ma allowlisty dla parowania ani Firebase, nie
@@ -174,5 +174,24 @@ describe("mountAuth", () => {
     } finally {
       await new Promise((r) => server.close(r));
     }
+  });
+});
+
+// `x-forwarded-proto` counts only from a loopback peer, i.e. from a reverse
+// proxy on this machine — and every onion client looks exactly like one.
+describe("isSecureRequest over the tor ingress", () => {
+  const req = (headers: Record<string, string>, socket: Record<string, unknown>) =>
+    ({ socket, headers }) as unknown as IncomingMessage;
+
+  it("ignores x-forwarded-proto from a Tor client on a plaintext socket", () => {
+    expect(isSecureRequest(req({ "x-forwarded-proto": "https" }, { remoteAddress: "127.0.0.1", localPort: TOR_INGRESS_PORT }))).toBe(false);
+    // Same header from a real reverse proxy on the normal port still counts.
+    expect(isSecureRequest(req({ "x-forwarded-proto": "https" }, { remoteAddress: "127.0.0.1", localPort: 8799 }))).toBe(true);
+  });
+
+  // TLS is on for every onion in practice, and a real TLS socket is secure
+  // however it arrived — the guard above must not take that away.
+  it("still says secure for a real TLS connection over the ingress", () => {
+    expect(isSecureRequest(req({}, { encrypted: true, remoteAddress: "127.0.0.1", localPort: TOR_INGRESS_PORT }))).toBe(true);
   });
 });

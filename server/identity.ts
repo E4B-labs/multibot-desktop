@@ -964,6 +964,11 @@ export function rateLimitAddress(
  * nie dostałaby `Secure`. */
 export function isSecureRequest(req: { socket: unknown; headers: Record<string, string | string[] | undefined> }): boolean {
   if ((req.socket as { encrypted?: boolean } | null)?.encrypted) return true;
+  // The same gate as `isLoopbackRequest`, one step later: a real TLS connection
+  // is secure however it arrived, but the `x-forwarded-proto` branch below
+  // trusts a loopback peer — and every onion client is one. A Tor client must
+  // not be able to talk us into a `Secure` cookie on a plaintext socket.
+  if ((req.socket as { localPort?: number } | null)?.localPort === TOR_INGRESS_PORT) return false;
   const peer = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
   return isLoopbackAddress(peer) && String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
 }

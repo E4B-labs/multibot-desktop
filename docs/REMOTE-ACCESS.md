@@ -113,6 +113,13 @@ Harness sam pilnuje procesu (`server/tor.ts`) — nie ma osobnej usługi w runic
 
 Adres bierze się z `DATA_DIR/tor/hs/hostname` (katalog `hs` ma 0700, inaczej tor odmawia startu) i wygląda tak: `https://<56 znaków base32>.onion:8799`. `OMB_TOR=0` wyłącza całość, `OMB_TOR_BIN` wskazuje binarium spoza `PATH`. Brak tora nie jest błędem — jest jedna linia w logu i drabina ma o szczebel mniej.
 
+**Dwa układy nie dostają oniona nigdy**, i to niezależnie od `OMB_TOR` — powód jest ten sam w obu: opublikowanie oniona bierze instalację, którą właściciel świadomie trzymał poza internetem, i wystawia ją całemu internetowi.
+
+- **Serwer na pętli zwrotnej** (`OMB_HOST` domyślne albo `127.0.0.1`, czyli `install-server-windows.mjs` i każde uruchomienie deweloperskie). Ten serwer nie miał być widoczny nawet z sąsiedniego komputera. Chcesz oniona — ustaw `OMB_HOST=0.0.0.0` świadomie.
+- **`OMB_TLS=off`.** Nie ma wtedy naszego certyfikatu, więc nie ma odcisku, więc `probeOnion` nigdy nie potwierdzi adresu — a drabina i tak stawiałaby go nad każdym niepotwierdzonym szczeblem. Do tego `OMB_TLS=off` istnieje wyłącznie dla reverse proxy kończącego TLS gdzie indziej, a onion prowadzący prosto do harnessa obchodziłby to proxy bokiem.
+
+W obu wypadkach w logu jest jedna linia mówiąca który to przypadek.
+
 Trzy rzeczy, które warto wiedzieć:
 
 - **TLS zostaje.** Onion sam w sobie jest uwierzytelniony i szyfrowany, ale klient trzyma jedną ścieżkę i jeden przypięty odcisk certyfikatu — podwójne szyfrowanie jest tanie, a drugi tor kodu byłby drogi. Odcisk się nie zmienia, więc kto zaufał serwerowi po LAN-ie, po `.onion` niczego nie zatwierdza ponownie.

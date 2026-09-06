@@ -501,13 +501,21 @@ export function probeRelay(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = over
-      ? connect({ socket: over, rejectUnauthorized: false, timeout: timeoutMs })
+      ? connect({ socket: over, rejectUnauthorized: false })
       : connect({ host: bare(host), port, rejectUnauthorized: false, timeout: timeoutMs });
     const done = (value: boolean): void => {
+      over?.setTimeout(0);
       socket.destroy();
       over?.destroy();
       resolve(value);
     };
+    // MEASURED on Node 24: `tls.connect({ socket, timeout })` silently ignores
+    // the timeout — the option only ever reaches a socket tls.connect opened
+    // itself. A Tor circuit that accepts and then goes quiet would hang this
+    // promise forever, and with it `inFlight`, which would freeze address
+    // discovery for the life of the process. So the clock goes on the socket we
+    // were handed, where it does fire.
+    over?.setTimeout(timeoutMs, () => done(false));
     socket.once("secureConnect", () => done(
       socket.getPeerCertificate().fingerprint256?.toUpperCase() === fingerprint.toUpperCase(),
     ));
@@ -635,8 +643,13 @@ export function pinAddress(port: number, address: unknown): AddressReport | null
  * unconfirmed IPv6 or a hopeful UPnP mapping does not.
  */
 export function chooseAddress(candidates: AddressCandidate[], previousCurrent?: string | null): AddressCandidate | null {
+  // The LAN relaxation exists ONLY to let a late onion past a first-boot LAN
+  // pick. With no onion in the list there is nothing better to move to, and
+  // dropping the sticky LAN address would make the advertised address flap on
+  // every scan for the servers that have no onion at all.
+  const hasOnion = candidates.some((candidate) => candidate.kind === "onion");
   return candidates.find((candidate) => candidate.kind === "relay")
-    ?? candidates.find((candidate) => candidate.address === previousCurrent && (candidate.verified || candidate.kind !== "ipv4-lan"))
+    ?? candidates.find((candidate) => candidate.address === previousCurrent && (candidate.verified || candidate.kind !== "ipv4-lan" || !hasOnion))
     ?? candidates.find((candidate) => candidate.verified)
     ?? candidates.find((candidate) => candidate.kind === "onion")
     ?? candidates[0]

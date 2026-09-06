@@ -17,6 +17,7 @@ import {
   mountTorIngress,
   parseBootstrap,
   parseSocksPort,
+  onionSuppressed,
   torEnabled,
   torPath,
   torrcText,
@@ -175,5 +176,25 @@ describe("mountTorIngress", () => {
     ingress.close();
     harness.close();
     expect(seen).toBe(port);
+  });
+});
+
+// Publishing an onion takes a deployment off the loopback and puts it on the
+// internet. Two of them chose to be private and must never be published.
+describe("onionSuppressed", () => {
+  it("says yes only for a server that is meant to be reachable", () => {
+    expect(onionSuppressed(false, false)).toBeNull();
+  });
+
+  it("refuses a loopback-only server — that install was deliberately private", () => {
+    expect(onionSuppressed(true, false)).toMatch(/loopback/);
+    expect(onionSuppressed(true, true)).toMatch(/loopback/);
+  });
+
+  // No certificate means no fingerprint, so `probeOnion` could never confirm
+  // the onion — and it would still outrank every unverified rung. It would also
+  // walk straight past the reverse proxy that OMB_TLS=off exists for.
+  it("refuses OMB_TLS=off, where the onion could never be verified", () => {
+    expect(onionSuppressed(false, true)).toMatch(/OMB_TLS=off/);
   });
 });
