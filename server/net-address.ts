@@ -16,9 +16,16 @@
 //
 // ponytail: UPnP only; add NAT-PMP when a real router refuses it.
 import { createSocket } from "node:dgram";
+import { connect } from "node:tls";
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
-export type AddressKind = "ipv6" | "ipv4-upnp" | "ipv4-lan";
+/** `relay`: a box the owner rents/owns with a public IP, reached by an outbound
+ * `ssh -R` from this machine (`scripts/relay-connect.sh`). It is first because
+ * it is the only rung that works behind a router with no UPnP and no IPv6, and
+ * because the owner had to set it up by hand — that is a stronger statement of
+ * "reach me here" than anything discovery can guess. TLS stays end to end: the
+ * relay forwards TCP, so the pinned fingerprint is unchanged. */
+export type AddressKind = "relay" | "ipv6" | "ipv4-upnp" | "ipv4-lan";
 export type AddressCandidate = { address: string; kind: AddressKind; verified: boolean };
 export type PortMapping = { state: "mapped" | "unsupported" | "cgnat" | "error"; error?: string };
 export type AddressReport = {
@@ -46,7 +53,7 @@ const IGD_SERVICE_TYPES = [
   "urn:schemas-upnp-org:service:WANIPConnection:2",
   "urn:schemas-upnp-org:service:WANPPPConnection:1",
 ];
-const KIND_ORDER: AddressKind[] = ["ipv6", "ipv4-upnp", "ipv4-lan"];
+const KIND_ORDER: AddressKind[] = ["relay", "ipv6", "ipv4-upnp", "ipv4-lan"];
 
 const META_ADDRESS = "server.publicAddress";
 const META_PINNED = "server.addressPinned";
@@ -137,8 +144,17 @@ function addressFor(host: string, port: number, scheme: Scheme): string {
 /** This machine's interfaces, translated into things a person could type.
  * Loopback, link-local and unique-local are dropped: none of them answers
  * "where do I reach you". */
-export function candidatesFrom(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>, port: number, scheme: Scheme = "https"): AddressCandidate[] {
+export function candidatesFrom(
+  ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>,
+  port: number,
+  scheme: Scheme = "https",
+  relayHost?: string | null,
+): AddressCandidate[] {
   const found = new Map<string, AddressCandidate>();
+  // The relay host comes off disk (`DATA_DIR/relay.env`), so it goes through
+  // the same shape check as every stored address before we advertise it.
+  const relay = relayHost ? validAddress(addressFor(relayHost.trim(), port, scheme)) : null;
+  if (relay) found.set(relay, { address: relay, kind: "relay", verified: false });
   for (const entries of Object.values(ifaces)) {
     for (const entry of entries ?? []) {
       if (entry.internal) continue;
@@ -348,6 +364,15 @@ export type AddressDeps = {
   /** False on a loopback-only bind: forwarding a router port to 127.0.0.1 would
    * hand the internet a door onto nothing. */
   mapPorts: boolean;
+  /** Host of the relay box the owner set up, or null. A function and not a
+   * string because `scripts/relay-connect.sh` writes `relay.env` while the
+   * server is already running: re-reading it on each scan means the new address
+   * appears within a tick instead of after a restart. */
+  relayHost?(): string | null;
+  /** Our own certificate's SHA-256, so `probeRelay` can recognise us coming
+   * back through the tunnel. Null with `OMB_TLS=off`, where there is nothing
+   * to recognise and the relay simply stays unverified. */
+  tlsFingerprint?: string | null;
   getMeta(key: string): string | null;
   setMeta(key: string, value: string): void;
   onChange(report: AddressReport): void;
@@ -389,7 +414,7 @@ function validAddress(value: string | null | undefined): string | null {
  * address the router reported for a mapping it accepted, and the owner's pin.
  * Nothing a peer sends is ever one of them. */
 function trusted(port: number): AddressCandidate[] {
-  const list = candidatesFrom(networkInterfaces(), port, deps?.scheme ?? "https");
+  const list = candidatesFrom(networkInterfaces(), port, deps?.scheme ?? "https", deps?.relayHost?.());
   for (const key of [META_EXTERNAL, META_PINNED]) {
     const stored = validAddress(deps?.getMeta(key));
     if (stored && !list.some((candidate) => candidate.address === stored)) {
@@ -415,6 +440,31 @@ function persist(report: AddressReport, previous: AddressReport | null): Address
   else if (previous?.verified) deps.setMeta(META_VERIFIED_AT, "");
   if (previous?.current !== report.current || previous?.verified !== report.verified) deps.onChange(report);
   return report;
+}
+
+/** The relay is the one rung `noteReachedHost` can never confirm: traffic
+ * arrives through the tunnel from 127.0.0.1, so there is no public peer to
+ * learn anything from. So we check it ourselves — dial the relay's PUBLIC port
+ * and see whether our OWN certificate comes back. That settles three questions
+ * in one handshake: the tunnel is up, it lands on this process, and nothing
+ * else has taken that port on the relay box. Stronger than comparing a
+ * serverId, because only the holder of our private key can finish it.
+ *
+ * `rejectUnauthorized:false` is not a hole here: the certificate is self-signed
+ * by design, nothing is sent, and the fingerprint comparison IS the check. */
+export function probeRelay(host: string, port: number, fingerprint: string, timeoutMs = NET_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: bare(host), port, rejectUnauthorized: false, timeout: timeoutMs });
+    const done = (value: boolean): void => {
+      socket.destroy();
+      resolve(value);
+    };
+    socket.once("secureConnect", () => done(
+      socket.getPeerCertificate().fingerprint256?.toUpperCase() === fingerprint.toUpperCase(),
+    ));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
 }
 
 /** The last report as stored, so a request never waits for SSDP. */
@@ -520,8 +570,17 @@ async function scan(port: number): Promise<AddressReport> {
   }
   // Read AFTER the mapping, so a freshly learnt WAN address is already in.
   const candidates = carryVerified(trusted(port), previous);
+  const relay = candidates.find((candidate) => candidate.kind === "relay");
+  if (relay && deps?.tlsFingerprint) {
+    relay.verified = await probeRelay(new URL(relay.address).hostname, port, deps.tlsFingerprint);
+  }
 
-  const chosen = candidates.find((candidate) => candidate.address === previous?.current)
+  // Relay first: a NAT'd server's other candidates reach nobody outside the
+  // flat, and the owner had to build the relay by hand to have one at all. The
+  // rest is unchanged — in particular the previous choice still outranks a
+  // fresh scan, so an address a real client confirmed is never quietly reverted.
+  const chosen = candidates.find((candidate) => candidate.kind === "relay")
+    ?? candidates.find((candidate) => candidate.address === previous?.current)
     ?? candidates.find((candidate) => candidate.verified)
     ?? candidates[0]
     ?? null;

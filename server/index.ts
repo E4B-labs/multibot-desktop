@@ -90,7 +90,7 @@ import { webMcpIntegration } from "./drivers/web-proxy.ts";
 import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts";
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
-import { currentReport, initNetAddress, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
+import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
@@ -112,12 +112,43 @@ function primaryAddress(port: number): string {
   const loopback = `${SCHEME}://127.0.0.1:${port}`;
   const report = currentReport(port);
   if (HOST === "0.0.0.0" || HOST === "::") return report.current ?? loopback;
+  // The bind check exists so we never advertise a NIC we are not listening on.
+  // A relay is the one exception, and only because it is not another NIC: `ssh
+  // -R` dials 127.0.0.1 from this very machine, so it reaches a loopback-only
+  // server too. Everything else defers to `report.current`, so this and
+  // `/api/server/address` can never disagree about which address we publish.
+  if (report.candidates.some((candidate) => candidate.kind === "relay" && candidate.address === report.current)) {
+    return report.current as string;
+  }
   const bound = new Set([`${SCHEME}://${HOST}:${port}`, `${SCHEME}://[${HOST}]:${port}`]);
   return report.candidates.find((candidate) => bound.has(candidate.address))?.address ?? loopback;
 }
+
+/** `scripts/relay-connect.sh` writes `DATA_DIR/relay.env` when the owner puts a
+ * relay box of their own in front (docs/REMOTE-ACCESS.md). Read on every scan,
+ * never cached: the script may land the file while the server is already up.
+ * Only the value is taken — this is not a shell, so nothing here is executed. */
+function relayHost(): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(DATA_DIR, "relay.env"), "utf8");
+  } catch {
+    return null; // no relay configured, or the file is unreadable
+  }
+  // Anchored at BOTH ends: a line with a character we do not accept is rejected
+  // outright rather than silently truncated to the prefix that happened to fit.
+  const host = /^RELAY_HOST=["']?([A-Za-z0-9.:[\]-]+)["']?[ 	]*$/m.exec(raw)?.[1];
+  // A relay that resolves back to this machine is not a relay; it would publish
+  // an address only this device can reach and call it public.
+  if (!host || /^(localhost|::1|\[::1\])$/i.test(host) || isPrivateIPv4(host)) return null;
+  return host;
+}
+
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
-const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE ? join(ROOT, "dist") : null);
+// With a relay in front, a loopback bind is still serving the whole internet —
+// without this the tunnel would publish an API with no UI behind it.
+const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() ? join(ROOT, "dist") : null);
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -173,6 +204,8 @@ identity.init();
 initNetAddress({
   scheme: SCHEME,
   mapPorts: !LOOPBACK_HOST,
+  relayHost,
+  tlsFingerprint: TLS_FINGERPRINT,
   getMeta: (key) => identity.getMeta(key),
   setMeta: (key, value) => identity.putMeta(key, value),
   onChange: (report) => {

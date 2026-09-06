@@ -16,6 +16,7 @@ import {
   parseControlUrl,
   parseSoapValue,
   pinAddress,
+  probeRelay,
   readCapped,
   ssdpLocation,
 } from "./net-address.ts";
@@ -42,6 +43,28 @@ describe("candidatesFrom", () => {
     expect(candidates.filter((candidate) => candidate.kind === "ipv6")).toEqual([
       { address: "https://[2a02:a31b:8140:1a80::42]:8799", kind: "ipv6", verified: false },
     ]);
+  });
+
+  // The whole point of the relay rung: on this fixture every other candidate is
+  // a LAN address or an IPv6 the owner's router does not route, and the relay is
+  // the one a stranger can actually reach.
+  it("puts a configured relay first, ahead of every discovered address", () => {
+    const withRelay = candidatesFrom(FIXTURE, 8799, "https", "203.0.113.9");
+    expect(withRelay[0]).toEqual({ address: "https://203.0.113.9:8799", kind: "relay", verified: false });
+    expect(withRelay.slice(1).map((candidate) => candidate.kind)).toEqual(candidates.map((candidate) => candidate.kind));
+  });
+
+  it("brackets an IPv6 relay and accepts a DNS name", () => {
+    expect(candidatesFrom({}, 8799, "https", "2a05:d016::7")[0].address).toBe("https://[2a05:d016::7]:8799");
+    expect(candidatesFrom({}, 8799, "https", " relay.example.net ")[0].address).toBe("https://relay.example.net:8799");
+  });
+
+  // `relay.env` is a file on disk, so it gets the same shape check as any other
+  // stored address: a host, nothing that could smuggle a path or credentials in.
+  it("ignores a relay host that is not a bare host", () => {
+    for (const bad of ["", "  ", "evil.example/admin", "user:pass@evil.example"]) {
+      expect(candidatesFrom({}, 8799, "https", bad).some((candidate) => candidate.kind === "relay")).toBe(false);
+    }
   });
 
   it("falls back to http only when told to (OMB_TLS=off behind a proxy)", () => {
@@ -287,6 +310,24 @@ describe("noteReachedHost", () => {
 
   it("refuses a Host carrying credentials", () => {
     expect(noteReachedHost(fakeRequest("8.8.8.8", "user:pass@192.168.1.42:8799"), 8799)).toBeNull();
+  });
+});
+
+// The relay is the one candidate `noteReachedHost` can never confirm, so the
+// probe is the only thing standing between "we published it" and "it works".
+// A real handshake needs a server; what is worth pinning here is that every way
+// of failing answers false instead of hanging or throwing.
+describe("probeRelay", () => {
+  it("is false when nothing is listening, and gives up inside its timeout", async () => {
+    const started = Date.now();
+    // 127.0.0.1:1 refuses immediately on every platform we run on.
+    await expect(probeRelay("127.0.0.1", 1, "AA:BB")).resolves.toBe(false);
+    await expect(probeRelay("[::1]", 1, "AA:BB", 300)).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not throw on a host that cannot be resolved", async () => {
+    await expect(probeRelay("relay.invalid", 8799, "AA:BB", 300)).resolves.toBe(false);
   });
 });
 
