@@ -26,17 +26,33 @@ export function clearAuthToken(): void {
   }
 }
 
-export function bootstrapLocalAuthToken(): void {
+/** Read one key out of the URL fragment and rewrite the address without it.
+ *
+ * Z fragmentu zabieramy WYŁĄCZNIE swój klucz: jedzie w nim też `join=<grant>`
+ * powłoki, a wymiecenie całego hasha kasowało go, zanim onboarding zdążył go
+ * przeczytać.
+ *
+ * `history.replaceState` rzuca `SecurityError` w dokumencie o nieprzejrzystym
+ * originie (sandboksowana ramka, `data:`). Wartość jest już przeczytana, więc
+ * wołający dostaje ją tak czy owak — a `bootstrapLocalAuthToken` leci przed
+ * `createRoot`, gdzie wyjątek zostawiłby pustą stronę. */
+function takeFragmentKey(key: string): string {
   const fragment = new URLSearchParams(location.hash.slice(1));
-  const token = fragment.get("access_token");
-  if (!token) return;
-  setV2AuthToken(token);
-  // Z fragmentu zabieramy WYŁĄCZNIE swój klucz: jedzie w nim też `join=<grant>`
-  // powłoki, a wymiecenie całego hasha kasowało go, zanim onboarding zdążył go
-  // przeczytać.
-  fragment.delete("access_token");
+  const value = fragment.get(key) ?? "";
+  if (!value) return "";
+  fragment.delete(key);
   const rest = fragment.toString();
-  history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
+  try {
+    history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
+  } catch {
+    /* nieprzejrzysty origin — klucz zostaje w URL-u, ale aplikacja wstaje */
+  }
+  return value;
+}
+
+export function bootstrapLocalAuthToken(): void {
+  const token = takeFragmentKey("access_token");
+  if (token) setV2AuthToken(token);
 }
 
 /** The desktop shell trades the server name and password for a grant natively
@@ -45,13 +61,7 @@ export function bootstrapLocalAuthToken(): void {
  * hash rides along into every history entry and every copied link. Other
  * fragment keys are left alone. */
 export function takeJoinGrant(): string {
-  const fragment = new URLSearchParams(location.hash.slice(1));
-  const grant = fragment.get("join") ?? "";
-  if (!grant) return "";
-  fragment.delete("join");
-  const rest = fragment.toString();
-  history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
-  return grant;
+  return takeFragmentKey("join");
 }
 
 export function setV2AuthToken(token: string): void {
@@ -135,7 +145,14 @@ function requireAuth(): void {
 
 function isRefreshRequest(input: RequestInfo | URL): boolean {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  return url.includes(REFRESH_PATH);
+  try {
+    // Porównujemy ŚCIEŻKĘ, nie podciąg: `/api/notes?next=/api/auth/access-token`
+    // to zwykłe żądanie, a `includes` kazałoby na nim wylogować użytkownika.
+    return new URL(url, location.href).pathname === REFRESH_PATH;
+  } catch {
+    // brak `location` (node) albo URL nie do sparsowania — to nie ta trasa
+    return false;
+  }
 }
 
 function sendAuthed(input: RequestInfo | URL, init: RequestInit): Promise<Response> {

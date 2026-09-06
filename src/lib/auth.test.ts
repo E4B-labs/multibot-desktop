@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { authFetch, authEventName, authenticatedEventSource } from "./auth";
+import { authFetch, authEventName, authenticatedEventSource, bootstrapLocalAuthToken, takeJoinGrant } from "./auth";
 
 describe("authenticatedEventSource", () => {
   it("ponawia po nieudanej próbie i dostarcza wiadomość, gdy serwer wraca", async () => {
@@ -166,5 +166,66 @@ describe("authFetch: 401 odświeża token zamiast wylogowywać", () => {
     await authFetch("/api/rooms");
 
     expect(calls.find((c) => c.url.includes("/api/auth/access-token"))?.session).toBe("native-session");
+  });
+
+  // 401 z trasy odswiezania to koniec sesji. Adres, ktory te trase tylko cytuje
+  // w parametrze, jest zwyklym zadaniem — `includes` wylogowywal na obu.
+  it("koniec sesji tylko na SAMEJ trasie odswiezania, nie na adresie, ktory ja cytuje", async () => {
+    const realLocation = (globalThis as { location?: unknown }).location;
+    (globalThis as { location?: unknown }).location = { href: "https://server.test/", origin: "https://server.test" };
+    try {
+      stubFetch(() => new Response(null, { status: 401 }));
+
+      await authFetch("/api/auth/access-token");
+      expect(authRequired).toBe(1);
+      expect(calls).toHaveLength(1);
+
+      calls = [];
+      authRequired = 0;
+      await authFetch("/api/notes?next=/api/auth/access-token");
+      expect(calls.map((c) => c.url)).toEqual(["/api/notes?next=/api/auth/access-token", "/api/auth/access-token"]);
+      expect(authRequired).toBe(1);
+    } finally {
+      (globalThis as { location?: unknown }).location = realLocation;
+    }
+  });
+});
+
+// `history.replaceState` rzuca SecurityError w dokumencie o nieprzejrzystym
+// originie. `bootstrapLocalAuthToken` leci PRZED `createRoot`, więc taki wyjątek
+// nie gubił tokenu — gasił całą aplikację.
+describe("odczyt fragmentu przeżywa nieprzejrzysty origin", () => {
+  const real = {
+    location: (globalThis as { location?: unknown }).location,
+    history: (globalThis as { history?: unknown }).history,
+    localStorage: (globalThis as { localStorage?: unknown }).localStorage,
+  };
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    (globalThis as { location?: unknown }).location = { hash: "#access_token=tok&join=grant", pathname: "/", search: "" };
+    (globalThis as { history?: unknown }).history = {
+      replaceState: () => {
+        throw new Error("SecurityError");
+      },
+    };
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { location?: unknown }).location = real.location;
+    (globalThis as { history?: unknown }).history = real.history;
+    (globalThis as { localStorage?: unknown }).localStorage = real.localStorage;
+  });
+
+  it("zapisuje token i oddaje grant, mimo że przepisanie adresu padło", () => {
+    expect(() => bootstrapLocalAuthToken()).not.toThrow();
+    expect(store.get("multibot.auth.token")).toBe("tok");
+    expect(takeJoinGrant()).toBe("grant");
   });
 });

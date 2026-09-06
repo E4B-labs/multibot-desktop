@@ -123,6 +123,21 @@ describe("deviceId", () => {
     expect(deviceId(storage)).toBe(first);
   });
 
+  // `crypto.randomUUID` istnieje tylko w bezpiecznym kontekscie, a serwer bywa
+  // ogladany po http://192.168.… — tam samo wywolanie wywalalo nas w „brak push”.
+  it("poza bezpiecznym kontekstem robi id z getRandomValues, zamiast go nie mieć", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value); } };
+    Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+    try {
+      const id = deviceId(storage);
+      expect(id).toMatch(/^[0-9a-f]{32}$/);
+      expect(deviceId(storage)).toBe(id);
+    } finally {
+      delete (crypto as { randomUUID?: unknown }).randomUUID;
+    }
+  });
+
   it("bez pamięci woli nie mieć id niż mieć nowe co uruchomienie", () => {
     // Zmienne id zostawiałoby na serwerze martwy wpis po każdym starcie.
     expect(deviceId(undefined)).toBe("");
