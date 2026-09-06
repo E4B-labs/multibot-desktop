@@ -34,6 +34,12 @@ describe("classifyJoin", () => {
     });
   });
 
+  it("429 przychodzi zdaniem, nie kodem — i tak ma znaczyć rate_limited", () => {
+    // Bez tego mapowania ekran mówił „pod tym adresem nie ma MultiBota" akurat
+    // wtedy, gdy jest, tylko każe odczekać minutę.
+    expect(classifyJoin(429, { error: "too many attempts" })).toEqual({ ok: false, error: "rate_limited" });
+  });
+
   it("kod błędu serwera przechodzi nietknięty — formularz wskazuje po nim pole", () => {
     expect(classifyJoin(401, { error: "wrong_server_password" })).toEqual({ ok: false, error: "wrong_server_password" });
     expect(classifyJoin(404, { error: "server_not_set_up" })).toEqual({ ok: false, error: "server_not_set_up" });

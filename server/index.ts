@@ -82,7 +82,6 @@ import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): w
 import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
-import { registerWindowsServerAutostart } from "./windows-autostart.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { canUseIntegration, clearTurnPolicy, rememberApprovalRule, setTurnPolicy, toolsetAllowed, turnPolicy } from "./turn-policy.ts";
 import { webMcpIntegration } from "./drivers/web-proxy.ts";
@@ -3057,7 +3056,17 @@ async function handleIdentityRoute(
     // enumerable anyway. The password is the secret that matters. Odcisk
     // certyfikatu też jest publiczny (klient widzi go w uścisku dłoni) —
     // podajemy go, żeby dało się go porównać z tym z logu i z panelu.
-    return identityHandled(res, 200, { ...identity.publicInfo(), tlsFingerprint: TLS_FINGERPRINT });
+    const info = identity.publicInfo();
+    return identityHandled(res, 200, {
+      ...info,
+      tlsFingerprint: TLS_FINGERPRINT,
+      // Przeglądarka na tym urządzeniu nie może wziąć trzech wartości sama:
+      // `/api/setup/values` bramkuje token, który leży W TYM pliku, a karty nie
+      // czytają plików. Jedyne, co jej pomaga, to ścieżka do otwarcia. Wyłącznie
+      // dopóki serwer jest niczyj i wyłącznie z pętli zwrotnej — dalej byłaby to
+      // podpowiedź dla obcych, gdzie leży hasło.
+      ...(!info.configured && isLoopbackRequest(req) ? { setupPath: identity.setupFilePath() } : {}),
+    });
   }
   if (method === "GET" && path === "/api/setup/values") {
     // Reads the password back from setup.json — the only place it exists in the
@@ -3070,10 +3079,19 @@ async function handleIdentityRoute(
       : null;
     if (!values) return identityHandled(res, 404, { error: "not_found" });
     res.setHeader("cache-control", "no-store");
+    const address = primaryAddress(PORT);
+    const report = currentReport(PORT);
     return identityHandled(res, 200, {
       ...values,
-      address: primaryAddress(PORT),
-      addresses: currentReport(PORT).candidates.map((candidate) => candidate.address),
+      address,
+      addresses: report.candidates.map((candidate) => candidate.address),
+      // Czym ten adres JEST, nie tylko jaki jest. Ekran „postaw serwer" mówi
+      // wprost, że działa tylko w tej sieci Wi-Fi, że nikt go nie potwierdził
+      // z zewnątrz albo że operator chowa urządzenie za swoim NAT-em — inaczej
+      // trzy wartości wyglądają na gotowe, a z drugiego urządzenia nie działają.
+      addressKind: report.candidates.find((candidate) => candidate.address === address)?.kind ?? null,
+      addressVerified: report.verified,
+      portMapping: report.portMapping,
       // Trzecia wartość obok adresu i hasła: pod nią urządzenie dołączające
       // sprawdza, czy rozmawia z TYM serwerem, a nie z kimś po drodze.
       tlsFingerprint: TLS_FINGERPRINT,
@@ -3267,7 +3285,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
   const method = req.method ?? "GET";
   let actor = actorForRequest(req);
   const adminMutation = method !== "GET" && (
-    path === "/api/provision" ||
     path.startsWith("/api/models/custom/") ||
     path.startsWith("/api/cli-tools/") ||
     path.startsWith("/api/progress/") ||
@@ -4849,20 +4866,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     }
     if (method === "GET" && path === "/api/device/resources") {
       return json(res, 200, deviceResources());
-    }
-    // ponytail: zostaje do PR 7, który kasuje ją razem z jedynym wołającym
-    // (`src/components/Onboarding.tsx`). Bez niej świeża instalacja dostaje 404.
-    if (method === "POST" && path === "/api/provision") {
-      const body = await readBody(req);
-      // Packaged Electron passes its trusted absolute executable path. Only an
-      // explicit onboarding 24/7 choice installs per-user autostart.
-      if (body?.server === true && process.env.OMB_PACKAGED_EXE) {
-        await registerWindowsServerAutostart(process.env.OMB_PACKAGED_EXE);
-      }
-      // Silnik Hermesa był jedyną rzeczą, którą ta trasa dociągała; po jego
-      // usunięciu zostaje sama rejestracja autostartu serwera 24/7, która nic
-      // nie pobiera — więc nie ma czego śledzić przez /api/progress.
-      return json(res, 202, { ok: true });
     }
     m = path.match(/^\/api\/progress\/([\w-]+)$/);
     if (m && method === "GET") {

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { visibleSettingsTabs } from "./AppSettingsPanel";
 
 // multibot: animacje ikon w szynie sekcji ustawień mają twarde warunki od
 // Kacpra — gałki suwaków nie mogą wyjechać poza swoje szyny, każda animacja
@@ -101,5 +102,25 @@ describe("animacje ikon w szynie ustawień", () => {
 
   it("narzędzia są pośrodku, a aktualizacje na dole", () => {
     expect(panel.indexOf('id: "other"')).toBeLessThan(panel.indexOf('id: "update"'));
+  });
+});
+
+// Zakładka admina pokazuje cudze konta i rotuje hasło serwera. Widzi ją
+// WYŁĄCZNIE właściciel — a „jeszcze nie wiem, kim jesteś" i „nie jesteś
+// właścicielem" to dwie różne rzeczy, więc obie chowają zakładkę, ale panel
+// mówi o tej pierwszej wprost.
+describe("zakładka Admin zależy od roli", () => {
+  const ids = (role: Parameters<typeof visibleSettingsTabs>[0]) => visibleSettingsTabs(role).map((tab) => tab.id);
+
+  it("widzi ją tylko właściciel", () => {
+    expect(ids("owner")).toContain("admin");
+    expect(ids("member")).not.toContain("admin");
+    expect(ids("loading")).not.toContain("admin");
+    expect(ids("unknown")).not.toContain("admin");
+  });
+
+  it("reszta szyny zostaje nietknięta dla każdego", () => {
+    expect(ids("member")).toEqual(["general", "other", "update"]);
+    expect(ids("owner")).toEqual(["general", "other", "admin", "update"]);
   });
 });

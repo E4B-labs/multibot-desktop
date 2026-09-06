@@ -7,6 +7,10 @@ declare global {
      * `index.html`. Nieobecne wszędzie indziej: w przeglądarce i pod
      * Electronem z lokalnym serwerem. */
     __MULTIBOT_REMOTE__?: true;
+    /** Wstrzykiwane przez powłokę mobilną przy ładowaniu strony. Każda
+     * wiadomość do mostu wiezie tę wartość (`shellPost` w `src/lib/shell.ts`),
+     * a powłoka reaguje tylko na te, które ją mają. Nieobecne wszędzie indziej. */
+    __MB_BRIDGE_NONCE__?: string;
     ogb?: {
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
@@ -23,17 +27,11 @@ declare global {
       permRequestMic(): Promise<boolean>;
       /** Opens System Settings on a privacy pane: mic|screen|speech. */
       permOpenSettings(pane: "mic" | "screen" | "speech"): Promise<void>;
-      /** Saves a remote host and switches the shell to it (onboarding
-       * "connect"). Optional — older shells don't expose it, so callers must
-       * feature-detect and fall back to a plain navigation. */
-      addRemoteHost?(url: string): Promise<void>;
-      /** Returns to local host, restoring local onboarding when it is pending. */
+      /** Returns to local host, restoring local onboarding when it is pending.
+       * Reloads the window, so callers check `activeHostId()` first. */
       useLocalHost?(): Promise<void>;
-      /** Asks the shell whether a MultiBot server answers at this address, and
-       * whether it already has a name and password of its own. Native, because
-       * the server sends no CORS headers and the webui is not in its origin
-       * yet. Absent in the browser and in shells older than 0.4.0. */
-      probeHost?(url: string): Promise<HostProbeResult>;
+      /** `"local"`, or the id of the saved remote host in use. */
+      activeHostId?(): Promise<string>;
       /** Trades the server name + password for a short-lived join grant, saves
        * the host and switches the window to it with `#join=<grant>`. The
        * password never leaves the main process. */
@@ -42,6 +40,16 @@ declare global {
        * again from scratch — the only way past "server certificate changed",
        * and deliberately a decision the user has to make. */
       forgetHostCertificate?(url: string): Promise<{ ok: boolean; forgotten?: boolean; error?: string }>;
+      /** The three values a fresh server on THIS device printed for its owner,
+       * read out of `setup.json` by the main process — a browser tab cannot read
+       * a file, and the generated password lives nowhere else in the clear.
+       * `null` once a profile has claimed the server, or in an older shell. */
+      setupValues?(): Promise<SetupValues | null>;
+      /** Trades this device's own server name and password for a join grant
+       * against the LOCAL harness — the setup path, where `location.origin` is
+       * the wrong target (in remote mode it is a proxy for somebody else's
+       * server). Refused unless the active host is this device. */
+      setupJoin?(serverName: string, serverPassword: string): Promise<{ ok: boolean; joinGrant?: string; error?: string }>;
       /** Opens the native host picker WITHOUT changing the active host. */
       showHostPicker?(): Promise<void>;
       /** Unread-conversation count for the taskbar badge. Fire-and-forget;
@@ -106,10 +114,6 @@ export type HostErrorCode =
   | "insecure_address"
   | "forbidden";
 
-export type HostProbeResult =
-  | { ok: true; configured: boolean; tlsFingerprint?: string }
-  | { ok: false; error: HostErrorCode };
-
 /** On failure `error` is one of the transport codes or a server code the shell
  * allows through — `wrong_server_name`, `wrong_server_password`,
  * `server_not_set_up`, `rate_limited` — so the form can point at the field at
@@ -125,3 +129,18 @@ export interface UpdaterState {
   percent?: number;
   message?: string;
 }
+
+/** Never carries the setup token: that is the file's proof of readership, not
+ * something a screen needs. Address and certificate come from the server's own
+ * `/api/setup/values`, so they are absent until it can answer. */
+export type SetupValues = {
+  serverName: string;
+  serverPassword: string;
+  address: string;
+  tlsFingerprint?: string;
+  /** How the address was found, and whether anything outside confirmed it —
+   * the setup screen says out loud what each kind can and cannot do. */
+  addressKind?: string;
+  addressVerified?: boolean;
+  portMapping?: { state?: string };
+};

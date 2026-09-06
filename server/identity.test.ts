@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -55,6 +55,15 @@ describe("server name", () => {
 });
 
 describe("first boot", () => {
+  it("knows where its setup.json is — a browser can only be told which file to open", async () => {
+    const { store } = await configured("setup-path");
+    // Przeglądarka nie przeczyta pliku i nie zawoła `/api/setup/values` (bramkuje
+    // ją token Z TEGO pliku), więc jedyne, co da się jej dać, to ścieżka.
+    expect(store.setupFilePath().endsWith("setup.json")).toBe(true);
+    expect(readFileSync(store.setupFilePath(), "utf8")).toContain("serverName");
+    store.close();
+  });
+
   it("names the server, mints a password and leaves it in setup.json exactly once", async () => {
     const { store, name, password, token } = await configured("boot");
     expect(isServerName(name)).toBe(true);
