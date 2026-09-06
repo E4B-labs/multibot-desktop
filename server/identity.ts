@@ -16,12 +16,12 @@ const PASSWORD_P = 3;
 const PASSWORD_KEY_BYTES = 32;
 // A session never expires: signing in is a one-time act on a device the user
 // owns, and a silent logout is the failure Kacper reported. Theft is handled by
-// revoking the session (GET/DELETE /api/auth/sessions), not by a timer.
-const SESSION_IDLE_MS = Number.POSITIVE_INFINITY;
-const SESSION_ABSOLUTE_MS = 100 * 365 * 24 * 60 * 60 * 1000;
+// revoking the session (GET/DELETE /api/auth/sessions), not by a timer. The
+// deadline is a fixed date rather than "now + a century" so the migration below
+// is idempotent — it matches nothing on the second boot.
+const SESSION_HORIZON = 4_102_444_800_000; // 2100-01-01T00:00:00Z
 const ACCESS_TOKEN_MS = 15 * 60 * 1000;
 const JOIN_GRANT_MS = 5 * 60 * 1000;
-const DEFAULT_SERVER_NAME = "MultiBot server";
 export const IDENTITY_PROTOCOL = 2;
 export const IDENTITY_SESSION_COOKIE = "mb_v2_session";
 
@@ -44,6 +44,9 @@ export interface ServerPublicInfo {
 export interface ServerSetupValues {
   serverName: string;
   serverPassword: string;
+  /** Proves the caller can read setup.json. Loopback is not per-app on Android,
+   * so the file itself — not the interface — is the gate on /api/setup/values. */
+  setupToken: string;
 }
 export interface JoinResult {
   server: ServerPublicInfo;
@@ -249,9 +252,11 @@ export class IdentityStore {
     this.addColumnIfMissing("users", "email", "TEXT");
     // Sessions minted before 0.4.0 carry a one-year deadline; nothing else in
     // the app would ever tell the user why they were signed out, so move every
-    // live session out to the new horizon on the boot that finds it.
-    const horizon = Date.now() + SESSION_ABSOLUTE_MS;
-    this.db.prepare("UPDATE sessions SET absolute_expires_at = ? WHERE revoked_at IS NULL AND absolute_expires_at < ?").run(horizon, horizon);
+    // still-valid session out to the horizon on the boot that finds it. An
+    // already-expired session stays expired (a retired device must not come
+    // back), and the horizon is a constant, so the next boot updates nothing.
+    this.db.prepare("UPDATE sessions SET absolute_expires_at = ? WHERE revoked_at IS NULL AND absolute_expires_at < ? AND absolute_expires_at > ?")
+      .run(SESSION_HORIZON, SESSION_HORIZON, Date.now());
     this.ensureServerIdentity();
     this.initialized = true;
   }
@@ -301,40 +306,64 @@ export class IdentityStore {
     };
   }
 
-  /** The whole of "setting a server up": the first boot that finds no join
-   * password mints the two values a device needs and leaves them where the
-   * person at the keyboard can read them (stdout + setup.json). Every later
-   * boot is a no-op, so restarting never rotates anybody's credentials. */
+  /** The whole of "setting a server up": a server nobody has joined yet mints
+   * the values a device needs and leaves them where the person at the keyboard
+   * can read them (stdout + setup.json).
+   *
+   * The gate is "has a profile", not "has a password hash": a 0.3.x data dir can
+   * carry a hash nobody alive knows (its plaintext was only ever shown once, in
+   * a response), and with zero identity users that server would be unjoinable
+   * forever. Once a profile exists the values are that owner's to rotate, so
+   * this is a no-op and no restart ever changes anybody's credentials. */
   async ensureConfigured(address: string): Promise<ServerSetupValues | null> {
     this.init();
-    if (this.meta("server.joinPasswordHash")) return null;
+    // Anything that is not a slug — the 0.3.x default included — gets a name it
+    // can actually be typed into a sign-in form with, configured or not.
     const stored = this.meta("server.name");
-    // Only the untouched default is replaced: a server someone already named
-    // keeps its name across the 0.4.0 upgrade.
-    const serverName = !stored || stored === DEFAULT_SERVER_NAME ? generateServerName() : stored;
-    const serverPassword = generateServerPassword();
-    this.setMeta("server.name", serverName);
-    this.setMeta("server.joinPasswordHash", await passwordHash(serverPassword));
-    this.setMeta("server.configuredAt", String(Date.now()));
-    writeFileSync(this.setupFile, JSON.stringify({ serverName, serverPassword, createdAt: Date.now() }, null, 2), { mode: 0o600 });
+    if (!isServerName(stored)) this.setMeta("server.name", generateServerName());
+    if (this.meta("server.joinPasswordHash") && this.userCount() > 0) return null;
+    const serverName = this.meta("server.name") ?? generateServerName();
+    const values: ServerSetupValues = {
+      serverName,
+      serverPassword: generateServerPassword(),
+      setupToken: randomBytes(24).toString("base64url"),
+    };
+    const encoded = await passwordHash(values.serverPassword);
+    // File first, hash second: a server whose password is only a hash, with no
+    // readable copy anywhere, is exactly the lockout this method exists to fix.
+    writeFileSync(this.setupFile, JSON.stringify({ ...values, createdAt: Date.now() }, null, 2), { mode: 0o600 });
     if (process.platform !== "win32") chmodSync(this.setupFile, 0o600);
+    this.setMeta("server.joinPasswordHash", encoded);
+    this.setMeta("server.configuredAt", String(Date.now()));
+    this.grants.clear();
     this.audit(null, "server.created", this.publicInfo().serverId);
-    console.log(setupBanner(address, serverName, serverPassword));
-    return { serverName, serverPassword };
+    console.log(setupBanner(address, serverName, values.serverPassword, this.setupFile));
+    return values;
   }
 
   /** Why setup.json exists at all: the generated password is only ever stored
-   * as a hash, so the loopback setup screen has to read it back from here. */
-  setupValues(): ServerSetupValues | null {
+   * as a hash, so the setup screen has to read it back from here. The token
+   * makes "can read setup.json" the actual condition. */
+  setupValues(presentedToken: unknown): Omit<ServerSetupValues, "setupToken"> | null {
     try {
       const raw = JSON.parse(readFileSync(this.setupFile, "utf8")) as Partial<ServerSetupValues>;
-      if (typeof raw.serverName === "string" && typeof raw.serverPassword === "string") {
-        return { serverName: raw.serverName, serverPassword: raw.serverPassword };
-      }
+      if (typeof raw.serverName !== "string" || typeof raw.serverPassword !== "string" || typeof raw.setupToken !== "string") return null;
+      const presented = typeof presentedToken === "string" ? presentedToken : "";
+      if (!timingSafeEqual(hash(presented), hash(raw.setupToken))) return null;
+      return { serverName: raw.serverName, serverPassword: raw.serverPassword };
     } catch {
       /* no pending setup — the first profile already claimed the server */
+      return null;
     }
-    return null;
+  }
+
+  /** True the first time only: one-shot boot notices that must not repeat on
+   * every restart. */
+  noteOnce(key: string): boolean {
+    this.init();
+    if (this.meta(key)) return false;
+    this.setMeta(key, String(Date.now()));
+    return true;
   }
 
   private async joinPasswordMatches(password: unknown): Promise<boolean> {
@@ -343,16 +372,23 @@ export class IdentityStore {
     return Boolean(stored && await passwordMatches(password.trim(), stored));
   }
 
-  /** Step one of signing in from anywhere: prove you know this server's name
-   * and password. Errors are deliberately distinct — the sign-in form points at
-   * the field that is actually wrong, which is the whole point of the rewrite. */
+  /** Prove you know this server's name and password. Errors stay distinct — the
+   * sign-in form points at the field that is actually wrong, which is the whole
+   * point of the rewrite — but the name compare is constant-time all the same:
+   * a length- or prefix-dependent answer would hand out the name character by
+   * character, and only the password is a real secret behind it. */
+  private async verifyServerCredentials(serverName: unknown, serverPassword: unknown): Promise<void> {
+    if (!this.meta("server.joinPasswordHash")) throw new IdentityError("server_not_set_up", 404);
+    const expected = hash((this.meta("server.name") ?? "").trim().toLowerCase());
+    const given = hash(typeof serverName === "string" ? serverName.trim().toLowerCase() : "");
+    if (!timingSafeEqual(expected, given)) throw new IdentityError("wrong_server_name", 401);
+    if (!await this.joinPasswordMatches(serverPassword)) throw new IdentityError("wrong_server_password", 401);
+  }
+
+  /** Step one of signing in from anywhere. */
   async join(serverName: unknown, serverPassword: unknown, now = Date.now()): Promise<JoinResult> {
     this.init();
-    if (!this.meta("server.joinPasswordHash")) throw new IdentityError("server_not_set_up", 404);
-    const expected = (this.meta("server.name") ?? "").trim().toLowerCase();
-    const given = typeof serverName === "string" ? serverName.trim().toLowerCase() : "";
-    if (given !== expected) throw new IdentityError("wrong_server_name", 401);
-    if (!await this.joinPasswordMatches(serverPassword)) throw new IdentityError("wrong_server_password", 401);
+    await this.verifyServerCredentials(serverName, serverPassword);
     const { grant, expiresAt } = this.issueJoinGrant(now);
     return { server: this.publicInfo(), joinGrant: grant, expiresAt, hasUsers: this.userCount() > 0 };
   }
@@ -364,30 +400,36 @@ export class IdentityStore {
     return { grant, expiresAt };
   }
 
-  consumeJoinGrant(value: unknown, now = Date.now()): boolean {
+  /** Peek: a mistyped profile password must not burn the grant, so nothing is
+   * spent until the rest of the request has validated. */
+  private hasJoinGrant(value: unknown, now = Date.now()): boolean {
     for (const [key, expiry] of this.grants) if (expiry <= now) this.grants.delete(key);
-    const grant = typeof value === "string" ? value : "";
-    const expiresAt = this.grants.get(grant);
-    if (expiresAt === undefined || expiresAt <= now) return false;
-    this.grants.delete(grant);
+    const expiresAt = this.grants.get(typeof value === "string" ? value : "");
+    return expiresAt !== undefined && expiresAt > now;
+  }
+
+  consumeJoinGrant(value: unknown, now = Date.now()): boolean {
+    if (!this.hasJoinGrant(value, now)) return false;
+    this.grants.delete(String(value));
     return true;
   }
 
-  /** `serverPassword` is accepted by `register` only, so curl and the test
-   * bootstrap stay one call; login and recovery always spend a grant. */
-  private async authorizeJoin(joinGrant: unknown, serverPassword?: unknown): Promise<void> {
+  /** A raw `serverName` + `serverPassword` pair is accepted by `register` only,
+   * so curl and the test bootstrap stay one call; login and recovery always
+   * spend a grant. Checks only — the caller spends the grant once it is sure. */
+  private async authorizeJoin(joinGrant: unknown, raw?: { serverName: unknown; serverPassword: unknown }): Promise<void> {
     if (typeof joinGrant === "string" && joinGrant) {
-      if (!this.consumeJoinGrant(joinGrant)) throw new IdentityError("join_grant_invalid", 401);
+      if (!this.hasJoinGrant(joinGrant)) throw new IdentityError("join_grant_invalid", 401);
       return;
     }
-    if (serverPassword === undefined) throw new IdentityError("join_grant_invalid", 401);
-    if (!await this.joinPasswordMatches(serverPassword)) throw new IdentityError("wrong_server_password", 401);
+    if (!raw || raw.serverPassword === undefined) throw new IdentityError("join_grant_invalid", 401);
+    await this.verifyServerCredentials(raw.serverName, raw.serverPassword);
   }
 
-  async register(input: { username: unknown; password: unknown; displayName?: unknown; email?: unknown; joinGrant?: unknown; serverPassword?: unknown; deviceName?: unknown }): Promise<CreatedRegistration> {
+  async register(input: { username: unknown; password: unknown; displayName?: unknown; email?: unknown; joinGrant?: unknown; serverName?: unknown; serverPassword?: unknown; deviceName?: unknown }): Promise<CreatedRegistration> {
     this.init();
     if (!this.meta("server.joinPasswordHash")) throw new IdentityError("server_not_set_up", 404);
-    await this.authorizeJoin(input.joinGrant, input.serverPassword);
+    await this.authorizeJoin(input.joinGrant, { serverName: input.serverName, serverPassword: input.serverPassword });
     const username = normalizeUsername(input.username);
     const password = validatePassword(input.password);
     const displayName = validText(input.displayName, 80) ? input.displayName.trim() : username;
@@ -401,9 +443,18 @@ export class IdentityStore {
     this.db.prepare("INSERT INTO users(id, username, display_name, password_hash, recovery_hash, role, created_at, email) VALUES(?, ?, ?, ?, ?, ?, ?, ?)").run(
       userId, username, displayName, await passwordHash(password), hash(recoveryCode), role, Date.now(), email,
     );
+    this.consumeJoinGrant(input.joinGrant);
     // The plaintext password existed for exactly one reason — showing it to
-    // whoever set the server up. The first profile means that is done.
-    if (first) rmSync(this.setupFile, { force: true });
+    // whoever set the server up. The first profile means that is done. A locked
+    // file (Windows EPERM/EBUSY) must not undo a registration that is already
+    // committed: say so and move on.
+    if (first) {
+      try {
+        rmSync(this.setupFile, { force: true });
+      } catch (error) {
+        console.warn(`[multibot] could not delete ${this.setupFile} — it still holds the server password, remove it by hand:`, error);
+      }
+    }
     const session = this.createSession(userId, String(input.deviceName ?? "device"));
     this.audit(userId, "user.registered", userId);
     return { ...session, recoveryCode };
@@ -419,6 +470,7 @@ export class IdentityStore {
     if (typeof row.password_hash !== "string" || !await passwordMatches(password, row.password_hash)) {
       throw new IdentityError("wrong_profile_password", 401);
     }
+    this.consumeJoinGrant(input.joinGrant);
     const session = this.createSession(String(row.id), String(input.deviceName ?? "device"));
     this.audit(String(row.id), "user.login", String(row.id));
     return session;
@@ -438,7 +490,8 @@ export class IdentityStore {
   }
 
   /** Owner-only: a member who forgot their password is reset by the owner from
-   * the admin tab, so a stolen recovery code cannot let a member back in alone. */
+   * the admin tab (PR 4), so a stolen recovery code cannot let a member back in
+   * alone. Every refusal looks the same from outside. */
   async recover(input: { username: unknown; recoveryCode: unknown; newPassword: unknown; joinGrant?: unknown; deviceName?: unknown }): Promise<CreatedRegistration> {
     this.init();
     await this.authorizeJoin(input.joinGrant);
@@ -447,12 +500,14 @@ export class IdentityStore {
     const newPassword = validatePassword(input.newPassword, "new password");
     const deviceName = input.deviceName;
     const row = this.db.prepare("SELECT * FROM users WHERE username = ? AND disabled_at IS NULL").get(username) as Row | undefined;
-    if (!row) throw new IdentityError("no_such_profile", 404);
-    if (row.role !== "owner") throw new IdentityError("owner_resets_members", 403);
-    const storedRecovery = row.recovery_hash instanceof Uint8Array ? Buffer.from(row.recovery_hash) : null;
-    if (!storedRecovery || storedRecovery.length !== 32 || !recovery || !timingSafeEqual(hash(recovery), storedRecovery)) {
+    const storedRecovery = row?.recovery_hash instanceof Uint8Array ? Buffer.from(row.recovery_hash) : null;
+    // One answer for "no such profile", "wrong code" and "you are a member":
+    // separating them would let anyone walk the user list looking for the owner.
+    // The role check runs last so a member's code is still checked first.
+    if (!row || !storedRecovery || storedRecovery.length !== 32 || !recovery || !timingSafeEqual(hash(recovery), storedRecovery) || row.role !== "owner") {
       throw new IdentityError("invalid recovery credentials", 401);
     }
+    this.consumeJoinGrant(input.joinGrant);
     const nextRecovery = randomBytes(24).toString("base64url");
     this.db.prepare("UPDATE users SET password_hash = ?, recovery_hash = ? WHERE id = ?").run(await passwordHash(newPassword), hash(nextRecovery), row.id);
     this.db.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(Date.now(), row.id);
@@ -484,7 +539,7 @@ export class IdentityStore {
     const now = Date.now();
     const sessionToken = randomBytes(32).toString("base64url");
     const accessToken = randomBytes(32).toString("base64url");
-    this.db.prepare("INSERT INTO sessions(id_hash, user_id, device_name, created_at, last_seen_at, absolute_expires_at) VALUES(?, ?, ?, ?, ?, ?)").run(hash(sessionToken), userId, deviceName.slice(0, 120), now, now, now + SESSION_ABSOLUTE_MS);
+    this.db.prepare("INSERT INTO sessions(id_hash, user_id, device_name, created_at, last_seen_at, absolute_expires_at) VALUES(?, ?, ?, ?, ?, ?)").run(hash(sessionToken), userId, deviceName.slice(0, 120), now, now, SESSION_HORIZON);
     this.db.prepare("INSERT INTO access_tokens(id_hash, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)").run(hash(accessToken), userId, now, now + ACCESS_TOKEN_MS);
     const actor = this.actor(userId);
     if (!actor) throw new IdentityError("account unavailable", 401);
@@ -522,7 +577,7 @@ export class IdentityStore {
     if (!token) return null;
     const row = this.db.prepare("SELECT user_id, last_seen_at, absolute_expires_at, revoked_at FROM sessions WHERE id_hash = ?").get(hash(token)) as Row | undefined;
     const now = Date.now();
-    if (!row || row.revoked_at || now - Number(row.last_seen_at) > SESSION_IDLE_MS || now >= Number(row.absolute_expires_at)) return null;
+    if (!row || row.revoked_at || now >= Number(row.absolute_expires_at)) return null;
     this.db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?").run(now, hash(token));
     return this.actor(String(row.user_id));
   }
@@ -586,6 +641,8 @@ export class IdentityStore {
     const serverPassword = generateServerPassword();
     this.setMeta("server.joinPasswordHash", await passwordHash(serverPassword));
     this.setMeta("server.generation", String(Number(this.meta("server.generation") ?? 1) + 1));
+    // Grants outstanding on the old password are exactly what rotation revokes.
+    this.grants.clear();
     this.audit(actor.userId, "server.password.rotated", this.publicInfo().serverId);
     return serverPassword;
   }
@@ -635,9 +692,15 @@ export function isIdentityPublicRoute(method: string, path: string): boolean {
 }
 
 /** The three values, on the console of the machine that just became a server.
- * Whoever is at that keyboard types them into MultiBot on any device. */
-function setupBanner(address: string, serverName: string, serverPassword: string): string {
-  const rows = [["Address", address], ["Name", serverName], ["Password", serverPassword]];
+ * Whoever is at that keyboard types them into MultiBot on any device.
+ *
+ * The password is printed only to a real terminal. Under runit's svlogger, a
+ * systemd unit or `docker logs` stdout is a file somebody keeps forever, and a
+ * credential that outlives its setup.json in a log is worse than one extra
+ * `cat`. */
+function setupBanner(address: string, serverName: string, serverPassword: string, setupFile: string): string {
+  const secret = process.stdout.isTTY ? serverPassword : `see ${setupFile}`;
+  const rows = [["Address", address], ["Name", serverName], ["Password", secret]];
   const label = Math.max(...rows.map(([name]) => name.length));
   const lines = ["MultiBot server is ready", "", ...rows.map(([name, value]) => `${name.padEnd(label)}   ${value}`)];
   const width = Math.max(...lines.map((line) => line.length)) + 2;

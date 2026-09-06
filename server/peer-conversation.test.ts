@@ -131,7 +131,7 @@ async function boot(
 
   // Fresh data dir: set the server up and register the owner. A reused one is
   // already configured, so the helper just signs the same profile back in.
-  const token = await bootstrapAccessToken(base, prefix);
+  const token = await bootstrapAccessToken(base, home, prefix);
 
   const api = async (method: string, path: string, body?: unknown) => {
     const res = await fetch(`${base}${path}`, {

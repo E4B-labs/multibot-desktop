@@ -3,7 +3,7 @@
 // app depends on. A deliberately-unknown overlay pins shadow-instance
 // behavior without replacing the built-in fleet.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,6 +21,7 @@ let serverName = "";
 let serverPassword = "";
 let setupAddress = "";
 let setupValuesBehindProxy = 0;
+let setupValuesWithoutToken = 0;
 
 let child: ChildProcess;
 let home: string;
@@ -144,8 +145,13 @@ beforeAll(async () => {
   // credential every test below uses.
   // The proxy check belongs here: `/api/setup/values` stops answering the
   // moment a profile exists, so no later `it` could observe this state.
-  setupValuesBehindProxy = (await fetch(`${BASE}/api/setup/values`, { headers: { "x-forwarded-for": "1.2.3.4" } })).status;
-  const setup = await fetch(`${BASE}/api/setup/values`);
+  // The setup token lives in the server's own setup.json — reading that file is
+  // the actual permission, because loopback is not per-app on a phone.
+  const setupToken = (JSON.parse(readFileSync(join(home, ".openmausbot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
+  const withToken = { "x-multibot-setup": setupToken };
+  setupValuesBehindProxy = (await fetch(`${BASE}/api/setup/values`, { headers: { ...withToken, "x-forwarded-for": "1.2.3.4" } })).status;
+  setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
+  const setup = await fetch(`${BASE}/api/setup/values`, { headers: withToken });
   if (setup.status !== 200) throw new Error(`setup values unavailable (${setup.status}): ${await setup.text()}`);
   const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[] };
   serverName = values.serverName;
@@ -158,6 +164,7 @@ beforeAll(async () => {
       username: "index-tester",
       password: "index-test-profile-password",
       displayName: "Index Tester",
+      serverName,
       serverPassword,
       deviceName: "vitest",
     }),
@@ -819,6 +826,7 @@ describe("harness HTTP API", () => {
         username: "index-member",
         password: "index-member-profile-pass",
         displayName: "Index Member",
+        serverName,
         serverPassword,
         deviceName: "vitest-member",
       }),
@@ -873,14 +881,15 @@ describe("harness HTTP API", () => {
 
   // The three values are credentials. A port scan sees that a MultiBot server
   // is there and nothing that helps join it.
-  it("keeps the server name out of the public handshake", async () => {
+  it("publishes the server name and id, never the password", async () => {
     for (const path of ["/api/public/server", "/api/public/handshake"]) {
       const info = await (await fetch(`${BASE}${path}`)).json() as Record<string, unknown>;
       expect(info.configured).toBe(true);
       expect(info.serverId).toBeTruthy();
-      expect(info.name).toBeUndefined();
+      // The sign-in header shows the name, so the public route carries it.
+      expect(info.name).toBe(serverName);
+      expect(JSON.stringify(info)).not.toContain(serverPassword);
     }
-    // A member does get the name back — they already know it.
     const own = (await api("GET", "/api/server")).body;
     expect(own.name).toBe(serverName);
     expect(own.publicAddress).toBeNull();
@@ -888,6 +897,8 @@ describe("harness HTTP API", () => {
 
   it("hands the setup values to loopback only, and only until a profile exists", async () => {
     expect(setupValuesBehindProxy).toBe(404);
+    // …and a local app that cannot read setup.json gets nothing either.
+    expect(setupValuesWithoutToken).toBe(404);
     expect(setupAddress).toMatch(/^http:\/\//);
     // beforeAll already registered the owner, so the route is closed for good.
     expect((await fetch(`${BASE}/api/setup/values`)).status).toBe(404);

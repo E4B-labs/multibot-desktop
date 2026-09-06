@@ -180,7 +180,7 @@ describe("push na telefon (fake ACP fleet)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
-    TOKEN = await bootstrapAccessToken(base);
+    TOKEN = await bootstrapAccessToken(base, home);
     await api("POST", "/api/devices/test-phone/push", { token: "ExponentPushToken[test]" });
   }, 40_000);
 

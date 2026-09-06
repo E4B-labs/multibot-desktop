@@ -17,11 +17,11 @@ function newStore(prefix: string): IdentityStore {
 }
 
 /** Configure a server the way a first boot does and hand back its credentials. */
-async function configured(prefix: string): Promise<{ store: IdentityStore; name: string; password: string }> {
+async function configured(prefix: string): Promise<{ store: IdentityStore; name: string; password: string; token: string }> {
   const store = newStore(prefix);
   const setup = await store.ensureConfigured(ADDRESS);
   if (!setup) throw new Error("a fresh store must configure itself");
-  return { store, name: setup.serverName, password: setup.serverPassword };
+  return { store, name: setup.serverName, password: setup.serverPassword, token: setup.setupToken };
 }
 
 async function failure(run: Promise<unknown>): Promise<{ status: number; message: string }> {
@@ -56,26 +56,54 @@ describe("server name", () => {
 
 describe("first boot", () => {
   it("names the server, mints a password and leaves it in setup.json exactly once", async () => {
-    const { store, name, password } = await configured("boot");
+    const { store, name, password, token } = await configured("boot");
     expect(isServerName(name)).toBe(true);
     expect(password.length).toBeGreaterThanOrEqual(12);
     expect(store.publicInfo().configured).toBe(true);
     expect(store.publicInfo().name).toBe(name);
-    expect(store.setupValues()).toEqual({ serverName: name, serverPassword: password });
+    expect(store.setupValues(token)).toEqual({ serverName: name, serverPassword: password });
+    // setup.json is the gate, not the interface it was asked over.
+    expect(store.setupValues("not-the-setup-token")).toBeNull();
+    expect(store.setupValues(undefined)).toBeNull();
 
-    // A restart must not rotate anybody's credentials.
+    // Once an owner exists, a restart must not rotate anybody's credentials.
+    await store.register({ ...OWNER, serverName: name, serverPassword: password });
     expect(await store.ensureConfigured(ADDRESS)).toBeNull();
-    expect(store.setupValues()?.serverPassword).toBe(password);
+    expect(store.publicInfo().name).toBe(name);
     store.close();
   });
 
   it("keeps a name the owner already chose", async () => {
-    const { store, password } = await configured("rename");
-    const owner = await store.register({ ...OWNER, serverPassword: password });
+    const { store, name, password } = await configured("rename");
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
     await store.updateServer(owner.actor, "home-lab");
-    // Second boot on a configured server: ensureConfigured is a no-op.
+    // Second boot on a claimed server: ensureConfigured is a no-op.
     expect(await store.ensureConfigured(ADDRESS)).toBeNull();
     expect(store.publicInfo().name).toBe("home-lab");
+    store.close();
+  });
+
+  // A 0.3.x data dir can hold a join password hash whose plaintext was shown
+  // once, in a response, and is gone. With no identity profile able to rotate
+  // it, that server would be unjoinable forever.
+  it("re-mints credentials for a 0.3.x server with a password hash but no profile", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "multibot-legacy-"));
+    dirs.push(dir);
+    const file = join(dir, "identity.db");
+    const seeded = new IdentityStore(file);
+    seeded.init();
+    seeded.close();
+    const raw = new DatabaseSync(file);
+    raw.prepare("INSERT INTO meta(key, value) VALUES('server.joinPasswordHash', 'scrypt$32768$8$3$c2FsdA$a2V5')").run();
+    raw.prepare("UPDATE meta SET value = 'MultiBot server' WHERE key = 'server.name'").run();
+    raw.close();
+
+    const store = new IdentityStore(file);
+    const setup = await store.ensureConfigured(ADDRESS);
+    expect(setup).not.toBeNull();
+    expect(isServerName(setup?.serverName)).toBe(true);
+    // …and the freshly minted password is the one that now works.
+    expect((await store.join(String(setup?.serverName), String(setup?.serverPassword))).joinGrant).toBeTruthy();
     store.close();
   });
 });
@@ -112,27 +140,42 @@ describe("join", () => {
     expect(store.consumeJoinGrant("never-issued", start)).toBe(false);
     store.close();
   });
+
+  // Typing the profile password wrong is the common case; burning the grant on
+  // it would send the user back through the whole three-value form.
+  it("does not spend the grant on a failed profile attempt", async () => {
+    const { store, name, password } = await configured("grant-keep");
+    await store.register({ ...OWNER, serverName: name, serverPassword: password });
+    const grant = (await store.join(name, password)).joinGrant;
+
+    expect((await failure(store.login({ username: OWNER.username, password: "wrong-password-1", joinGrant: grant }))).message).toBe("wrong_profile_password");
+    expect((await failure(store.register({ username: OWNER.username, password: OWNER.password, joinGrant: grant }))).message).toBe("profile_name_taken");
+    // Still good: the grant only goes when something actually succeeded.
+    expect((await store.login({ username: OWNER.username, password: OWNER.password, joinGrant: grant })).actor.role).toBe("owner");
+    expect((await failure(store.login({ username: OWNER.username, password: OWNER.password, joinGrant: grant }))).message).toBe("join_grant_invalid");
+    store.close();
+  });
 });
 
 describe("profiles", () => {
   it("makes the first profile the owner and every later one a member", async () => {
     const { store, name, password } = await configured("profiles");
-    const owner = await store.register({ ...OWNER, serverPassword: password });
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
     expect(owner.actor.role).toBe("owner");
     // The password existed only to show the person setting the server up.
     expect(existsSync(store.setupFile)).toBe(false);
-    expect(store.setupValues()).toBeNull();
+    expect(store.setupValues("any-token")).toBeNull();
 
     const grant = (await store.join(name, password)).joinGrant;
     const member = await store.register({ username: "ola", password: "member-password-123", joinGrant: grant });
     expect(member.actor.role).toBe("member");
-    expect((await failure(store.register({ username: "ola", password: "member-password-123", serverPassword: password }))).message).toBe("profile_name_taken");
+    expect((await failure(store.register({ username: "ola", password: "member-password-123", serverName: name, serverPassword: password }))).message).toBe("profile_name_taken");
     store.close();
   });
 
   it("separates a missing profile from a wrong password, and needs a grant either way", async () => {
     const { store, name, password } = await configured("login");
-    await store.register({ ...OWNER, serverPassword: password });
+    await store.register({ ...OWNER, serverName: name, serverPassword: password });
     const grant = async () => (await store.join(name, password)).joinGrant;
 
     expect(await failure(store.login({ username: "ghost", password: OWNER.password, joinGrant: await grant() }))).toEqual({ status: 404, message: "no_such_profile" });
@@ -143,8 +186,8 @@ describe("profiles", () => {
   });
 
   it("round-trips an e-mail on the profile", async () => {
-    const { store, password } = await configured("email");
-    const owner = await store.register({ ...OWNER, serverPassword: password, email: "kacper@example.test" });
+    const { store, name, password } = await configured("email");
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password, email: "kacper@example.test" });
     expect(owner.actor.email).toBe("kacper@example.test");
     expect(store.actorForSessionToken(owner.sessionToken)?.email).toBe("kacper@example.test");
 
@@ -158,7 +201,7 @@ describe("profiles", () => {
 
   it("lets the owner recover but sends a member to the owner", async () => {
     const { store, name, password } = await configured("recover");
-    const owner = await store.register({ ...OWNER, serverPassword: password });
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
     const member = await store.register({
       username: "ola",
       password: "member-password-123",
@@ -171,7 +214,9 @@ describe("profiles", () => {
       newPassword: "member-password-456",
       joinGrant: (await store.join(name, password)).joinGrant,
     }));
-    expect(refused.status).toBe(403);
+    // A member is refused exactly the way a wrong code is: no way to probe the
+    // user list for whoever happens to be the owner.
+    expect(refused).toEqual({ status: 401, message: "invalid recovery credentials" });
 
     const recovered = await store.recover({
       username: OWNER.username,
@@ -188,9 +233,12 @@ describe("profiles", () => {
 describe("server credentials", () => {
   it("rotating the password kills the old one", async () => {
     const { store, name, password } = await configured("rotate");
-    const owner = await store.register({ ...OWNER, serverPassword: password });
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
+    // A grant handed out on the old password must not outlive it.
+    const doomed = (await store.join(name, password)).joinGrant;
     const next = await store.rotateServerPassword(owner.actor);
     expect(next).not.toBe(password);
+    expect(store.consumeJoinGrant(doomed)).toBe(false);
     expect((await failure(store.join(name, password))).message).toBe("wrong_server_password");
     expect((await store.join(name, next)).joinGrant).toBeTruthy();
 
@@ -205,27 +253,31 @@ describe("server credentials", () => {
 });
 
 describe("sessions", () => {
-  it("keeps a session from a year ago alive across the 0.4.0 migration", async () => {
+  it("revives a live 0.3.x session across the migration and leaves a dead one dead", async () => {
     const dir = mkdtempSync(join(tmpdir(), "multibot-immortal-"));
     dirs.push(dir);
     const file = join(dir, "identity.db");
     const store = new IdentityStore(file);
     const setup = await store.ensureConfigured(ADDRESS);
-    const owner = await store.register({ ...OWNER, serverPassword: setup?.serverPassword });
+    const owner = await store.register({ ...OWNER, serverName: setup?.serverName, serverPassword: setup?.serverPassword });
+    const retired = store.createSessionForActor(owner.actor, "old laptop");
     store.close();
 
-    // Backdate the session to what a 0.3.x install holds today: last seen a
-    // year ago, absolute deadline already in the past.
+    // What a 0.3.x install holds today: last seen a year ago, with the one-year
+    // absolute deadline about to land — plus one session whose deadline passed.
     const year = 365 * 24 * 60 * 60 * 1000;
     const raw = new DatabaseSync(file);
     raw.prepare("UPDATE sessions SET created_at = ?, last_seen_at = ?, absolute_expires_at = ?")
-      .run(Date.now() - year, Date.now() - year, Date.now() - 1_000);
+      .run(Date.now() - year, Date.now() - year, Date.now() + 60_000);
+    raw.prepare("UPDATE sessions SET absolute_expires_at = ? WHERE device_name = 'old laptop'").run(Date.now() - 1_000);
     raw.close();
 
     const reopened = new IdentityStore(file);
     reopened.init();
     const cookie = identityCookie(owner.sessionToken, false);
     expect(reopened.actorForRequest({ headers: { cookie } })?.userId).toBe(owner.actor.userId);
+    // An expired session is not a session; the migration must not resurrect it.
+    expect(reopened.actorForSessionToken(retired.sessionToken)).toBeNull();
     reopened.close();
   });
 });

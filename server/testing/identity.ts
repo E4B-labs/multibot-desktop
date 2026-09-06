@@ -1,8 +1,10 @@
 // There is no installation-wide bearer token any more, so a spawned harness is
-// bootstrapped the way a real first run is: read the three values the server
-// generated for itself (loopback only), join with them, register the first
-// (owner) profile, keep its access token. A test that reuses a data dir finds a
-// profile already there and signs in with a fresh grant instead.
+// bootstrapped the way a real first run is: read the setup token out of the
+// server's own setup.json, ask it for the three values, join with them, register
+// the first (owner) profile, keep its access token.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 export const TEST_USERNAME = "test-owner";
 export const TEST_PASSWORD = "test-owner-password";
 
@@ -56,56 +58,41 @@ function installExpiryRetry(): void {
   };
 }
 
-/** The server generates its own name and password on the first boot and drops
- * them in `setup.json`, which `/api/setup/values` reads back over loopback —
- * until the first profile claims the server and the file is deleted. A suite
- * that reboots against the same data dir therefore has to remember them; the
- * key is the serverId, which is stable per data dir and unique across the two
- * or three harnesses a single suite boots. */
-const serverCredentials = new Map<string, { serverName: string; serverPassword: string }>();
-
 /** Returns the identity access token every authenticated call in the suite
- * should carry as `Authorization: Bearer …`. */
-export async function bootstrapAccessToken(base: string, deviceName = "vitest"): Promise<string> {
-  const info = await (await fetch(`${base}/api/public/server`)).json() as { serverId?: string };
-  const serverId = String(info?.serverId ?? base);
-  if (!serverCredentials.has(serverId)) {
-    const values = await fetch(`${base}/api/setup/values`);
-    if (values.ok) serverCredentials.set(serverId, await values.json() as { serverName: string; serverPassword: string });
+ * should carry as `Authorization: Bearer …`. `home` is the throwaway HOME the
+ * harness was spawned with — the server's own `setup.json` lives under it, and
+ * that file is the only place its generated password exists in the clear. */
+export async function bootstrapAccessToken(base: string, home: string, deviceName = "vitest"): Promise<string> {
+  const dataDir = join(home, ".openmausbot");
+  // A suite that reboots a harness against the same data dir finds the owner
+  // already registered and `setup.json` deleted with the registration. Sessions
+  // never expire now, so the one from the first boot is still the way back in.
+  const sessionFile = join(dataDir, "vitest-owner-session");
+  if (existsSync(sessionFile)) {
+    installExpiryRetry();
+    return mintAccessToken({ base, session: readFileSync(sessionFile, "utf8").trim() });
   }
-  const known = serverCredentials.get(serverId);
-  if (!known) throw new Error(`no credentials for ${serverId}: setup.json is gone and this worker never read it`);
-  // One join answers both questions: is there a profile yet, and here is the
-  // grant to create or sign into one.
-  const joined = await postJson(base, "/api/auth/join", known);
+  const setup = JSON.parse(readFileSync(join(dataDir, "setup.json"), "utf8")) as { setupToken: string };
+  const values = await fetch(`${base}/api/setup/values`, { headers: { "x-multibot-setup": setup.setupToken } });
+  if (!values.ok) throw new Error(`setup values unavailable (${values.status}): ${await values.text()}`);
+  const { serverName, serverPassword } = await values.json() as { serverName: string; serverPassword: string };
+  const joined = await postJson(base, "/api/auth/join", { serverName, serverPassword });
   if (joined.status !== 200 || !joined.body?.joinGrant) {
     throw new Error(`join failed (${joined.status}): ${JSON.stringify(joined.body)}`);
   }
   // `x-multibot-client: native` makes the server return the session token as
   // well — that is what outlives the 15-minute access token.
-  const native = { "x-multibot-client": "native" };
-  let result: { status: number; body: any };
-  if (joined.body.hasUsers) {
-    result = await postJson(base, "/api/auth/login", {
-      username: TEST_USERNAME,
-      password: TEST_PASSWORD,
-      joinGrant: joined.body.joinGrant,
-      deviceName,
-    }, native);
-    if (result.status !== 200) throw new Error(`sign-in failed (${result.status}): ${JSON.stringify(result.body)}`);
-  } else {
-    // `register` takes the raw server password, so a fresh bootstrap is one call.
-    result = await postJson(base, "/api/auth/register", {
-      username: TEST_USERNAME,
-      password: TEST_PASSWORD,
-      displayName: "Test Owner",
-      serverPassword: known.serverPassword,
-      deviceName,
-    }, native);
-    if (result.status !== 201) throw new Error(`owner registration failed (${result.status}): ${JSON.stringify(result.body)}`);
-  }
+  const result = await postJson(base, "/api/auth/register", {
+    username: TEST_USERNAME,
+    password: TEST_PASSWORD,
+    displayName: "Test Owner",
+    joinGrant: joined.body.joinGrant,
+    deviceName,
+  }, { "x-multibot-client": "native" });
+  if (result.status !== 201) throw new Error(`owner registration failed (${result.status}): ${JSON.stringify(result.body)}`);
   const { accessToken, sessionToken } = result.body ?? {};
   if (!accessToken || !sessionToken) throw new Error(`bootstrap returned no credentials: ${JSON.stringify(result.body)}`);
+  writeFileSync(sessionFile, sessionToken, { mode: 0o600 });
   minted.set(accessToken, { base, session: sessionToken });
   installExpiryRetry();
   return accessToken;

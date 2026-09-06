@@ -102,18 +102,26 @@ function localAddresses(port: number): string[] {
   const found: string[] = [];
   for (const list of Object.values(networkInterfaces())) {
     for (const entry of list ?? []) {
-      if (entry.internal) continue;
       const v6 = entry.family === "IPv6" || (entry.family as unknown as number) === 6;
+      // Link-local (fe80::/10) needs a scope id to dial and unique-local
+      // (fc00::/7) is not routable off the site — neither is an address anyone
+      // can type into another device.
+      if (entry.internal || (v6 && /^(?:fe80|f[cd])/i.test(entry.address))) continue;
       found.push(v6 ? `http://[${entry.address}]:${port}` : `http://${entry.address}:${port}`);
     }
   }
   return found;
 }
 
+/** What to print as "the address". A server bound to one interface is only
+ * reachable there, so advertising some other NIC would be a lie; only a
+ * wildcard bind gets to pick. */
 function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
+  const loopback = `http://127.0.0.1:${port}`;
   const found = localAddresses(port);
-  return found.find((address) => !address.includes("[")) ?? found[0] ?? `http://127.0.0.1:${port}`;
+  if (HOST === "0.0.0.0" || HOST === "::") return found.find((address) => !address.includes("[")) ?? found[0] ?? loopback;
+  return found.find((address) => address === `http://${HOST}:${port}` || address === `http://[${HOST}]:${port}`) ?? loopback;
 }
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
@@ -159,7 +167,7 @@ identity.init();
 // 401 — say so loudly once, or the first restart looks like a crash.
 try {
   const raw = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8")) as { auth?: { token?: string } };
-  if (raw.auth?.token) {
+  if (raw.auth?.token && identity.noteOnce("legacyTokenWarnedAt")) {
     console.warn("[multibot] config.json still holds the old auth.token — that rail is gone in 0.4.0.");
     console.warn("[multibot] old clients will be asked to sign in again (one 401, then the sign-in screen). The file is left untouched.");
   }
@@ -2988,12 +2996,21 @@ function identityHandled(res: ServerResponse, status: number, body: unknown): tr
   return true;
 }
 
+/** One bucket for every route that checks the server password, so guessing it
+ * through `register` costs the same as guessing it through `join`. */
+const SERVER_PASSWORD_BUCKET = "server-password";
+
 function identityRateLimited(req: IncomingMessage, operation: string): boolean {
-  const address = req.socket.remoteAddress ?? "unknown";
-  const key = `${operation}:${address}`;
   const now = Date.now();
+  // Behind a proxy every socket says 127.0.0.1, which would put the whole
+  // internet in one bucket; the first forwarded hop is the client. Sweeping
+  // here keeps the map from growing for the lifetime of the process.
+  for (const [old, value] of identityAttempts) if (now - value.startedAt >= 60_000) identityAttempts.delete(old);
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  const address = (!isLoopbackRequest(req) && forwarded) || req.socket.remoteAddress || "unknown";
+  const key = `${operation}:${address}`;
   const current = identityAttempts.get(key);
-  if (!current || now - current.startedAt >= 60_000) {
+  if (!current) {
     identityAttempts.set(key, { startedAt: now, count: 1 });
     return false;
   }
@@ -3009,27 +3026,25 @@ async function handleIdentityRoute(
   actor: IdentityActor | null,
 ): Promise<boolean> {
   if (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server")) {
-    // No `name`: it is one of the three join credentials, so a port scan must
-    // not hand it out. Members read it back from GET /api/server.
-    const info = identity.publicInfo();
-    return identityHandled(res, 200, {
-      configured: info.configured,
-      serverId: info.serverId,
-      protocol: info.protocol,
-      generation: info.generation,
-      publicKey: info.publicKey,
-    });
+    // The name stays public: the sign-in header shows it, and 1024 slugs are
+    // enumerable anyway. The password is the secret that matters.
+    return identityHandled(res, 200, identity.publicInfo());
   }
   if (method === "GET" && path === "/api/setup/values") {
     // Reads the password back from setup.json — the only place it exists in the
-    // clear, and only while nobody has claimed the server yet.
-    const values = isLoopbackRequest(req) && identity.userCount() === 0 ? identity.setupValues() : null;
+    // clear, and only while nobody has claimed the server yet. Loopback is not
+    // per-app on Android, so the real gate is the setup token FROM that file:
+    // whoever can read it (Electron main, the installer, `cat`) can call this,
+    // a stray app on the same phone cannot.
+    const values = isLoopbackRequest(req) && identity.userCount() === 0
+      ? identity.setupValues(req.headers["x-multibot-setup"])
+      : null;
     if (!values) return identityHandled(res, 404, { error: "not_found" });
     res.setHeader("cache-control", "no-store");
     return identityHandled(res, 200, { ...values, address: primaryAddress(PORT), addresses: localAddresses(PORT) });
   }
   if (method === "POST" && path === "/api/auth/join") {
-    if (identityRateLimited(req, "join")) return identityHandled(res, 429, { error: "too many attempts" });
+    if (identityRateLimited(req, SERVER_PASSWORD_BUCKET)) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
       return identityHandled(res, 200, await identity.join(body.serverName, body.serverPassword));
@@ -3042,12 +3057,18 @@ async function handleIdentityRoute(
     if (identityRateLimited(req, "register")) return identityHandled(res, 429, { error: "too many attempts" });
     try {
       const body = await readBody(req);
+      // No grant means this call is guessing the server password directly, so
+      // it shares the join bucket rather than getting its own budget.
+      if (!body.joinGrant && identityRateLimited(req, SERVER_PASSWORD_BUCKET)) {
+        return identityHandled(res, 429, { error: "too many attempts" });
+      }
       let session = await identity.register({
         username: body.username,
         password: body.password,
         displayName: body.displayName,
         email: body.email,
         joinGrant: body.joinGrant,
+        serverName: body.serverName,
         serverPassword: body.serverPassword,
         deviceName: body.deviceName,
       });
@@ -3055,8 +3076,14 @@ async function handleIdentityRoute(
         store.migrateLegacyOwner(session.actor.userId, session.actor.displayName);
         // The pre-0.4.0 install kept one shared e-mail in config.json. It
         // belonged to whoever ran the server, and that is exactly this account.
-        if (!session.actor.email && cfg.profile?.email) {
-          session = { ...session, actor: identity.updateProfile(session.actor, session.actor.displayName, cfg.profile.email) };
+        // The owner row is already committed, so a malformed legacy address is
+        // a warning, never a failed registration.
+        try {
+          if (!session.actor.email && cfg.profile?.email) {
+            session = { ...session, actor: identity.updateProfile(session.actor, session.actor.displayName, cfg.profile.email) };
+          }
+        } catch (error) {
+          console.warn("[multibot] legacy config.json e-mail not carried over to the owner profile:", error);
         }
       }
       res.setHeader("set-cookie", identityCookie(session.sessionToken, isSecureRequest(req)));
@@ -5262,10 +5289,14 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 // A server that has never been joined configures itself here — before the first
-// request can ask whether it is configured.
-await identity.ensureConfigured(primaryAddress(PORT)).catch((error) => {
-  console.error("[multibot] server self-configuration failed:", error);
-});
+// request can ask whether it is configured. Listening unconfigured would serve
+// a box nobody can ever sign into, so a failure here is fatal.
+try {
+  await identity.ensureConfigured(primaryAddress(PORT));
+} catch (error) {
+  console.error("[multibot] server self-configuration failed — refusing to start:", error);
+  process.exit(1);
+}
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on http://${HOST}:${PORT}`);
   void reconcileComputers().catch((e) => console.warn("[multibot] computer reconcile failed:", e));
