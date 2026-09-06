@@ -234,6 +234,66 @@ describe("profiles", () => {
     expect(store.actorForRequest({ headers: { authorization: `Bearer ${owner.accessToken}` } })).toBeNull();
     store.close();
   });
+
+  it("lets a member recover with the code an owner minted for them, once", async () => {
+    const { store, name, password } = await configured("admin-recover");
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
+    const member = await store.register({
+      username: "ola",
+      password: "member-password-123",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    });
+
+    // The code they were handed at registration is still no good on its own.
+    expect(await failure(store.recover({
+      username: "ola",
+      recoveryCode: member.recoveryCode,
+      newPassword: "member-password-456",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    }))).toEqual({ status: 401, message: "invalid recovery credentials" });
+
+    const issued = store.resetRecoveryCode(owner.actor, member.actor.userId);
+    const recovered = await store.recover({
+      username: "ola",
+      recoveryCode: issued,
+      newPassword: "member-password-456",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    });
+    expect(recovered.actor.userId).toBe(member.actor.userId);
+    // The new password really is the account's, not just this one session.
+    const back = await store.login({
+      username: "ola",
+      password: "member-password-456",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    });
+    expect(back.actor.username).toBe("ola");
+
+    // Spending it clears the admin flag: self-service is not unlocked forever.
+    expect(await failure(store.recover({
+      username: "ola",
+      recoveryCode: recovered.recoveryCode,
+      newPassword: "member-password-789",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    }))).toEqual({ status: 401, message: "invalid recovery credentials" });
+    store.close();
+  });
+
+  it("refuses to mint a recovery code for a second owner", async () => {
+    const { store, name, password } = await configured("owner-takeover");
+    const owner = await store.register({ ...OWNER, serverName: name, serverPassword: password });
+    const other = await store.register({
+      username: "ola",
+      password: "member-password-123",
+      joinGrant: (await store.join(name, password)).joinGrant,
+    });
+    store.adminUpdateUser(owner.actor, other.actor.userId, { role: "owner" });
+
+    const refused = await failure(Promise.resolve().then(() => store.resetRecoveryCode(owner.actor, other.actor.userId)));
+    expect(refused).toEqual({ status: 403, message: "cannot reset another owner" });
+    // Their own is still theirs to reset.
+    expect(store.resetRecoveryCode(owner.actor, owner.actor.userId)).toBeTruthy();
+    store.close();
+  });
 });
 
 describe("server credentials", () => {

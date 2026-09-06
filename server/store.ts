@@ -370,6 +370,13 @@ export class Store {
     return list!;
   }
 
+  /** Transcripts already in memory, for read-only aggregate counting. Going
+   * through `messagesFor` instead would cold-load every thread on disk — and
+   * that path re-sorts and REWRITES the file, which a GET must never do. */
+  residentTranscripts(): Message[][] {
+    return [...this.messages.values()];
+  }
+
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const list = this.messagesFor(threadId);
     const order = list.reduce((max, item) => Math.max(max, item.order ?? -1), -1) + 1;

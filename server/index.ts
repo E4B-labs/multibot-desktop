@@ -22,6 +22,7 @@ import {
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
 import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.ts";
+import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
   IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
@@ -1579,6 +1580,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const usageBot = bot ?? (isolatedTurnBots.get(event.threadId) ? store.bot(isolatedTurnBots.get(event.threadId)!) : undefined);
   if (usageBot && event.type === "thread.token-usage.updated") workspace.recordTokens(usageBot.id, event.input, event.output);
   if (usageBot && event.type === "turn.completed") workspace.recordTurn(usageBot.id);
+  recordTurnEvent(event);
   if (event.type === "turn.completed" || event.type === "runtime.error") isolatedTurnBots.delete(event.threadId);
   if (!bot) return;
 
@@ -3155,7 +3157,7 @@ async function handleIdentityRoute(
       return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
     }
   }
-  if (path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace")) {
+  if (path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/")) {
     if (!actor) return identityHandled(res, 401, { error: "unauthorized" });
     try {
       if (method === "POST" && path === "/api/auth/access-token") {
@@ -3202,6 +3204,35 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { serverPassword: await identity.rotateServerPassword(actor) });
       }
       if (method === "GET" && path === "/api/server/members") return identityHandled(res, 200, { members: identity.members() });
+      // ── owner-only admin surface ──────────────────────────────────────
+      // One check for the whole prefix: a member never reaches a handler here,
+      // so no future route under /api/admin/ can forget its own gate.
+      if (path.startsWith("/api/admin/")) {
+        if (actor.role !== "owner") return identityHandled(res, 403, { error: "owner access required" });
+        if (method === "GET" && path === "/api/admin/overview") {
+          res.setHeader("cache-control", "no-store");
+          return identityHandled(res, 200, await adminOverview({ identity, store, server, tlsFingerprint: TLS_FINGERPRINT }));
+        }
+        const adminUser = path.match(/^\/api\/admin\/users\/([^/]+)$/);
+        if (method === "PATCH" && adminUser) {
+          const body = await readBody(req);
+          const { user, staleSockets } = identity.adminUpdateUser(actor, decodeURIComponent(adminUser[1]), body);
+          // Revoking the credential in SQLite is not enough on its own: an SSE
+          // stream or a computer socket resolved its actor at upgrade time and
+          // would keep the old role — or keep working while disabled — until it
+          // happened to close.
+          if (staleSockets) revokeAuthSessions(req.socket);
+          return identityHandled(res, 200, { user });
+        }
+        const adminReset = path.match(/^\/api\/admin\/users\/([^/]+)\/reset$/);
+        if (method === "POST" && adminReset) {
+          res.setHeader("cache-control", "no-store");
+          return identityHandled(res, 200, { recoveryCode: identity.resetRecoveryCode(actor, decodeURIComponent(adminReset[1])) });
+        }
+        // Owner-only means owner-only: an unmatched admin path ends here rather
+        // than falling through to a general handler that never saw the prefix.
+        return identityHandled(res, 404, { error: `unknown route ${path}` });
+      }
       if (method === "GET" && path === "/api/workspace") {
         const info = identity.publicInfo();
         return identityHandled(res, 200, { id: info.serverId, name: info.name, members: identity.members(), currentUser: identityUser(actor) });
@@ -3231,7 +3262,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
   const langParam = url.searchParams.get("lang");
   if (langParam === "pl" || langParam === "en") uiLang = langParam;
   try {
-    const identityRoute = path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace");
+    const identityRoute = path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/");
     if (isIdentityPublicRoute(method, path) || (actor && identityRoute)) {
       if (await handleIdentityRoute(req, res, path, method, actor)) return;
     }

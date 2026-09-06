@@ -232,6 +232,9 @@ async function startServerOn(port) {
       // Trusted packaged path; used only after explicit onboarding 24/7 choice.
       OMB_PACKAGED_EXE: app.isPackaged && process.platform === "win32" ? process.execPath : "",
       OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : "",
+      // Packaged, package.json lives in the asar while the harness runs from
+      // Resources/server — it cannot read its own version, so hand it over.
+      MULTIBOT_VERSION: app.getVersion(),
     },
     stdio: "inherit",
   });
