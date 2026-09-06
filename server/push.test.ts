@@ -87,7 +87,7 @@ describe("push na telefon (fake ACP fleet)", () => {
         probe.close((error) => error ? reject(error) : resolve());
       });
     });
-    base = `http://127.0.0.1:${port}`;
+    base = `https://127.0.0.1:${port}`;
     expo = createServer((req, res) => {
       let raw = "";
       req.on("data", (c) => (raw += c));

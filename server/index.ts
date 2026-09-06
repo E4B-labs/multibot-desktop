@@ -4,7 +4,8 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,12 +90,18 @@ import { webMcpIntegration } from "./drivers/web-proxy.ts";
 // language) — rozpoznawanie frazy + wycinanie jej z treści wiadomości.
 import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts";
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
+import { ensureTlsMaterial } from "./tls-cert.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
+const LOOPBACK_HOST = new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
+// TLS jest ZAWSZE, poza jednym świadomym wyjątkiem: reverse proxy, które samo
+// kończy HTTPS i rozmawia z harnessem po loopbacku (docs/REMOTE-ACCESS.md).
+const TLS_OFF = /^(0|off|false|no)$/i.test(process.env.OMB_TLS?.trim() ?? "");
+const SCHEME = TLS_OFF ? "http" : "https";
 const PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "");
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const REMOTE = !new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
+const REMOTE = !LOOPBACK_HOST;
 
 // ponytail: a plain interface scan — no UPnP, no probe, no verification. PR 3
 // replaces both helpers with server/net-address.ts.
@@ -107,7 +114,7 @@ function localAddresses(port: number): string[] {
       // (fc00::/7) is not routable off the site — neither is an address anyone
       // can type into another device.
       if (entry.internal || (v6 && /^(?:fe80|f[cd])/i.test(entry.address))) continue;
-      found.push(v6 ? `http://[${entry.address}]:${port}` : `http://${entry.address}:${port}`);
+      found.push(v6 ? `${SCHEME}://[${entry.address}]:${port}` : `${SCHEME}://${entry.address}:${port}`);
     }
   }
   return found;
@@ -118,10 +125,10 @@ function localAddresses(port: number): string[] {
  * wildcard bind gets to pick. */
 function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
-  const loopback = `http://127.0.0.1:${port}`;
+  const loopback = `${SCHEME}://127.0.0.1:${port}`;
   const found = localAddresses(port);
   if (HOST === "0.0.0.0" || HOST === "::") return found.find((address) => !address.includes("[")) ?? found[0] ?? loopback;
-  return found.find((address) => address === `http://${HOST}:${port}` || address === `http://[${HOST}]:${port}`) ?? loopback;
+  return found.find((address) => address === `${SCHEME}://${HOST}:${port}` || address === `${SCHEME}://[${HOST}]:${port}`) ?? loopback;
 }
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
@@ -158,6 +165,19 @@ function staticHeaders(file: string): Record<string, string> {
 }
 
 ensureDirs();
+// Materiał TLS PO `ensureDirs` (migracja starego katalogu danych sprawdza, czy
+// DATA_DIR jeszcze nie istnieje) i PRZED serwerem, bo `createServer` chce go
+// od razu. `tls.crt` jest publiczny, `tls.key` ma 0600.
+// `OMB_TLS=off` ma jedno zastosowanie: reverse proxy kończące TLS u siebie i
+// rozmawiające z harnessem po pętli zwrotnej. Na adresie widocznym w sieci
+// znaczyłoby to hasła i sesje gołym tekstem — dlatego nie ostrzeżenie, tylko
+// odmowa startu: serwer, który cicho poszedł bez TLS-a, jest gorszy niż żaden.
+if (TLS_OFF && !LOOPBACK_HOST) {
+  console.error(`[multibot] OMB_TLS=off wolno użyć TYLKO na pętli zwrotnej, a OMB_HOST=${HOST}. Ustaw OMB_HOST=127.0.0.1 (za reverse proxy) albo zdejmij OMB_TLS.`);
+  process.exit(1);
+}
+const TLS = TLS_OFF ? null : ensureTlsMaterial(DATA_DIR);
+const TLS_FINGERPRINT = TLS?.fingerprint256 ?? null;
 startOpenCodeModelRefresh();
 const cfg = loadConfig();
 const identity = new IdentityStore();
@@ -297,7 +317,7 @@ function proxyIntegration(proxy: string, botId: string) {
     args: [proxy],
     env: {
       ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+      OMB_HARNESS_URL: `${SCHEME}://127.0.0.1:${PORT}`,
       OMB_BOT_ID: botId,
       OMB_COMMS_TOKEN: COMMS_TOKEN,
     },
@@ -3031,8 +3051,10 @@ async function handleIdentityRoute(
 ): Promise<boolean> {
   if (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server")) {
     // The name stays public: the sign-in header shows it, and 1024 slugs are
-    // enumerable anyway. The password is the secret that matters.
-    return identityHandled(res, 200, identity.publicInfo());
+    // enumerable anyway. The password is the secret that matters. Odcisk
+    // certyfikatu też jest publiczny (klient widzi go w uścisku dłoni) —
+    // podajemy go, żeby dało się go porównać z tym z logu i z panelu.
+    return identityHandled(res, 200, { ...identity.publicInfo(), tlsFingerprint: TLS_FINGERPRINT });
   }
   if (method === "GET" && path === "/api/setup/values") {
     // Reads the password back from setup.json — the only place it exists in the
@@ -3045,7 +3067,14 @@ async function handleIdentityRoute(
       : null;
     if (!values) return identityHandled(res, 404, { error: "not_found" });
     res.setHeader("cache-control", "no-store");
-    return identityHandled(res, 200, { ...values, address: primaryAddress(PORT), addresses: localAddresses(PORT) });
+    return identityHandled(res, 200, {
+      ...values,
+      address: primaryAddress(PORT),
+      addresses: localAddresses(PORT),
+      // Trzecia wartość obok adresu i hasła: pod nią urządzenie dołączające
+      // sprawdza, czy rozmawia z TYM serwerem, a nie z kimś po drodze.
+      tlsFingerprint: TLS_FINGERPRINT,
+    });
   }
   if (method === "POST" && path === "/api/auth/join") {
     if (identityRateLimited(req, SERVER_PASSWORD_BUCKET)) return identityHandled(res, 429, { error: "too many attempts" });
@@ -3162,7 +3191,7 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { user: identityUser(identity.updateProfile(actor, body.displayName, body.email)) });
       }
       if (method === "GET" && path === "/api/server") {
-        return identityHandled(res, 200, { ...identity.publicInfo(), publicAddress: identity.publicAddress() });
+        return identityHandled(res, 200, { ...identity.publicInfo(), publicAddress: identity.publicAddress(), tlsFingerprint: TLS_FINGERPRINT });
       }
       if (method === "PATCH" && path === "/api/server") {
         const body = await readBody(req);
@@ -3186,7 +3215,7 @@ async function handleIdentityRoute(
   return false;
 }
 
-const server = createServer(async (req, res) => {
+const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<unknown> => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
   const method = req.method ?? "GET";
@@ -3210,6 +3239,10 @@ const server = createServer(async (req, res) => {
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
+      // Te trasy istnieją dla procesów, które harness sam uruchomił na TEJ
+      // maszynie. Od 0.4.0 serwer bywa wystawiony do sieci, więc sam token to
+      // za mało: pod adresem publicznym tych tras po prostu nie ma.
+      if (!isLoopbackRequest(req)) return json(res, 403, { error: "local only" });
       if (req.headers.authorization !== `Bearer ${COMMS_TOKEN}`) {
         return json(res, 401, { error: "unauthorized" });
       }
@@ -5192,7 +5225,14 @@ const server = createServer(async (req, res) => {
     const status = (e as any)?.status ?? 500;
     return json(res, status, { error: e instanceof Error ? e.message : String(e) });
   }
-});
+};
+
+// Jeden serwer dla HTTP i dla WebSocketów. `https.Server` nie dziedziczy w
+// typach po `http.Server` (choć w runtime jest tym samym serwerem HTTP), więc
+// suma typów idzie aż do mountAuth/mountEventsWs/mountVncUpgrade — bez rzutowań.
+const server: HttpServer | HttpsServer = TLS
+  ? createHttpsServer({ key: TLS.keyPem, cert: TLS.certPem }, handleRequest)
+  : createServer(handleRequest);
 
 // multibot: `POST /webhooks/<id>` odpala rutynę webhookową. Siedzi PRZED
 // bramką auth celowo: autoryzacją jest HMAC sekretu rutyny, nie token dostępu,
@@ -5296,13 +5336,14 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 // request can ask whether it is configured. Listening unconfigured would serve
 // a box nobody can ever sign into, so a failure here is fatal.
 try {
-  await identity.ensureConfigured(primaryAddress(PORT));
+  await identity.ensureConfigured(primaryAddress(PORT), TLS_FINGERPRINT);
 } catch (error) {
   console.error("[multibot] server self-configuration failed — refusing to start:", error);
   process.exit(1);
 }
 server.listen(PORT, HOST, () => {
-  console.log(`multibot server on http://${HOST}:${PORT}`);
+  console.log(`multibot server on ${SCHEME}://${HOST}:${PORT}`);
+  if (TLS_FINGERPRINT) console.log(`[multibot] tls fingerprint (sha256): ${TLS_FINGERPRINT}`);
   void reconcileComputers().catch((e) => console.warn("[multibot] computer reconcile failed:", e));
   // multibot (A2): rozgrzewka rusza PO podniesieniu HTTP i nie czeka na nic —
   // serwer odpowiada od pierwszej sekundy, a workery wstają w tle.

@@ -16,7 +16,7 @@
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
-//   OMB_HARNESS_URL  base URL of the harness (http://127.0.0.1:8799)
+//   OMB_HARNESS_URL  base URL of the harness (https://127.0.0.1:8799)
 //   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 import readline from "node:readline";
@@ -27,7 +27,7 @@ import readline from "node:readline";
 import { BOT_SHAPES } from "../store.ts";
 import { harnessRequest } from "./harness-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const HARNESS = process.env.OMB_HARNESS_URL ?? "https://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 

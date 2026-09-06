@@ -66,7 +66,7 @@ async function boot(
   let base = "";
   for (let attempt = 0; ; attempt += 1) {
     const port = 18800 + Math.floor(Math.random() * 10_000);
-    base = `http://127.0.0.1:${port}`;
+    base = `https://127.0.0.1:${port}`;
     // Per-attempt buffer: a late line from a dead child must not pollute the
     // next attempt's EACCES check.
     const log: string[] = [];

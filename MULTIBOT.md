@@ -20,7 +20,7 @@ of truth for current behavior.
 pnpm install
 
 # dwa procesy:
-pnpm dev:server    # harness → 127.0.0.1:8799
+pnpm dev:server    # harness → https://127.0.0.1:8799 (self-signed, curl -k)
 pnpm dev           # app     → http://127.0.0.1:5199
 ```
 
@@ -45,9 +45,9 @@ docker compose -f docker-compose.selfhost.yml up -d --build
 ```
 
 Jedyny publikowany port to `127.0.0.1:8799` (uwierzytelniony harness + zbudowany
-PWA). Token jest generowany przy pierwszym
-starcie i wypisywany raz. Zdalny HTTPS:
-`tailscale serve --bg --yes http://127.0.0.1:8799`.
+PWA), po HTTPS z certyfikatem z własnym podpisem — sprawdzenie:
+`curl -k https://127.0.0.1:8799/api/health`. Odcisk certyfikatu jest w logu
+startowym i w `GET /api/public/server`; szczegóły w `docs/REMOTE-ACCESS.md`.
 
 Skrócona ścieżka bez Dockera (Linux/VPS, usługa użytkownika, bez sudo):
 
@@ -72,8 +72,7 @@ bash scripts/install-termux.sh
 `$PREFIX/etc/profile.d/start-services.sh`, włącza `sv-enable multibot` i wykonuje
 `termux-wake-lock`. Komputer bota na Androidzie jest niedostępny;
 czat, memory, routines i skills działają.
-HTTPS z Tailscale:
-`tailscale serve --bg --yes http://127.0.0.1:8799`.
+HTTPS jest wbudowany (certyfikat z własnym podpisem, `docs/REMOTE-ACCESS.md`).
 
 ## G1–G5: funkcje aplikacji
 

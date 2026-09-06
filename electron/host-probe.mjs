@@ -114,6 +114,23 @@ function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } 
   });
 }
 
+/** Zwykły GET JSON-em, tym samym transportem co sondowanie: `fetch` w main
+ * procesie nie przyjmie certyfikatu z własnego podpisu, a od 0.4.0 ma go także
+ * LOKALNY harness (`/api/health`, `/api/config`).
+ *
+ * WYŁĄCZNIE pętla zwrotna: `requestJson` idzie z `rejectUnauthorized: false`, a
+ * to wolno tylko wtedy, gdy drugi koniec jest na tej samej maszynie. Zdalny
+ * host ma swoją drogę — `probeServer`/`joinServer` z przypięciem odcisku.
+ * Błąd transportu i odmowa oddają `status: 0`, więc wołający ma jedno wyjście. */
+export async function getJson(url, options = {}) {
+  try {
+    if (!isLoopbackHost(new URL(url))) return { status: 0, json: null };
+    return await requestJson(url, options);
+  } catch {
+    return { status: 0, json: null };
+  }
+}
+
 /** @returns {Promise<{ok:true,configured:boolean,tlsFingerprint?:string}|{ok:false,error:string}>} */
 export async function probeServer(url, options = {}) {
   try {
@@ -125,13 +142,20 @@ export async function probeServer(url, options = {}) {
   }
 }
 
-/** Exchanges the server name + password for a short-lived join grant. Neither
- * the password nor the grant is ever logged. */
+/** Czy adres wskazuje na TĘ maszynę. `URL.hostname` dla IPv6 bywa w nawiasach
+ * albo bez, zależnie od zapisu — obie postacie liczą się tak samo. */
+function isLoopbackHost(target) {
+  return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(target.hostname);
+}
+
 /** Pętla zwrotna to jedyne miejsce, gdzie gołe HTTP nie wynosi hasła poza
  * urządzenie (lokalny harness w trakcie przejścia na HTTPS). */
 function isCleartextToTheWorld(target) {
-  return target.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]", "::1"].includes(target.hostname);
+  return target.protocol === "http:" && !isLoopbackHost(target);
 }
+
+/** Exchanges the server name + password for a short-lived join grant. Neither
+ * the password nor the grant is ever logged. */
 
 export async function joinServer(url, { serverName, serverPassword, ...options } = {}) {
   if (isCleartextToTheWorld(new URL(url))) return { ok: false, error: "insecure_address" };

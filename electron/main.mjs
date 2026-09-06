@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { addRemoteHost, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
-import { joinServer, probeServer } from "./host-probe.mjs";
+import { getJson, joinServer, probeServer } from "./host-probe.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
 import { normalizeRemoteUrl, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
@@ -212,13 +212,22 @@ ipcMain.on("desktop:notify", (_event, raw) => {
   banner.show();
 });
 
+/** Lokalny harness od 0.4.0 słucha po HTTPS (certyfikat z własnego podpisu,
+ * server/tls-cert.ts) — także na pętli zwrotnej, żeby był JEDEN tryb pracy
+ * serwera, a nie dwa. Zgodę na ten certyfikat dla nawigacji okna daje
+ * `setCertificateVerifyProc` niżej; wywołania z main procesu idą przez
+ * `getJson`, bo `fetch` odrzuciłby go bez pytania. */
+function localHarnessUrl(port, route = "") {
+  return `https://127.0.0.1:${port}${route}`;
+}
+
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
   const proc = utilityProcess.fork(entry, [], {
     env: {
       ...process.env,
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_HOST: "127.0.0.1", // Tailscale Serve terminates HTTPS on loopback.
+      OMB_HOST: "127.0.0.1", // desktop = klient sam dla siebie; sieć wpuszcza serwer stawiany świadomie
       OMB_PORT: String(port),
       // Trusted packaged path; used only after explicit onboarding 24/7 choice.
       OMB_PACKAGED_EXE: app.isPackaged && process.platform === "win32" ? process.execPath : "",
@@ -236,15 +245,10 @@ async function startServerOn(port) {
   // counts as ours.
   for (let i = 0; i < 40; i++) {
     if (exited) return null;
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
-      if (res.ok) {
-        const body = await res.json().catch(() => null);
-        if (body?.app === "multibot" && body.pid === proc.pid && body.static) return proc;
-        break; // someone else owns this port — try the next one
-      }
-    } catch {
-      /* not up yet */
+    const { status, json } = await getJson(localHarnessUrl(port, "/api/health"));
+    if (status === 200) {
+      if (json?.app === "multibot" && json.pid === proc.pid && json.static) return proc;
+      break; // someone else owns this port — try the next one
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -261,16 +265,11 @@ async function startServerPackaged() {
     for (const port of [8799, 18799, 28799]) {
       // A server-only ONLOGON task deliberately outlives desktop UI. Reuse only
       // an explicit service marker; never trust an arbitrary dev harness.
-      try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/health`);
-        const body = res.ok ? await res.json() : null;
-        if (body?.app === "multibot" && body?.static === true && body?.service === true) {
-          serverProc = null;
-          SERVER_PORT = port;
-          return true;
-        }
-      } catch {
-        /* no installed service on this port */
+      const { json } = await getJson(localHarnessUrl(port, "/api/health"));
+      if (json?.app === "multibot" && json?.static === true && json?.service === true) {
+        serverProc = null;
+        SERVER_PORT = port;
+        return true;
       }
       const proc = await startServerOn(port);
       if (proc) {
@@ -406,7 +405,7 @@ async function loadActiveTarget(win, { joinGrant } = {}) {
     await ensureLocalHarness();
     // Fragment never reaches HTTP. Renderer stores it, then erases URL before
     // first paint, so fresh packaged installs do not deadlock on login.
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}/` : ERROR_PAGE);
+    win.loadURL(serverReady ? `${localHarnessUrl(SERVER_PORT)}/` : ERROR_PAGE);
   } else {
     win.loadURL(DEV_URL);
   }
@@ -744,8 +743,8 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
   } catch {}
   let configSummary = {};
   try {
-    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config`);
-    if (response.ok) configSummary = await response.json();
+    const { status, json } = await getJson(localHarnessUrl(SERVER_PORT, "/api/config"));
+    if (status === 200 && json) configSummary = json;
   } catch {}
   const gpu = gpuStatus();
   const report = buildDiagnosticsReport({
@@ -788,9 +787,14 @@ app.whenReady().then(async () => {
   // odsyłamy do zwykłej weryfikacji Chromium przez `-3`.
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     const seen = bareHost(request.hostname);
-    // Lokalny harness na tej samej maszynie (po PR 3b też po HTTPS): jego
+    // Lokalny harness na tej samej maszynie (od 0.4.0 też po HTTPS): jego
     // certyfikat nie ma gdzie mieszkać w rekordach hostów, a pętla zwrotna i
     // tak nie przechodzi przez sieć — zgoda bez przypięcia.
+    // ponytail: sufit = KAŻDY proces na tym koncie, który zdąży pierwszy zająć
+    // :8799, dostanie tu zaufanie. Sprawdzenie `pid` w startServerOn jedzie tym
+    // samym kanałem, więc nie jest niezależnym dowodem. Kto to podniesie:
+    // odcisk z certyfikatu, który sami zapisaliśmy w DATA_DIR (`tls.crt`), i
+    // porównanie go tutaj — wymaga dostępu powłoki do katalogu danych serwera.
     if (["127.0.0.1", "::1", "localhost"].includes(seen)) {
       callback(0);
       return;

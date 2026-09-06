@@ -326,7 +326,7 @@ export class IdentityStore {
    * a response), and with zero identity users that server would be unjoinable
    * forever. Once a profile exists the values are that owner's to rotate, so
    * this is a no-op and no restart ever changes anybody's credentials. */
-  async ensureConfigured(address: string): Promise<ServerSetupValues | null> {
+  async ensureConfigured(address: string, tlsFingerprint?: string | null): Promise<ServerSetupValues | null> {
     this.init();
     // Anything that is not a slug — the 0.3.x default included — gets a name it
     // can actually be typed into a sign-in form with, configured or not.
@@ -346,7 +346,10 @@ export class IdentityStore {
     const encoded = await passwordHash(values.serverPassword);
     // File first, hash second: a server whose password is only a hash, with no
     // readable copy anywhere, is exactly the lockout this method exists to fix.
-    writeFileSync(this.setupFile, JSON.stringify({ ...values, createdAt: Date.now() }, null, 2), { mode: 0o600 });
+    // Adres i odcisk certyfikatu jadą do pliku razem z hasłem: kto czyta
+    // setup.json zamiast patrzeć na konsolę, dostaje komplet — łącznie z tym,
+    // po czym pozna, że łączy się z TYM serwerem, a nie z kimś po drodze.
+    writeFileSync(this.setupFile, JSON.stringify({ ...values, address, tlsFingerprint: tlsFingerprint ?? null, createdAt: Date.now() }, null, 2), { mode: 0o600 });
     if (process.platform !== "win32") chmodSync(this.setupFile, 0o600);
     this.setMeta("server.joinPasswordHash", encoded);
     this.setMeta("server.configuredAt", String(Date.now()));
@@ -750,8 +753,17 @@ export function isLoopbackRequest(req: { socket: { remoteAddress?: string | unde
 
 /** A self-hosted install often runs on plain-http loopback (no TLS terminator
  * in front). Unconditionally setting `Secure` would make the browser silently
- * drop the session cookie there, so it is added only over real TLS. */
+ * drop the session cookie there, so it is added only over real TLS.
+ *
+ * `x-forwarded-proto` to zwykły nagłówek — obcy klient wpisze w nim, co zechce,
+ * i wyprosi sobie ciasteczko `Secure` na gołym HTTP. Liczy się więc TYLKO od
+ * peera z pętli zwrotnej, czyli od reverse proxy stojącego na tej maszynie
+ * (jedyny wspierany układ z `OMB_TLS=off`). Świadomie sam adres gniazda, a nie
+ * `isLoopbackRequest`: każde proxy dokłada też `X-Forwarded-For`, po którym
+ * `isLoopbackRequest` z definicji zwraca false — a wtedy sesja za proxy nigdy
+ * nie dostałaby `Secure`. */
 export function isSecureRequest(req: { socket: unknown; headers: Record<string, string | string[] | undefined> }): boolean {
   if ((req.socket as { encrypted?: boolean } | null)?.encrypted) return true;
-  return String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
+  const peer = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
+  return isLoopbackAddress(peer) && String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
 }

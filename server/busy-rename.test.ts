@@ -47,7 +47,7 @@ beforeAll(async () => {
       probe.close((error) => error ? reject(error) : resolve());
     });
   });
-  base = `http://127.0.0.1:${port}`;
+  base = `https://127.0.0.1:${port}`;
   home = mkdtempSync(join(tmpdir(), "omb-busy-test-"));
   mkdirSafe(join(home, ".openmausbot"));
   writeFileSync(

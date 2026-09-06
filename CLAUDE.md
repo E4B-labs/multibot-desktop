@@ -43,7 +43,7 @@ Więcej: [`docs/engineering/ARCHITECTURE.md`](docs/engineering/ARCHITECTURE.md).
 
 ```sh
 corepack enable && pnpm install --frozen-lockfile
-pnpm dev:server    # harness → 127.0.0.1:8799
+pnpm dev:server    # harness → https://127.0.0.1:8799 (self-signed, curl -k)
 pnpm dev           # app     → http://127.0.0.1:5199
 ```
 

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { harnessRequest } from "../drivers/harness-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const HARNESS = process.env.OMB_HARNESS_URL ?? "https://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 
