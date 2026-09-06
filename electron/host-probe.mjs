@@ -6,9 +6,14 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
+import { isOnionHost } from "./host-resolve.mjs";
 import { CERT_CHANGED, pinRequest } from "./tls-pin.mjs";
 
 const TIMEOUT_MS = 8000;
+// Tor buys anonymity with latency: a first circuit to a hidden service takes
+// 10-30 s (PLAN-TOR, risk 2), so the 8 s promise the sign-in screen makes for
+// an address on the LAN would fail every onion sign-in on principle.
+const ONION_TIMEOUT_MS = 90_000;
 const TIMED_OUT = "MULTIBOT_TIMEOUT";
 const MAX_BODY = 64 * 1024;
 
@@ -54,13 +59,14 @@ export function classifyJoin(status, body) {
   return { ok: false, error: "not_multibot" };
 }
 
-function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs = TIMEOUT_MS } = {}) {
+function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs, createConnection } = {}) {
   return new Promise((resolveWith, rejectWith) => {
     const target = new URL(url);
+    const budgetMs = timeoutMs ?? (isOnionHost(target.hostname) ? ONION_TIMEOUT_MS : TIMEOUT_MS);
     // Budżet CAŁEGO wywołania, nie samej bezczynności gniazda: serwer sączący
     // po bajcie utrzymywałby `setTimeout` na gnieździe w nieskończoność, a
     // ekran logowania obiecuje odpowiedź w 8 sekund.
-    const budget = setTimeout(() => req.destroy(Object.assign(new Error("timed out"), { code: TIMED_OUT })), timeoutMs);
+    const budget = setTimeout(() => req.destroy(Object.assign(new Error("timed out"), { code: TIMED_OUT })), budgetMs);
     const done = (value) => {
       clearTimeout(budget);
       resolveWith(value);
@@ -77,6 +83,7 @@ function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs =
         port: target.port || (target.protocol === "https:" ? 443 : 80),
         path: target.pathname + target.search,
         method,
+        protocol: target.protocol,
         headers: payload ? { ...headers, "content-type": "application/json", "content-length": String(payload.length) } : { ...headers },
         // Self-signed is the norm here; trust rests on the pin, not on a CA.
         rejectUnauthorized: false,
@@ -85,7 +92,13 @@ function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs =
         // nim nie odpaliło. Te wywołania są dwa na całe logowanie, więc
         // świeże gniazdo nic nie kosztuje, a certyfikat jest sprawdzany
         // ZAWSZE — także wtedy, gdy hasło serwera idzie w tym żądaniu.
-        agent: false,
+        //
+        // `createConnection` (adres .onion, tunel przez naszego tora) wyklucza
+        // agenta: node bierze je pod uwagę WYŁĄCZNIE wtedy, gdy agenta nie ma
+        // wcale. `agent: false` znaczy „nowy agent", nie „bez agenta", więc
+        // gniazdo poszłoby wtedy prosto do resolvera DNS.
+        agent: createConnection ? undefined : false,
+        createConnection,
       },
       (res) => {
         const tlsFingerprint = res.socket?.getPeerCertificate?.()?.fingerprint256;

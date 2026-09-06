@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, globalAgent, get as httpGet, request as httpRequest } from "node:http";
+import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -273,4 +274,87 @@ test("brak zapakowanego interfejsu degraduje do trybu sprzed zmiany, nie do bia�
   const wynik = await startRemoteUiServer({ staticDir: pusty, remoteUrl: host.url });
   assert.equal(wynik, null, "bez index.html main.mjs ma wrócić do ładowania prosto z hosta");
   rmSync(pusty, { recursive: true, force: true });
+});
+
+// ── adres .onion ────────────────────────────────────────────────────────────
+// Cały sens tunelu jest w tym, czego NIE ma: żadnego zapytania DNS o nazwę
+// usługi ukrytej. Wstrzykujemy własny `createConnection` zamiast tora, więc
+// test jest natychmiastowy i widzi dokładnie to, o co proxy poprosiło.
+const ONION = "a".repeat(56) + ".onion";
+
+function startOnionProxy() {
+  const seen = [];
+  const createConnection = (options, callback) => {
+    seen.push({ host: options.host ?? options.hostname, port: Number(options.port) });
+    // Tunel udajemy zwykłym gniazdem do atrapy hosta — proxy nie ma prawa
+    // wiedzieć, co jest po drugiej stronie.
+    const socket = netConnect(Number(new URL(host.url).port), "127.0.0.1");
+    socket.once("connect", () => callback(null, socket));
+    socket.once("error", callback);
+    return undefined;
+  };
+  return startRemoteUiServer({
+    staticDir,
+    remoteUrl: `https://${ONION}:8799`,
+    pin: { get: () => undefined, set: () => {} },
+    createConnection,
+  }).then((ui) => ({ ui, seen }));
+}
+
+test("żądania do hosta .onion idą przez tunel, a nie przez resolver", async () => {
+  globalAgent.destroy();
+  const { ui: przez, seen } = await startOnionProxy();
+  try {
+    const res = await get(`${przez.url}/api/ping?x=1`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(JSON.parse(res.body), { from: "host", path: "/api/ping?x=1" });
+    assert.deepEqual(seen, [{ host: ONION, port: 8799 }], "nazwa .onion ma trafić do tunelu, nie do gniazda");
+  } finally {
+    await przez.close();
+  }
+});
+
+// WebSocket idzie tym samym agentem co reszta, więc gdyby podmiana dotyczyła
+// tylko zwykłych żądań, kanał zdarzeń wychodziłby obok tora — i nie działałby
+// wcale, bo `.onion` nie ma się jak rozwiązać.
+test("upgrade WebSocketa na hoście .onion też idzie przez tunel", async () => {
+  globalAgent.destroy();
+  const { ui: przez, seen } = await startOnionProxy();
+  try {
+    const { port } = new URL(przez.url);
+    const upgraded = await new Promise((done, fail) => {
+      const req = httpRequest({
+        hostname: "127.0.0.1",
+        port,
+        path: "/api/events",
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+          "sec-websocket-version": "13",
+          "sec-websocket-protocol": "multibot-auth, test-token",
+        },
+      });
+      req.on("upgrade", (res, socket) => done({ res, socket }));
+      req.on("response", (res) => fail(new Error(`zamiast 101 przyszło ${res.statusCode}`)));
+      req.on("error", fail);
+      req.end();
+    });
+    assert.equal(upgraded.res.statusCode, 101);
+    assert.deepEqual(seen, [{ host: ONION, port: 8799 }]);
+    upgraded.socket.destroy();
+  } finally {
+    await przez.close();
+  }
+});
+
+// Fail closed. Bez tunelu `net.connect` wysłałby nazwę usługi ukrytej do
+// resolvera — wyciek zakończony i tak błędem. Lepiej nie wstać: main.mjs
+// pokazuje wtedy stronę błędu zamiast ładować hosta wprost.
+test("host .onion bez tunelu nie dostaje proxy w ogóle", async () => {
+  await assert.rejects(
+    () => startRemoteUiServer({ staticDir, remoteUrl: `https://${ONION}:8799`, pin: { get: () => "AA", set: () => {} } }),
+    /Tor connector/,
+  );
+  await assert.rejects(() => startRemoteUiServer({ staticDir, remoteUrl: `http://${ONION}:8799`, createConnection: () => {} }), /Tor connector/);
 });
