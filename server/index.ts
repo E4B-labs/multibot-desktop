@@ -172,6 +172,7 @@ identity.init();
 // everyone when the answer changes: a live client refreshes its badge, the
 // owner's phone gets one push so a new address never goes unnoticed.
 initNetAddress({
+  scheme: SCHEME,
   getMeta: (key) => identity.getMeta(key),
   setMeta: (key, value) => identity.putMeta(key, value),
   onChange: (report) => {
@@ -3171,6 +3172,9 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { ok: true });
       }
       if (method === "GET" && path === "/api/auth/me") {
+        // A signed-in client that got here from a public remote address just
+        // proved that address works. Authenticated only: an unauthenticated
+        // route would let anyone drive this.
         noteReachedHost(req, PORT);
         return identityHandled(res, 200, { user: identityUser(actor), server: identity.publicInfo() });
       }
@@ -4721,16 +4725,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
-      // A request that got here from a public address just proved the address
-      // works — cheaper and more honest than any self-probe.
-      noteReachedHost(req, PORT);
-      const nonce = url.searchParams.get("probe");
       return json(res, 200, {
         app: "multibot",
         pid: process.pid,
         static: Boolean(STATIC_DIR),
         service: process.env.OMB_SERVER_SERVICE === "1",
-        ...(nonce === null ? {} : { probe: nonce }),
       });
     }
 
@@ -5411,7 +5410,7 @@ server.listen(PORT, HOST, () => {
   // wywróciłoby WORKER_IDLE_MS na każdej domyślnej instalacji.
   if (warmWorkerLimit() <= 0) setInterval(() => void warmBots().catch(() => {}), 60_000).unref?.();
   // Never before `listen`: SSDP waits on a router that may never answer, and
-  // the first scan also needs the port open to probe itself.
+  // nothing about the boot may depend on whether one does.
   void refreshAddress(PORT).catch(() => {});
   setInterval(() => void refreshAddress(PORT).catch(() => {}), 10 * 60_000).unref?.();
 });

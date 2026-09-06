@@ -918,7 +918,7 @@ describe("harness HTTP API", () => {
     const joined = await fetch(`${BASE}/api/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "index-address-member", password: "index-address-member-pass", displayName: "Address Member", serverPassword }),
+      body: JSON.stringify({ username: "index-address-member", password: "index-address-member-pass", displayName: "Address Member", serverName, serverPassword }),
     });
     expect(joined.status).toBe(201);
     const memberToken = (await joined.json() as { accessToken: string }).accessToken;
