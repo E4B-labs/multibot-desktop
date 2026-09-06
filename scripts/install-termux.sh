@@ -44,6 +44,7 @@ else
   cat > "$SERVICE_DIR/run" <<EOF
 #!$PREFIX/bin/bash
 exec env HOME="$HOME" OMB_HOST=0.0.0.0 OMB_PORT=8799 \\
+  OMB_DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}" \\
   "$ROOT/scripts/start-multibot.sh"
 EOF
   chmod +x "$SERVICE_DIR/run"
@@ -67,7 +68,10 @@ if (( DRY_RUN )); then
   say "append allow-external-apps=true to $PROPS"
 else
   mkdir -p "$(dirname "$PROPS")"
-  grep -qs '^allow-external-apps=true' "$PROPS" || printf '\nallow-external-apps=true\n' >> "$PROPS"
+  grep -qsE '^[[:space:]]*allow-external-apps[[:space:]]*=' "$PROPS" || printf '\nallow-external-apps=true\n' >> "$PROPS"
+  # Termux reads the file at start; without the reload the property waits
+  # for the next app restart and RUN_COMMAND keeps failing for no reason.
+  command -v termux-reload-settings >/dev/null && termux-reload-settings || true
 fi
 
 say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
@@ -81,5 +85,5 @@ say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
 if (( DRY_RUN )); then
   say "print the three values from \$HOME/.openmausbot/setup.json"
 else
-  bash "$ROOT/scripts/print-setup-values.sh" 30
+  bash "$ROOT/scripts/print-setup-values.sh" 30 || true
 fi

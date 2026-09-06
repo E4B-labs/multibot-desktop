@@ -59,8 +59,15 @@ function printSetupValues(plan) {
   let setup;
   try {
     setup = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    console.log("Server already set up; sign in with an existing profile.");
+  } catch (error) {
+    // The file is deleted the moment a profile claims the server; every other
+    // failure (unreadable, half-written, corrupt) is worth saying out loud.
+    if (error?.code === "ENOENT") console.log("Server already set up; sign in with an existing profile.");
+    else console.log(`Could not read ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (!setup.address || !setup.serverName || !setup.serverPassword) {
+    console.log(`${file} is incomplete — restart the server and read it again.`);
     return;
   }
   const rows = [["Address", setup.address], ["Name", setup.serverName], ["Password", setup.serverPassword]];

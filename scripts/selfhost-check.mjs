@@ -46,10 +46,14 @@ must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("pro
 // serwerem, do którego nikt nie wejdzie — plik z nimi jest 0600 i znika po
 // pierwszym profilu.
 must(printValues.includes("setup.json"), "value printer does not read setup.json");
-must(printValues.includes("server already set up"), "value printer has no message for a server with a profile");
+must(printValues.includes("already has a profile"), "value printer has no message for a server with a profile");
 must(linux.includes("print-setup-values.sh") && termux.includes("print-setup-values.sh"), "installers do not print the three values");
-must(entrypoint.includes("print-setup-values.sh"), "container never prints the three values to its log");
-must(windows.includes('join(plan.dataDir, "setup.json")'), "Windows installer does not read setup.json");
+// W kontenerze jest odwrotnie: `docker logs` zostaje na zawsze, więc hasło ma
+// tam NIE trafić — do logu idzie tylko ścieżka i komenda, która plik czyta.
+must(!entrypoint.includes("print-setup-values.sh"), "container would print the server password into its log");
+must(entrypoint.includes("setup.json") && entrypoint.includes("exec app cat"), "container never says where the three values are");
+must(windows.includes("dataDir:"), "Windows plan has no data dir to read setup.json from");
+must(windows.includes('"setup.json"'), "Windows installer does not read setup.json");
 // Termux odrzuca RUN_COMMAND z innej apki bez tej właściwości — bez niej
 // aplikacja nie zrestartuje serwera na tym telefonie.
 must(termux.includes("allow-external-apps=true"), "Termux installer does not enable RUN_COMMAND from the app");

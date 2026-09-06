@@ -4,9 +4,8 @@ set -euo pipefail
 export HOME="${HOME:-/data}"
 export OMB_HOST="${OMB_HOST:-0.0.0.0}"
 export OMB_PORT="${OMB_PORT:-8799}"
-# Container stdout is not a terminal, so the harness prints only a pointer to
-# setup.json — and nobody can `cat` a file in a container they just started.
-# The three values therefore go to `docker logs` once, on first boot only; the
-# helper is a no-op after the first profile claims the server.
-bash "$(dirname "$0")/print-setup-values.sh" 120 || true &
+# `docker logs` is a file somebody keeps forever, so the three values stay
+# out of it — the log gets the path and the one command that reads them.
+echo "[multibot] first boot writes address, server name and server password to $HOME/.openmausbot/setup.json (0600)"
+echo "[multibot] read them once with: docker compose -f docker-compose.selfhost.yml exec app cat $HOME/.openmausbot/setup.json"
 exec /app/scripts/start-multibot.sh

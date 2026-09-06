@@ -31,10 +31,10 @@ Serwer, do którego nikt jeszcze nie dołączył, sam sobie nadaje nazwę (slug 
 Dlatego wartości pokazują instalatory, po starcie usługi:
 
 - `install-termux.sh` i `install-linux.sh` czekają na `setup.json` (do 30 s) i drukują blok `Address / Name / Password / Fingerprint` przez `scripts/print-setup-values.sh`;
-- kontener nie ma terminala i nikt nie zajrzy do jego woluminu, więc `scripts/docker-entrypoint.sh` woła ten sam skrypt raz w tle — wartości są w `docker compose -f docker-compose.selfhost.yml logs app`;
+- kontener NIE dostaje ich do logu (ten zostaje na zawsze): `scripts/docker-entrypoint.sh` wypisuje tylko ścieżkę i komendę `docker compose -f docker-compose.selfhost.yml exec app cat /data/.openmausbot/setup.json`;
 - `install-server-windows.mjs` czyta ten sam plik po `waitForServer`; ta usługa stoi na pętli zwrotnej, więc jej adres to `https://127.0.0.1:8799` (do sieci wypuszcza ją dopiero `OMB_HOST=0.0.0.0` albo reverse proxy).
 
-Kończy się to jedną instrukcją: **wpisz te trzy wartości w MultiBot na dowolnym urządzeniu → `Sign in to a server`**. Gdy `setup.json` już nie ma, serwer ma właściciela — instalator mówi wtedy „server already set up; sign in with an existing profile", a hasło serwera rotuje właściciel z panelu.
+Kończy się to jedną instrukcją: **wpisz te trzy wartości w MultiBot na dowolnym urządzeniu → `Sign in to a server`**. Gdy `setup.json` nie ma, instalator drukuje sam adres i mówi, że albo serwer ma już profil (zaloguj się na niego), albo nie wystartował (sprawdź log usługi) — z zewnątrz jedno od drugiego nie do odróżnienia. Hasło serwera rotuje potem właściciel z panelu.
 
 ### Dołącz do serwera
 
@@ -82,11 +82,12 @@ Nowi klienci wysyłają `x-multibot-protocol: 2`, a WebSocket używa subprotocol
 Najważniejsze endpointy:
 
 - `GET /api/public/server` — status konfiguracji serwera;
-- `GET /api/setup/values` — trzy wartości z `setup.json` (tylko z pętli zwrotnej, tylko dopóki nie ma profilu);
+- `GET /api/setup/values` — trzy wartości z `setup.json`; wymaga nagłówka `x-multibot-setup: <setupToken>` z tego samego pliku (sama pętla zwrotna nie wystarcza, bo na Androidzie nie jest per-aplikacja) i odpowiada tylko dopóki nie ma profilu;
 - `POST /api/auth/join` — nazwa + hasło serwera w zamian za `joinGrant`;
 - `POST /api/auth/register` — nowe konto;
 - `POST /api/auth/login` — logowanie;
 - `POST /api/auth/recover` — odzyskanie konta kodem recovery;
+- `POST /api/auth/session` — wymiana tokenu dostępu na sesję cookie;
 - `POST /api/auth/logout` — unieważnienie bieżącej sesji;
 - `GET /api/profile` — własny profil;
 - `GET /api/server` — nazwa i publiczne dane serwera;

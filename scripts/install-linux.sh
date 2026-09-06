@@ -60,6 +60,7 @@ WorkingDirectory=$ROOT
 Environment=HOME=%h
 Environment=OMB_HOST=0.0.0.0
 Environment=OMB_PORT=8799
+Environment=OMB_DATA_DIR=${OMB_DATA_DIR:-$HOME/.openmausbot}
 ExecStart=$BASH_BIN $ROOT/scripts/start-multibot.sh
 Restart=always
 RestartSec=5
@@ -81,5 +82,5 @@ say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_
 if (( DRY_RUN )); then
   say "print the three values from \$HOME/.openmausbot/setup.json"
 else
-  bash "$ROOT/scripts/print-setup-values.sh" 30
+  bash "$ROOT/scripts/print-setup-values.sh" 30 || true
 fi
