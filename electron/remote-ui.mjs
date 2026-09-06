@@ -104,7 +104,10 @@ function serveStatic(res, file, method, remoteUrl) {
   if (file.endsWith("index.html")) {
     // Długość liczymy z treści PO wstrzyknięciu — rozmiar z dysku byłby o
     // flagę za krótki i przeglądarka ucięłaby koniec dokumentu.
-    const body = Buffer.from(readFileSync(file, "utf8").replace("</head>", remoteFlag(remoteUrl) + "</head>"));
+    // Podmiana FUNKCJĄ, nie łańcuchem: w łańcuchu zastępującym `$&`, ``$` ``,
+    // `$'` i `$$` są wzorcami, które `replace` rozwija PO naszym uciekaniu —
+    // adres z ``$` `` wklejałby w dokument wszystko, co stoi przed `</head>`.
+    const body = Buffer.from(readFileSync(file, "utf8").replace("</head>", () => remoteFlag(remoteUrl) + "</head>"));
     res.writeHead(200, { ...headers, "content-length": String(body.length) });
     res.end(method === "HEAD" ? undefined : body);
     return;
@@ -275,11 +278,16 @@ async function listenOnStablePort(server) {
  * poprzedniego trybu, nigdy do białego ekranu.
  */
 export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
+  // Adres sprawdzamy BEZWARUNKOWO i jako pierwszy. Wcześniej `new URL(…)`
+  // stało za `!pin &&`, więc z przypięciem w ręku nikt go nie oglądał i
+  // `undefined` jechało dalej — aż do `window.__MULTIBOT_HOST__="undefined"`
+  // w oknie, czyli ekranu logowania do serwera o nazwie „undefined".
+  const target = new URL(remoteUrl);
   // Fail closed: `rejectUnauthorized:false` bez przypięcia to zaufanie
   // czemukolwiek, co odpowie. Wolimy nie wstać (main.mjs degraduje wtedy do
   // ładowania prosto z hosta, gdzie certyfikat pilnuje `setCertificateVerifyProc`)
   // niż cicho proksować przez nieznajomego.
-  if (!pin && new URL(remoteUrl).protocol === "https:") {
+  if (!pin && target.protocol === "https:") {
     throw new Error("remote UI proxy for an https host requires a certificate pin");
   }
   if (!staticDir || !existsSync(join(staticDir, "index.html"))) return null;

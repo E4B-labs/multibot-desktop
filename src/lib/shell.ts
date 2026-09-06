@@ -203,7 +203,14 @@ export async function resolveHost(
   const joinHost = host?.ogb?.joinHost;
   if (joinHost) {
     const result = await joinHost(url, serverName, serverPassword);
-    return result.ok ? { ok: true, hasUsers: result.hasUsers, handedOff: true } : { ok: false, error: result.error ?? "unreachable" };
+    if (result.ok) return { ok: true, hasUsers: result.hasUsers, handedOff: true };
+    // `forbidden` znaczy jedno: ta strona przyszła PROSTO z hosta, bo lokalny
+    // origin nie wstał (electron/remote-ui.mjs → main.mjs degraduje do
+    // `loadURL` na adres hosta). Powłoka przyjmuje `hosts:join` tylko ze
+    // swojego originu, więc tutaj nie ma innej drogi — i nie trzeba jej: strona
+    // JEST w originie serwera, do którego się logujemy, więc join idzie zwykłym
+    // fetchem. Bez tego ekran logowania w drodze awaryjnej nie miał jak wejść.
+    if (result.error !== "forbidden") return { ok: false, error: result.error ?? "unreachable" };
   }
   return joinSameOrigin(serverName, serverPassword);
 }

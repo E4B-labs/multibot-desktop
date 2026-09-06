@@ -118,6 +118,16 @@ export function startingPoint(remoteHost: string, origin: string): { step: Onboa
   return remoteHost ? { step: "signin", address: remoteHost } : { step: "choice", address: origin };
 }
 
+/** Czy „Wstecz" prowadzi z tego ekranu POZA kreator. Tam, gdzie powłoka wybrała
+ * już hosta, `signin` jest ekranem PIERWSZYM (`startingPoint`), więc kroku
+ * wstecz nie ma: `previousStep` oddawało ekran wyboru, a na nim „Postaw serwer"
+ * woła `useLocalHost()` — czyli przycisk „Wstecz" cicho zdejmował komputer z
+ * hosta zdalnego. Jedyne sensowne wyjście to natywny wybór hosta, który
+ * activeId NIE przestawia. */
+export function backLeavesWizard(remoteHost: string, step: OnboardingStep): boolean {
+  return Boolean(remoteHost) && step === startingPoint(remoteHost, "").step;
+}
+
 export type AuthMode = "register" | "login" | "recover";
 
 /** Exactly what the working step sends. Pure so the things that must never
@@ -262,14 +272,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         if (!alive) return;
         setSetupPath(server.setupPath ?? null);
         setServerName((current) => current || server.name || "");
+        if (server.configured !== false) return;
         // A server nobody has claimed is one this device is meant to set up —
-        // there is nothing to sign in to yet, so skip the choice entirely. Not
-        // in remote mode: an unclaimed server at the OTHER end is somebody
-        // else's to set up, and this device has no business reading its values.
-        if (server.configured === false && !remoteWindow) {
-          setPath("setup");
-          setStep("credentials");
-        }
+        // there is nothing to sign in to yet, so skip the choice entirely. In
+        // remote mode the unclaimed server is at the OTHER end: this device has
+        // no business reading its values, but leaving the user on a sign-in that
+        // can only ever fail is worse than handing them the choice screen.
+        setPath("setup");
+        setStep(remoteWindow ? "choice" : "credentials");
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -410,8 +420,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   const field = (which: JoinErrorField) => (errorCode && joinErrorField(errorCode) === which ? "border-danger" : "");
   const note = addressNote(values, polish);
+  // Powłoka wybrała już hosta, więc za pierwszym ekranem stoi jej własny wybór
+  // hosta, nie ekran wyboru z kreatora — patrz `backLeavesWizard`.
+  const leavesWizard = backLeavesWizard(remoteHost, step);
   const goBack = () => {
     setErrorCode(null);
+    if (leavesWizard) {
+      void window.ogb?.showHostPicker?.();
+      return;
+    }
     const previous = previousStep(path, step);
     // `installing` only exists in the desktop shell; a browser walking back
     // from the three values has the choice screen behind it.
@@ -426,7 +443,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-app py-6">
       <div role="dialog" aria-modal="true" aria-label={polish ? "Konfiguracja MultiBota" : "MultiBot setup"} className="mx-4 flex w-full max-w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
-        {["credentials", "signin", "profileKind", "profile", "recover"].includes(step) && backLink}
+        {["credentials", "signin", "profileKind", "profile", "recover"].includes(step) &&
+          // Przycisk bez dokąd: powłoka bez natywnego wyboru hosta nie ma dla
+          // tego ekranu żadnego „wstecz", a martwy przycisk jest gorszy niż brak.
+          (!leavesWizard || Boolean(window.ogb?.showHostPicker)) &&
+          backLink}
 
         {step === "choice" && (
           <div className="flex flex-col">

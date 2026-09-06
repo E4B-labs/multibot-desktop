@@ -67,12 +67,46 @@ export function mergeRemoteHost(hosts, host) {
   return [merged, ...hosts.filter((h) => !sameOrigin(h.url, host.url))];
 }
 
+/** Gdzie ma wskazywać `activeId` po `mergeRemoteHost`. Scalanie KASUJE
+ * pozostałe rekordy o tym samym originie, więc activeId wskazujący na któryś z
+ * nich zawisa w próżni — a `resolveActiveTarget` cicho wraca wtedy na tryb
+ * lokalny, czyli udane logowanie wygląda jak wyrzucenie na ekran wyboru.
+ * Przepinamy go na rekord, który tamte wchłonął (`mergeRemoteHost` stawia go na
+ * pozycji 0). „local" i wskazanie na wciąż istniejący rekord zostają nietknięte:
+ * dodanie hosta nie ma prawa go samo aktywować. */
+export function activeIdAfterMerge(activeId, hosts) {
+  const previous = activeId ?? "local";
+  if (previous === "local" || hosts.some((h) => h.id === previous)) return previous;
+  return hosts[0].id;
+}
+
+/** Adres bez fragmentu, w postaci kanonicznej. Przez `URL`, bo porównujemy to,
+ * co ZBUDOWALIŚMY, z tym, co oddaje `webContents.getURL()` — a przeglądarka
+ * zwraca nazwę hosta małymi literami i z domyślnym portem po swojemu. Surowe
+ * `===` mówiło wtedy „inny dokument" i skok przez `about:blank` nie następował,
+ * więc grant w `#join=` nie był nigdy odczytany. */
+function documentUrl(raw) {
+  const text = String(raw ?? "");
+  try {
+    return new URL(text).href.split("#")[0];
+  } catch {
+    return text.split("#")[0];
+  }
+}
+
 /** Czy oba adresy wskazują ten sam DOKUMENT, czyli różnią się najwyżej
  * fragmentem. Ponowne wejście na tego samego hosta zmienia w adresie tylko
  * `#join=<grant>`, a taka nawigacja NIE przeładowuje strony — grant nigdy nie
  * zostaje odczytany. Pusty adres (świeże okno) to nie jest ten sam dokument. */
 export function sameDocument(a, b) {
-  return Boolean(a) && String(a).split("#")[0] === String(b).split("#")[0];
+  return Boolean(a) && documentUrl(a) === documentUrl(b);
+}
+
+/** Czy lokalny origin proxy trzyma magazyn INNEGO hosta, niż ten, na który
+ * właśnie wchodzimy — czyli czy trzeba go wyczyścić. Reguła stoi tu, a nie w
+ * hosts.mjs, żeby dało się ją sprawdzić testem bez kontekstu Electrona. */
+export function uiOriginChanged(config, remoteUrl) {
+  return (config?.uiOriginHost ?? null) !== remoteUrl;
 }
 
 export function removeRemoteHost(hosts, id) {
@@ -86,7 +120,13 @@ export function removeRemoteHost(hosts, id) {
 export function resolveActiveTarget(config) {
   if (!config || !config.activeId || config.activeId === "local") return { mode: "local" };
   const host = (config.hosts ?? []).find((h) => h.id === config.activeId);
-  if (!host) return { mode: "local" };
+  if (!host) {
+    // Cichy powrót na tryb lokalny wygląda w rękach użytkownika jak „apka
+    // zapomniała mój serwer" — zostawiamy po tym ślad w logu, żeby dało się to
+    // odróżnić od świadomego przełączenia na to urządzenie.
+    console.warn("[multibot] zapisany host zniknął z listy, wracam na tryb lokalny:", config.activeId);
+    return { mode: "local" };
+  }
   return { mode: "remote", host };
 }
 
