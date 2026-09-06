@@ -10,6 +10,7 @@ import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { parseSchedule, type PresetOrUnknown } from "@/lib/routineSchedule";
 import { AttachmentCard } from "./AttachmentCard";
+import { randomId } from "@/lib/shell";
 
 // multibot: szybki przełącznik dostępu w composerze (port z OpenMausBot #442,
 // tam PermissionModeSelector) — te same endpointy co EngineAutonomy.
@@ -684,7 +685,7 @@ export function Composer({ bot, onSend }: { bot: Bot; onSend?: (text: string) =>
     setAttachments((current) => [...current, ...incoming.map((file) => {
       const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
       if (preview) previewUrls.current.add(preview);
-      return { id: crypto.randomUUID(), file, preview, status: "ready" as const };
+      return { id: randomId(), file, preview, status: "ready" as const };
     })]);
     setAttachOpen(false);
   }, [attachments.length]);

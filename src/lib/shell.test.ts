@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deviceId, hasCustomWindowControls, isShellMessage, joinLocalHarness, registerPushViaShell, resolveHost, shellPost } from "./shell";
+import { deviceId, randomId, hasCustomWindowControls, isShellMessage, joinLocalHarness, registerPushViaShell, resolveHost, shellPost } from "./shell";
 
 describe("hasCustomWindowControls", () => {
   it("wykrywa mostek wystawiony przez preload okna bezramkowego", () => {
@@ -133,6 +133,8 @@ describe("deviceId", () => {
       const id = deviceId(storage);
       expect(id).toMatch(/^[0-9a-f]{32}$/);
       expect(deviceId(storage)).toBe(id);
+      // ten sam pomocnik daje id załącznika w kompozytorze
+      expect(randomId()).toMatch(/^[0-9a-f]{32}$/);
     } finally {
       delete (crypto as { randomUUID?: unknown }).randomUUID;
     }
