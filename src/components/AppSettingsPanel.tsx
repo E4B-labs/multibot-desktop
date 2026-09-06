@@ -1,10 +1,11 @@
 // App-level settings screen: who you are + credentials
 // shared by all bots. Per-bot settings (name, persona, model, computer)
 // live in SettingsPanel; contextual Box-token entry stays in ComputerPanel.
-import { ArrowLeft, Copy, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
 // multibot: ikony szyny sekcji przerysowane z lucide, żeby dało się animować
 // ich części na kliknięcie (suwaki jeżdżą, strzałki się kręcą, klucz dokręca).
-import { RefreshTabIcon, SlidersTabIcon, WrenchTabIcon } from "./SettingsTabIcons";
+import { RefreshTabIcon, ShieldTabIcon, SlidersTabIcon, WrenchTabIcon } from "./SettingsTabIcons";
+import { AdminPanel } from "./AdminPanel";
 // multibot: piąta kopia tej samej linii (App.tsx, ChatView.tsx, Onboarding.tsx,
 // Sidebar.tsx). Tu decyduje o jednym: czy pokazać przełącznik akceleracji.
 const isElectron = navigator.userAgent.includes("Electron");
@@ -53,7 +54,7 @@ function bytes(value: number | undefined): string {
   return `${(value / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function MachineResources() {
+export function MachineResources() {
   const polish = useLanguage() === "pl";
   const [resources, setResources] = useState<DeviceResources | null>(null);
   useEffect(() => {
@@ -139,7 +140,7 @@ function ProfileFields() {
   );
 }
 
-export function AccessTokenSettings() {
+export function AccountSessions() {
   const polish = useLanguage() === "pl";
   const [account, setAccount] = useState<any>(null);
   const [sessions, setSessions] = useState<Array<{ id: string; deviceName: string; lastSeenAt: number }>>([]);
@@ -172,126 +173,6 @@ export function AccessTokenSettings() {
         <button type="button" onClick={() => void logout(false)} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">{polish ? "Wyloguj" : "Log out"}</button>
         <button type="button" onClick={() => void logout(true)} className="rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10">{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
       </div>
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-    </div>
-  );
-}
-
-/** Same rule as `isServerName` in server/identity.ts. Duplicated rather than
- * imported: that module pulls in node:sqlite and has no business in the bundle. */
-function isServerName(value: string): boolean {
-  return /^[a-z0-9]([a-z0-9-]{1,30})[a-z0-9]$/.test(value);
-}
-
-export function WorkspaceAccessSettings() {
-  const polish = useLanguage() === "pl";
-  const [workspace, setWorkspace] = useState<{
-    name?: string;
-    id?: string;
-    currentUser?: { userId: string; username: string; displayName: string; role: "owner" | "member" } | null;
-    members?: Array<{ userId: string; username: string; displayName: string; role: "owner" | "member" }>;
-  } | null>(null);
-  const [serverName, setServerName] = useState("");
-  const [serverPassword, setServerPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    void api("/api/workspace")
-      .then((value) => { if (!alive) return; setWorkspace(value); setServerName(value.name ?? ""); })
-      .catch((reason) => alive && setError(reason instanceof Error ? reason.message : String(reason)));
-    return () => { alive = false; };
-  }, []);
-
-  const saveServer = async () => {
-    // The name is one of the three values somebody types into another device,
-    // so it has to be a slug — the same rule the server enforces. Slugify what
-    // was typed (the helper this file already has), and only complain when even
-    // that cannot be one.
-    const name = slug(serverName).slice(0, 32).replace(/^-+|-+$/g, "");
-    if (!isServerName(name)) {
-      setError(polish
-        ? "Nazwa serwera: 3–32 znaki, małe litery, cyfry i myślniki (nie na początku ani na końcu)."
-        : "Server name: 3–32 characters, lowercase letters, digits and dashes (not at either end).");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const value = await api("/api/server", { method: "PATCH", body: JSON.stringify({ name }) });
-      setServerName(value.name ?? name);
-      setWorkspace((current) => current ? { ...current, name: value.name } : current);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Rotating shows the new password once — the server only keeps its hash, so
-   * there is no second chance to read it. */
-  const rotatePassword = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const value = await api("/api/server/password", { method: "POST", body: "{}" });
-      setServerPassword(String(value.serverPassword ?? ""));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const members = workspace?.members ?? [];
-  return (
-    <div className="mt-4 rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">{polish ? "Wspólny serwer" : "Shared server"}</div>
-      <div className="mt-0.5 text-[13px] text-ink-secondary">
-        {polish ? "Każda osoba ma własne konto. Boty i sekcje są wspólne, prywatne boty mają osobne ACL." : "Each person has an account. Bots and sections are shared; private bots use their own ACL."}
-      </div>
-      {workspace?.currentUser && (
-        <div className="mt-3 rounded-lg bg-inset px-3 py-2 text-[12px] text-ink-secondary">
-          {workspace.currentUser.displayName || workspace.currentUser.username}
-          <span className="ml-2 text-ink">· {workspace.currentUser.role}</span>
-        </div>
-      )}
-      {members.length > 0 && (
-        <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">
-          {members.map((member) => (
-            <div key={member.userId} className="flex items-center justify-between gap-2">
-              <span className="truncate">{member.displayName || member.username}</span>
-              <span className="shrink-0">{member.role}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {workspace?.currentUser?.role === "owner" && (
-        <div className="mt-3 space-y-2">
-          <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera (np. brave-otter)" : "Server name (e.g. brave-otter)"} className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink outline-none" />
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => void saveServer()} disabled={busy} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-              {busy ? polish ? "Zapisywanie…" : "Saving…" : polish ? "Zapisz nazwę serwera" : "Save server name"}
-            </button>
-            <button type="button" onClick={() => void rotatePassword()} disabled={busy} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-              {polish ? "Nowe hasło serwera" : "New server password"}
-            </button>
-          </div>
-          {serverPassword && (
-            <div className="rounded-lg bg-inset px-3 py-2 text-[12px] text-ink-secondary">
-              <div>{polish ? "Nowe hasło serwera — pokazujemy je tylko raz:" : "New server password — shown only once:"}</div>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="select-all break-all text-[13px] text-ink">{serverPassword}</code>
-                <button type="button" title={polish ? "Kopiuj" : "Copy"} onClick={() => void navigator.clipboard?.writeText(serverPassword)} className="shrink-0 text-ink-secondary hover:text-ink">
-                  <Copy size={12} />
-                </button>
-              </div>
-              <div className="mt-1">{polish ? "Stare hasło już nie działa — urządzenia dołączają nowym." : "The old password no longer works; devices join with this one."}</div>
-            </div>
-          )}
-        </div>
-      )}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
@@ -958,6 +839,14 @@ const settingsTabs = [
     descriptionEn: "Access, models, local service, and diagnostics.",
   },
   {
+    id: "admin",
+    Icon: ShieldTabIcon,
+    pl: "Admin",
+    en: "Admin",
+    descriptionPl: "Użytkownicy, obciążenie, boty i czas odpowiedzi.",
+    descriptionEn: "Users, load, bots, and response times.",
+  },
+  {
     id: "update",
     Icon: RefreshTabIcon,
     pl: "Aktualizacje",
@@ -967,6 +856,16 @@ const settingsTabs = [
   },
 ] as const;
 type AppSettingsTab = (typeof settingsTabs)[number]["id"];
+
+/** "loading" and "unknown" both hide the admin tab, but they are NOT the same
+ * thing: unknown means the role lookup failed, and the panel says so rather
+ * than quietly treating an owner as a member and hiding their own tools with
+ * no explanation. */
+export type SettingsRole = "loading" | "owner" | "member" | "unknown";
+
+export function visibleSettingsTabs(role: SettingsRole): typeof settingsTabs[number][] {
+  return settingsTabs.filter((item) => item.id !== "admin" || role === "owner");
+}
 
 export function AppSettingsPanel() {
   const { dispatch } = useStore();
@@ -978,7 +877,23 @@ export function AppSettingsPanel() {
   // nie miałaby czego odtworzyć. Numer idzie do `key`, co przemontowuje
   // warstwę błysku i puszcza ją od nowa.
   const [press, setPress] = useState<{ tab: AppSettingsTab; nth: number }>({ tab: "general", nth: 0 });
-  const currentTab = settingsTabs.find((item) => item.id === tab) ?? settingsTabs[0];
+  // Admin is the owner's tab and nobody else's — a member seeing an empty
+  // "Users" table would be a promise the server refuses to keep anyway.
+  const [role, setRole] = useState<SettingsRole>("loading");
+  useEffect(() => {
+    let alive = true;
+    void authFetch("/api/auth/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value) => {
+        if (!alive) return;
+        const found = value?.user?.role;
+        setRole(found === "owner" || found === "member" ? found : "unknown");
+      })
+      .catch(() => alive && setRole("unknown"));
+    return () => { alive = false; };
+  }, []);
+  const visibleTabs = visibleSettingsTabs(role);
+  const currentTab = visibleTabs.find((item) => item.id === tab) ?? visibleTabs[0];
 
   return (
     <main className="app-settings-screen animate-panel-in flex min-h-0 min-w-0 flex-1 flex-col bg-app">
@@ -1007,7 +922,7 @@ export function AppSettingsPanel() {
           aria-label={polish ? "Sekcje ustawień" : "Settings sections"}
           className="flex w-[72px] shrink-0 flex-col items-center gap-2 border-r border-hairline/40 bg-panel px-2 py-5"
         >
-          {settingsTabs.map(({ id, Icon, pl, en }) => {
+          {visibleTabs.map(({ id, Icon, pl, en }) => {
             const label = polish ? pl : en;
             const active = tab === id;
             return (
@@ -1084,6 +999,14 @@ export function AppSettingsPanel() {
                 <DesktopNotificationsRow polish={polish} />
                 <HardwareAccelerationRow polish={polish} />
               </div>
+              {role === "unknown" && (
+                <div className="mt-2 rounded-xl bg-card p-4 text-[12.5px] text-ink-secondary">
+                  {polish
+                    ? "Nie udało się odczytać Twojej roli na tym serwerze, więc narzędzia właściciela są ukryte. Odśwież okno, gdy serwer wróci."
+                    : "We could not read your role on this server, so the owner's tools are hidden. Reload once the server answers again."}
+                </div>
+              )}
+              <AccountSessions />
               <BotSettingsCard polish={polish} />
               <div className="mt-4 rounded-xl bg-card p-4">
                 <div className="text-[15px] font-medium text-ink">{polish ? "Skórka" : "Skin"}</div>
@@ -1116,6 +1039,8 @@ export function AppSettingsPanel() {
               </div>
             </>
           )}
+
+          {tab === "admin" && role === "owner" && <AdminPanel />}
 
           {tab === "update" && (
             <UpdatesRow />

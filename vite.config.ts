@@ -9,7 +9,7 @@ export default defineConfig({
     environment: "node",
     // multibot: electron/ ma własne testy node:test (remote-ui, updater) —
     // do vitest wchodzą tylko nowe moduły desktopowe pisane pod ten runner
-    include: ["server/**/*.test.ts", "src/**/*.test.ts", "electron/single-instance.test.mjs", "electron/window-state.test.mjs", "electron/diagnostics.test.mjs", "electron/host-resolve.test.mjs", "electron/tls-pin.test.mjs", "electron/host-probe.test.mjs", "electron/notifications.test.mjs"],
+    include: ["server/**/*.test.ts", "src/**/*.test.ts", "electron/single-instance.test.mjs", "electron/window-state.test.mjs", "electron/diagnostics.test.mjs", "electron/host-resolve.test.mjs", "electron/tls-pin.test.mjs", "electron/host-probe.test.mjs", "electron/setup-values.test.mjs", "electron/notifications.test.mjs"],
     setupFiles: ["server/testing/setup.ts"],
     // Suita stawia PRAWDZIWY harness, a ten od 0.4.0 słucha po HTTPS z
     // certyfikatem z własnego podpisu. Testy są klientem tego certyfikatu —

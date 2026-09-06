@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
-import { emailGateDone, initAnalytics } from "@/lib/analytics";
+import { initAnalytics } from "@/lib/analytics";
 // multibot: trzecia kopia tej samej linii (Onboarding.tsx, Sidebar.tsx) —
 // zostaje lokalnie, bo wspólny moduł na jedno wyrażenie to więcej pliku niż
 // treści. ponytail: wyciągnąć do `src/lib/`, gdyby doszła czwarta.
@@ -34,161 +34,10 @@ import { hasCustomWindowControls } from "@/lib/shell";
 const frameless = hasCustomWindowControls();
 // multibot: Cmd/Ctrl+K paleta komend
 import { CmdK } from "@/components/CmdK";
-import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
+import { authEventName, clearAuthToken, getAuthToken, refreshAccessToken } from "@/lib/auth";
+import { registerPushViaShell, shellPost } from "@/lib/shell";
 import { useLanguage } from "@/lib/language";
 import { unreadConversationCount } from "@/lib/unread";
-
-export type LoginMode = "login" | "register" | "host" | "recover";
-
-/** Nagłówek ekranu logowania idzie z trybu, nie ze stanu serwera. Kiedy szedł
- * ze `configured`, ekran „dołącz do istniejącego" dalej miał na sobie „Utwórz
- * serwer" — użytkownik nie widział, że w ogóle przełączył formularz. */
-export function loginTitle(mode: LoginMode, polish: boolean): string {
-  if (mode === "host") return polish ? "Utwórz serwer" : "Create server";
-  if (mode === "register") return polish ? "Dołącz do istniejącego serwera" : "Join existing server";
-  if (mode === "recover") return polish ? "Odzyskaj konto" : "Recover account";
-  return polish ? "Zaloguj się do serwera" : "Sign in to server";
-}
-
-/** Przełącznik trybu w stopce — też z trybu, nie ze stanu serwera. Wcześniej
- * warunkiem było samo `!configured`, więc po kliknięciu „Dołącz do
- * istniejącego" ten sam napis zostawał na ekranie i nie prowadził nigdzie. */
-export function loginSwitch(
-  mode: LoginMode,
-  configured: boolean,
-  polish: boolean,
-): { next: LoginMode; label: string } | null {
-  if (!configured)
-    return mode === "host"
-      ? { next: "register", label: polish ? "Dołącz do istniejącego serwera" : "Join existing server" }
-      : { next: "host", label: polish ? "Utwórz serwer" : "Create server" };
-  return mode === "login"
-    ? { next: "register", label: polish ? "Utwórz profil" : "Create profile" }
-    : { next: "login", label: polish ? "Mam już profil" : "I have an account" };
-}
-
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
-  const polish = useLanguage() === "pl";
-  type Mode = LoginMode;
-  type ServerInfo = { configured: boolean; name: string; serverId: string };
-  type Status = { server?: ServerInfo };
-  const [status, setStatus] = useState<Status | null>(null);
-  const [mode, setMode] = useState<Mode>("login");
-  const [serverName, setServerName] = useState("");
-  const [serverPassword, setServerPassword] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [recoveryCode, setRecoveryCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // Read once, on mount: `takeJoinGrant` also clears it out of the URL.
-  const [shellGrant, setShellGrant] = useState(takeJoinGrant);
-
-  useEffect(() => {
-    let alive = true;
-    // `/api/auth/status` skasowane razem ze starymi szynami logowania; stan
-    // serwera czytamy z jedynej publicznej trasy. PR 7 przepisuje ten ekran.
-    void fetch("/api/public/server")
-      .then((response) => response.json() as Promise<ServerInfo>)
-      .then((server) => {
-        if (!alive) return;
-        setStatus({ server });
-        // The name is public and the user has to send it back with the join, so
-        // prefill it instead of making them retype what is on the screen.
-        setServerName((previous) => previous || server.name || "");
-        if (!server.configured) setMode("host");
-      })
-      .catch(() => setError(polish ? "Nie można odczytać stanu serwera." : "Could not read server status."));
-    return () => { alive = false; };
-  }, [polish]);
-
-  const submit = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // 0.4.0: the server sets itself up on its first boot, so there is nothing
-      // to create here. Every profile call first proves the device knows the
-      // server name and password, and spends the 5-minute grant that proof
-      // returns. PR 7 replaces this screen; this keeps it working until then.
-      const deviceName = navigator.userAgent.slice(0, 80);
-      const profileCall = (joinGrant: string) => {
-        if (mode === "recover") return authFetch("/api/auth/recover", { method: "POST", body: JSON.stringify({ username, recoveryCode, newPassword: password, joinGrant, deviceName }) });
-        if (mode === "login") return authFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, joinGrant, deviceName }) });
-        return authFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password, displayName, joinGrant, deviceName }) });
-      };
-      const freshGrant = async (): Promise<string> => {
-        const joined = await authFetch("/api/auth/join", { method: "POST", body: JSON.stringify({ serverName: serverName.trim(), serverPassword }) });
-        const grant = await joined.json().catch(() => ({})) as { joinGrant?: string; error?: string };
-        if (!joined.ok || !grant.joinGrant) throw new Error(grant.error ?? `Join failed (${joined.status})`);
-        return grant.joinGrant;
-      };
-      // The grant the desktop shell handed over is a hint, not the only way in:
-      // it is single-use and five minutes old at most, so a reload or a second
-      // attempt finds it spent. A typed server password always wins over it.
-      const usingShellGrant = Boolean(shellGrant) && !serverPassword;
-      let response = await profileCall(usingShellGrant ? shellGrant : await freshGrant());
-      if (usingShellGrant && response.status === 401) {
-        const failed = await response.clone().json().catch(() => ({})) as { error?: string };
-        if (failed.error === "join_grant_invalid") {
-          setShellGrant("");
-          response = await profileCall(await freshGrant());
-        }
-      }
-      const body = await response.json().catch(() => ({})) as { accessToken?: string; recoveryCode?: string; error?: string };
-      if (!response.ok || !body.accessToken) throw new Error(body.error ?? `Authentication failed (${response.status})`);
-      setV2AuthToken(body.accessToken);
-      if (body.recoveryCode) window.alert(`${polish ? "Zapisz recovery code. Pokażemy go tylko raz:" : "Save recovery code. It is shown once:"}\n\n${body.recoveryCode}`);
-      onLogin();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const configured = status?.server?.configured ?? false;
-  const field = "mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[14px] text-ink outline-none focus:border-hairline";
-  // „Wstecz" ma sens wyłącznie w powłoce desktopowej, gdzie otwiera wybór
-  // hosta. W karcie przeglądarki nie ma dokąd wracać (ekran logowania jest
-  // pierwszym wpisem historii), więc `history.back()` był po prostu niczym.
-  // Wołało to kiedyś `useLocalHost`, czyli powrót z hosta zdalnego przestawiał
-  // komputer na lokalny harness — teraz tylko pokazuje wybór, a host zmienia
-  // się dopiero po jawnym kliknięciu w tym oknie.
-  const backToHostPicker = window.ogb?.showHostPicker;
-  const switchLink = loginSwitch(mode, configured, polish);
-  return (
-    <main className="multibot-login flex h-full min-h-screen items-center justify-center bg-app px-5 text-ink">
-      <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="w-full max-w-sm rounded-2xl bg-card p-6 shadow-xl">
-        {backToHostPicker && <button type="button" onClick={() => void backToHostPicker()} className="mb-4 text-left text-[12px] text-ink-secondary hover:text-ink">
-          ← {polish ? "Wstecz" : "Back"}
-        </button>}
-        <h1 className="text-[18px] font-semibold">{loginTitle(mode, polish)}</h1>
-        <p className="mt-1 text-[13px] text-ink-secondary">{status?.server?.name ?? (polish ? "Bezpieczny wspólny workspace" : "Secure shared workspace")}</p>
-        {/* Name and password are needed by every mode now: they are the two
-            values `/api/auth/join` checks before a profile call is allowed. */}
-        <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} aria-label="Server name" className={field} />
-        {(mode === "register" || mode === "host") && <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={polish ? "Nazwa profilu" : "Display name"} aria-label="Display name" className={field} />}
-        <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" aria-label="Username" autoComplete="username" className={field} />
-        <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "recover" ? polish ? "Nowe hasło profilu" : "New profile password" : polish ? "Hasło profilu" : "Profile password"} aria-label="Profile password" autoComplete={mode === "login" ? "current-password" : "new-password"} className={field} />
-        <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Hasło serwera" : "Server password"} aria-label="Server password" autoComplete="off" className={field} />
-        {mode === "recover" && <input value={recoveryCode} onChange={(event) => setRecoveryCode(event.target.value)} placeholder={polish ? "Jednorazowy recovery code" : "One-time recovery code"} aria-label="Recovery code" autoComplete="one-time-code" className={field} />}
-        {/* rejestracja na serwerze bez właściciela kończy się 409 „server setup
-            required" (server/identity.ts) — nie ma tu żadnego adresu obcego
-            hosta, wszystko idzie na to samo pochodzenie. */}
-        {mode === "register" && !configured && <p className="mt-2 text-[12px] text-ink-secondary">{polish ? "Ten serwer nie ma jeszcze właściciela — najpierw trzeba go utworzyć. Do cudzego serwera dołączasz, otwierając jego adres." : "This server has no owner yet — it has to be created first. You join someone else's server by opening its address."}</p>}
-        <button type="submit" disabled={busy} className="mt-3 w-full rounded-lg bg-accent py-2.5 text-[13px] font-medium text-white disabled:opacity-50">
-          {busy ? (polish ? "Praca…" : "Working…") : mode === "host" ? polish ? "Utwórz serwer i profil" : "Create server and profile" : mode === "register" ? polish ? "Dołącz i utwórz profil" : "Join and create profile" : mode === "recover" ? polish ? "Odzyskaj konto" : "Recover account" : polish ? "Zaloguj się" : "Sign in"}
-        </button>
-        <div className="mt-4 flex flex-wrap gap-2 text-[12px] text-ink-secondary">
-          {switchLink && <button type="button" onClick={() => setMode(switchLink.next)} className="hover:text-ink">{switchLink.label}</button>}
-          {configured && mode !== "recover" && <button type="button" onClick={() => setMode("recover")} className="hover:text-ink">{polish ? "Odzyskaj" : "Recover"}</button>}
-        </div>
-        {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
-      </form>
-    </main>
-  );
-}
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -214,8 +63,7 @@ function Shell() {
   // …a powłoka musi wiedzieć, który bot jest na ekranie, żeby nie wyświetlać
   // powiadomienia o bocie, na który użytkownik właśnie patrzy.
   useEffect(() => {
-    const rn = (window as unknown as { ReactNativeWebView?: { postMessage(m: string): void } }).ReactNativeWebView;
-    if (rn && bot) rn.postMessage(JSON.stringify({ type: "bot.selected", botId: bot.id }));
+    if (bot) shellPost({ type: "bot.selected", botId: bot.id });
   }, [bot?.id]);
   // multibot: nieprzeczytane rozmowy → badge na pasku zadań (Electron only).
   useEffect(() => {
@@ -288,30 +136,11 @@ function Shell() {
 }
 
 export default function App() {
-  // multibot: onboarding pokazujemy, dopóki użytkownik go nie domknął. Token w
-  // localStorage traktujemy jak dowód konfiguracji TYLKO w przeglądarce: tam
-  // musiał go skądś wziąć, więc po deployu i reloadzie gate nie wraca.
+  // Onboarding IS the sign-in screen now (src/components/Onboarding.tsx): the
+  // first thing every device shows is "set up a server" or "sign in to one",
+  // and reaching the app at all means a profile on some server accepted us.
+  // Nothing local — no token, no analytics gate — decides that any more.
   //
-  // Pod Electronem token nie dowodzi niczego — spakowana apka wstawia własny
-  // przez fragment adresu przy PIERWSZYM starcie. Zliczanie go jako
-  // konfiguracji kasowało onboarding, zanim się pokazał, a razem z nim jedyne
-  // wejście do konfiguracji serwera (kreator w `Onboarding`). Efekt: świeża
-  // instalacja desktopowa wchodziła od razu do aplikacji, z pominięciem
-  // całego kreatora.
-  // …ALE ten wyjątek dotyczy tylko Electrona z LOKALNYM serwerem. W trybie
-  // zdalnym (C2) okno ładuje interfejs prosto z cudzego hosta, a token wjeżdża
-  // fragmentem adresu — Electron jest wtedy tylko widzem i onboarding „postaw
-  // serwer" nie ma sensu; bez tego rozróżnienia panel wyboru wyskakiwał w
-  // aplikacji desktopowej przy każdym połączeniu ze zdalnym serwerem.
-  // Sam hostname już nie wystarcza: w trybie zdalnym apka podnosi u siebie
-  // proxy na 127.0.0.1 i to z niego bierze interfejs (electron/remote-ui.mjs),
-  // więc oba tryby wyglądają stąd tak samo i panel „postaw serwer" wracał w
-  // trybie zdalnym po aktualizacji. Rozstrzyga flaga, którą proxy wstrzykuje
-  // do `index.html` — lokalny harness nigdy jej nie wysyła. Hostname ZOSTAJE
-  // jako drugi warunek, bo gdy proxy nie wstanie, main.mjs celowo ładuje
-  // interfejs prosto z hosta: flagi wtedy nie ma, ale adres jest zdalny.
-  const configured = emailGateDone() || Boolean(getAuthToken());
-  const [gated, setGated] = useState(() => !configured);
   // Ciasteczko sesji (`mb_v2_session`) siedzi w HttpOnly i żyje dłużej niż
   // 15-minutowy token dostępu, więc pusty localStorage to jeszcze nie
   // wylogowanie: tryb prywatny, wyczyszczone dane albo jedno błędne 401 i
@@ -333,18 +162,21 @@ export default function App() {
     return () => window.removeEventListener(authEventName(), onAuthRequired);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sonda sesji leci raz, przy montowaniu
   }, []);
-  // Zalogowanie gasi też bramkę: skoro serwer przyjął token (albo ciasteczko,
-  // albo Google), to istnieje i jest skonfigurowany — onboarding „postaw
-  // serwer" nie ma po nim sensu. Bez tego świeża przeglądarka liczyła
-  // `configured` PRZED zalogowaniem (token jeszcze pusty), więc zaraz po
-  // wpisaniu tokenu nad aplikacją wyskakiwał drugi panel logowania.
+  // Push na telefonie: powłoka mobilna przestała rejestrować go sama (PR #30 w
+  // multibot-mobile). Ona ma zgodę systemową i token Expo, my mamy sesję, która
+  // mówi, CZYJE to urządzenie — więc pytamy ją o token i sami go zgłaszamy.
+  // Raz na start aplikacji: to jedna wiadomość, a przy okazji ponawia
+  // rejestrację, którą serwer odrzucił, i łapie token obrócony przez system.
+  useEffect(() => {
+    if (!authenticated) return;
+    void registerPushViaShell();
+  }, [authenticated]);
   // Pusty ekran, a nie mignięcie formularzem, gdy sesja właśnie się potwierdza.
   if (checkingSession) return null;
-  if (!authenticated) return <LoginScreen onLogin={() => { setAuthenticated(true); setGated(false); }} />;
+  if (!authenticated) return <Onboarding onDone={() => setAuthenticated(true)} />;
   return (
     <StoreProvider>
       <Shell />
-      {gated && <Onboarding onDone={() => setGated(false)} />}
     </StoreProvider>
   );
 }

@@ -64,6 +64,21 @@ export function setV2AuthToken(token: string): void {
   }
 }
 
+/** A native shell's WebView cannot keep the `mb_v2_session` cookie, so the
+ * server hands it the session token in the body instead (`x-multibot-client:
+ * native`) and it lives here. Without it a native client that loses its
+ * 15-minute access token has nothing left to refresh with — which is exactly
+ * the silent logout 0.4.0 exists to end. */
+export function setSessionToken(token: string): void {
+  try {
+    const value = token.trim();
+    if (value) localStorage.setItem(SESSION_KEY, value);
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* storage can be disabled in private browsing */
+  }
+}
+
 function storedSessionToken(): string {
   try {
     return localStorage.getItem(SESSION_KEY) ?? "";

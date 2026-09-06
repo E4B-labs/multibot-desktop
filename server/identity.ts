@@ -383,6 +383,14 @@ export class IdentityStore {
     return values;
   }
 
+  /** Where the pending setup values live. A PATH, never the values: a browser
+   * tab cannot read a file and cannot call `/api/setup/values` either (that one
+   * is gated on the token inside the file), so the only useful thing to hand it
+   * is which file to open on the server device. */
+  setupFilePath(): string {
+    return this.setupFile;
+  }
+
   /** Why setup.json exists at all: the generated password is only ever stored
    * as a hash, so the setup screen has to read it back from here. The token
    * makes "can read setup.json" the actual condition. */

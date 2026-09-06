@@ -27,18 +27,3 @@ export function track(event: string, props?: Record<string, unknown>) {
   if (!ready) return;
   posthog.capture(event, props);
 }
-
-export function identifyEmail(email: string) {
-  if (!ready) return;
-  posthog.identify(email, { email });
-  posthog.capture("email_submitted");
-}
-
-const GATE_KEY = "multibot-email-gate";
-export function emailGateDone(): boolean {
-  return Boolean(localStorage.getItem(GATE_KEY));
-}
-
-export function setEmailGateDone(status: "submitted" | "skipped") {
-  localStorage.setItem(GATE_KEY, status);
-}

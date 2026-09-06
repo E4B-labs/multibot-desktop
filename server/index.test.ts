@@ -21,6 +21,7 @@ let serverName = "";
 let serverPassword = "";
 let setupAddress = "";
 let setupFingerprint: string | null = null;
+let setupAddressFacts: { kind: string | null; verified: boolean; mapping: string | undefined };
 let setupValuesBehindProxy = 0;
 let setupValuesWithoutToken = 0;
 
@@ -154,7 +155,8 @@ beforeAll(async () => {
   setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
   const setup = await fetch(`${BASE}/api/setup/values`, { headers: withToken });
   if (setup.status !== 200) throw new Error(`setup values unavailable (${setup.status}): ${await setup.text()}`);
-  const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[]; tlsFingerprint: string | null };
+  const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[]; tlsFingerprint: string | null; addressKind: string | null; addressVerified: boolean; portMapping: { state: string } };
+  setupAddressFacts = { kind: values.addressKind, verified: values.addressVerified, mapping: values.portMapping?.state };
   serverName = values.serverName;
   serverPassword = values.serverPassword;
   setupAddress = values.address;
@@ -870,11 +872,12 @@ describe("harness HTTP API", () => {
     for (const path of ["/api/auth/token", "/api/auth/status", "/api/pair"]) {
       expect((await api("GET", path)).status).toBe(404);
     }
-    for (const path of ["/api/auth/token/rotate", "/api/pair/start", "/api/pair/claim", "/api/auth/firebase/session", "/api/workspace/invites"]) {
+    // `/api/provision` odchodzi razem ze starym kreatorem: jedynym, co robiła,
+    // była rejestracja autostartu serwera po pytaniu „24/7?", którego nowy
+    // onboarding nie zadaje (server/windows-autostart.ts skasowany razem z nią).
+    for (const path of ["/api/auth/token/rotate", "/api/pair/start", "/api/pair/claim", "/api/auth/firebase/session", "/api/workspace/invites", "/api/provision"]) {
       expect((await api("POST", path, {})).status).toBe(404);
     }
-    // …ale `/api/provision` zostaje do PR 7 — onboarding świeżej instalacji je woła.
-    expect((await api("POST", "/api/provision", { server: false })).status).toBe(202);
     // An old client with the retired bearer is just anonymous: 401, never 426.
     for (const path of ["/api/auth/token", "/api/pair", "/api/auth/status", "/api/bots"]) {
       expect((await fetch(`${BASE}${path}`, { headers: { authorization: "Bearer index-test-legacy-token" } })).status).toBe(401);
@@ -891,6 +894,9 @@ describe("harness HTTP API", () => {
       // The sign-in header shows the name, so the public route carries it.
       expect(info.name).toBe(serverName);
       expect(JSON.stringify(info)).not.toContain(serverPassword);
+      // Ścieżka do setup.json to podpowiedź „gdzie leży hasło" — wolno ją
+      // pokazać tylko dopóki serwer jest niczyj. Ten jest już zajęty.
+      expect(info.setupPath).toBeUndefined();
     }
     // The address discovery found, flagged unverified until something outside
     // reaches us on it.
@@ -924,6 +930,16 @@ describe("harness HTTP API", () => {
     const memberToken = (await joined.json() as { accessToken: string }).accessToken;
     const asMember = await fetch(`${BASE}/api/server/address`, { headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2" } });
     expect(asMember.status).toBe(403);
+  });
+
+  // Trzy wartości bez tego są pułapką: adres wygląda na gotowy, a z drugiego
+  // urządzenia nie działa, bo to LAN albo operator chowa telefon za NAT-em.
+  it("mówi też, CZYM jest adres, który podaje do przepisania", () => {
+    expect(setupAddressFacts.verified).toBe(false);
+    expect(typeof setupAddressFacts.mapping).toBe("string");
+    // Na pętli zwrotnej nie ma żadnego kandydata, więc rodzaj jest pusty —
+    // pole ma istnieć, żeby ekran setupu wiedział, że serwer się wypowiedział.
+    expect(setupAddressFacts).toHaveProperty("kind");
   });
 
   it("hands the setup values to loopback only, and only until a profile exists", async () => {

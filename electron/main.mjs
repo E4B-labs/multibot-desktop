@@ -13,6 +13,7 @@ import { isLocalSender } from "./local-origin.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { activateForBot, normalizeNotification } from "./notifications.mjs";
 import { startRemoteUiServer } from "./remote-ui.mjs";
+import { collectSetupValues } from "./setup-values.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./diagnostics.mjs";
@@ -229,8 +230,6 @@ async function startServerOn(port) {
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       OMB_HOST: "127.0.0.1", // desktop = klient sam dla siebie; sieć wpuszcza serwer stawiany świadomie
       OMB_PORT: String(port),
-      // Trusted packaged path; used only after explicit onboarding 24/7 choice.
-      OMB_PACKAGED_EXE: app.isPackaged && process.platform === "win32" ? process.execPath : "",
       OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : "",
       // Packaged, package.json lives in the asar while the harness runs from
       // Resources/server — it cannot read its own version, so hand it over.
@@ -627,10 +626,19 @@ ipcMain.handle("hosts:remove", (_event, id) => removeHost(id));
 // lokalny harness; host zmienia się teraz dopiero, gdy użytkownik jawnie
 // kliknie „Use" przy „This device".
 ipcMain.handle("hosts:open-picker", () => openHostPicker());
-ipcMain.handle("hosts:use-local", async () => {
+// Ten sam strażnik co przy `hosts:use-host`: bez niego strona z cudzego
+// serwera przestawiała aktywnego hosta na lokalny, a wtedy `setup:values` (i
+// jego warunek `getActiveId() === "local"`) oddawałoby jej hasło serwera tego
+// urządzenia.
+ipcMain.handle("hosts:use-local", async (event) => {
+  if (!isLocalSender(event)) throw new Error("forbidden");
   setActiveHost("local");
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
+// Które urządzenie jest teraz aktywne. Interfejs pyta o to, żeby NIE
+// przeładowywać okna, gdy i tak stoi już na lokalnym harnessie — przeładowanie
+// kasuje wpisane pola.
+ipcMain.handle("hosts:active-id", () => getActiveId());
 ipcMain.handle("hosts:use-host", async (event, id) => {
   if (!isLocalSender(event)) throw new Error("forbidden");
   setActiveHost(id);
@@ -687,6 +695,39 @@ ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
   // Grant jedzie do webui fragmentem URL-a i tylko tam; drugie wydanie go
   // rendererowi nic nie daje, a rozsiewa poświadczenie po logach konsoli.
   return { ok: true, hasUsers: result.hasUsers };
+});
+
+/** Setup dotyczy WYŁĄCZNIE serwera na tym urządzeniu, więc samo
+ * `isLocalSender` nie wystarcza: w trybie zdalnym interfejs też jedzie z
+ * originu na 127.0.0.1 (electron/remote-ui.mjs), a wtedy stroną w oknie jest
+ * cudzy serwer. Bez tego warunku cudza strona przeczytałaby setup.json tego
+ * komputera, czyli hasło jego serwera. */
+function isSetupSender(event) {
+  return isLocalSender(event) && getActiveId() === "local";
+}
+
+// Trzy wartości świeżego serwera na TYM urządzeniu. Czytamy je z setup.json —
+// hasło serwera istnieje w jawnej postaci wyłącznie tam i wyłącznie do
+// pierwszej rejestracji. Renderer nie dostaje tokenu setupu: to dowód „umiem
+// przeczytać ten plik", a nie wartość na ekran.
+//
+// Tylko z NASZEGO ekranu: strona z cudzego serwera nie ma prawa wyciągnąć
+// hasła serwera lokalnego.
+ipcMain.handle("setup:values", async (event) => {
+  if (!isSetupSender(event)) return null;
+  return collectSetupValues(getJson, localHarnessUrl(SERVER_PORT));
+});
+
+/** Setup joins TEN harness, nie „to, co akurat jest w oknie". W trybie zdalnym
+ * strona przychodzi z lokalnego proxy dla CUDZEGO serwera, więc same-origin
+ * wysłałoby hasło tego urządzenia tam. Grant wraca do renderera, bo renderer i
+ * tak trzyma hasło, które go bije — nie zyskuje przez to żadnej nowej
+ * możliwości, a oszczędza drugie przeładowanie okna. */
+ipcMain.handle("setup:join", async (event, serverName, serverPassword) => {
+  if (!isSetupSender(event)) return { ok: false, error: "forbidden" };
+  const url = localHarnessUrl(SERVER_PORT);
+  const result = await joinServer(url, { serverName, serverPassword, pin: verifyOnlyPin(url) });
+  return result.ok ? { ok: true, joinGrant: result.joinGrant } : result;
 });
 
 // Serwer wystawił sobie nowy certyfikat (przeniesiony host, nowy adres w SAN) —

@@ -24,6 +24,11 @@ export function failureCode(err) {
  * dowolne zdanie w swoim własnym oknie. */
 const SERVER_CODES = new Set(["wrong_server_name", "wrong_server_password", "server_not_set_up", "rate_limited"]);
 
+/** 429 z serwera niesie zdanie („too many attempts"), nie kod. Bez tego
+ * mapowania ekran logowania dostawał `not_multibot` i mówił, że pod adresem nie
+ * ma MultiBota — akurat wtedy, gdy jest, tylko każe odczekać minutę. */
+const SERVER_ALIASES = new Map([["too many attempts", "rate_limited"]]);
+
 /** `GET /api/public/server` → probe result. A MultiBot server is the one that
  * answers with a serverId; anything else on that port belongs to somebody
  * else. `configured` says whether the server already has its own name and
@@ -40,6 +45,8 @@ export function classifyJoin(status, body) {
   if (status === 200 && typeof body?.joinGrant === "string") {
     return { ok: true, joinGrant: body.joinGrant, expiresAt: body.expiresAt, hasUsers: body.hasUsers };
   }
+  const alias = SERVER_ALIASES.get(body?.error);
+  if (alias) return { ok: false, error: alias };
   if (SERVER_CODES.has(body?.error)) return { ok: false, error: body.error };
   // Nieznany kod, brak kodu, nie-JSON, brakująca trasa: z punktu widzenia
   // ekranu logowania to jedno i to samo — pod tym adresem nie ma serwera,
@@ -47,7 +54,7 @@ export function classifyJoin(status, body) {
   return { ok: false, error: "not_multibot" };
 }
 
-function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } = {}) {
+function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs = TIMEOUT_MS } = {}) {
   return new Promise((resolveWith, rejectWith) => {
     const target = new URL(url);
     // Budżet CAŁEGO wywołania, nie samej bezczynności gniazda: serwer sączący
@@ -70,7 +77,7 @@ function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } 
         port: target.port || (target.protocol === "https:" ? 443 : 80),
         path: target.pathname + target.search,
         method,
-        headers: payload ? { "content-type": "application/json", "content-length": String(payload.length) } : {},
+        headers: payload ? { ...headers, "content-type": "application/json", "content-length": String(payload.length) } : { ...headers },
         // Self-signed is the norm here; trust rests on the pin, not on a CA.
         rejectUnauthorized: false,
         // Bez puli połączeń. MEASURED: pula (domyślna od node 19) oddaje
