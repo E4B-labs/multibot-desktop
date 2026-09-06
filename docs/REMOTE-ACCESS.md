@@ -136,7 +136,49 @@ curl -k --socks5-hostname 127.0.0.1:9050 https://<adres>.onion:8799/api/public/s
 
 `--socks5-hostname`, nie `--socks5`: to drugie próbowałoby rozwiązać nazwę lokalnie.
 
-Tor to osobny projekt (The Tor Project, licencja BSD 3-Clause) — MultiBot go tylko uruchamia, nie zawiera i nie modyfikuje. Nazwa i znak towarowy należą do The Tor Project, Inc.; ta funkcja nie jest przez nich firmowana ani sprawdzana.
+Tor to osobny projekt (The Tor Project) — MultiBot go tylko uruchamia i nigdy nie modyfikuje. Na Windowsie dokłada go do instalatora jako osobny, niezmieniony plik (patrz niżej); na pozostałych platformach nie zawiera go wcale. Nazwa i znak towarowy należą do The Tor Project, Inc.; ta funkcja nie jest przez nich firmowana ani sprawdzana.
+
+### Tor: skąd bierze się `tor` na każdej platformie
+
+Adres `.onion` potrzebuje procesu `tor` — i tylko Windows dostaje go w paczce.
+
+- **Windows (desktop i serwer)**: instalator niesie `tor.exe` w zasobach
+  aplikacji, czyli `process.resourcesPath/tor/`
+  (`electron-builder.yml`, sekcja `win.extraResources`). Binarka pochodzi z
+  Tor Expert Bundle i jest **niezmieniona i nieprzemianowana** — zmiana nazwy
+  albo przepakowanie podnosi szansę na fałszywy alarm w Defenderze, a i tak
+  instalator nie jest podpisany.
+- **macOS i Linux**: używamy systemowego `tor` z `PATH` (`brew install tor`,
+  `apt install tor`). Bez niego adresy `.onion` są niedostępne i aplikacja
+  mówi to wprost. Powodem jest podpisywanie: hardened runtime i notaryzacja
+  wymagałyby podpisania każdej dołączonej binarki naszym certyfikatem, a takiego
+  nie mamy (PLAN-TOR, decyzja D7).
+- **Termux (S10e)**: `pkg install tor`, robi to `scripts/install-termux.sh`.
+
+Binarki nie ma w repo — `vendor/tor/` jest w `.gitignore`. Kto buduje instalator
+Windows, pobiera ją raz:
+
+```powershell
+node scripts/fetch-tor.mjs
+```
+
+Skrypt ściąga Expert Bundle, **sprawdza SHA-256** względem oficjalnego
+`sha256sums-unsigned-build.txt` i zostawia w `vendor/tor/win-x64/` tylko
+`tor.exe` i ewentualne DLL-e obok niego (**9.7 MB**). Reszta leci w kosz:
+pluggable transports, `tor-gencert`, docsy oraz bazy `geoip`/`geoip6`. Te
+ostatnie to 24 z 34 MB i nie robią nic dla nas — służą wyłącznie doborowi
+węzłów po kraju (`ExcludeNodes`, `EntryNodes`) i statystykom mostków, a nasz
+klient chodzi do jednego adresu `.onion`. Bez nich tor wypisuje dwa ostrzeżenia
+`Path for GeoIPFile (<default>) is relative` i normalnie bootstrapuje do 100%
+(sprawdzone na 15.0.21). `pnpm package:win`
+zaczyna od `node scripts/fetch-tor.mjs --check` i przerywa z czytelnym błędem,
+jeśli paczki nie ma. Wersję i atrybucję trzyma `THIRD-PARTY.md` w korzeniu repo
+— plik jedzie też do zasobów instalatora. **Uwaga licencyjna:** źródła Tora są
+na BSD-3-Clause, ale ta konkretna binarka jest zbudowana z `--enable-gpl`
+(moduł proof-of-work `equix`/`hashx`) i sama mówi, że jest objęta GPL-3.0
+(`tor.exe --version`). Dlatego jedzie jako osobny, niezmieniony plik w zasobach
+instalatora, nigdy zlinkowany z naszym kodem, a `THIRD-PARTY.md` wskazuje
+odpowiadające źródła.
 
 ### Reverse proxy przed harnessem
 
