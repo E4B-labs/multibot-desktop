@@ -34,6 +34,9 @@ extraResources:
     to: install-claude.mjs
   - from: scripts/install-codex.mjs
     to: install-codex.mjs
+  # multibot: atrybucja dla dołączonych binariów (Tor, BSD-3-Clause).
+  - from: THIRD-PARTY.md
+    to: THIRD-PARTY.md
 
 mac:
   # multibot: speech-helper to binarka ze Swifta (`pnpm build:speech`, swiftc
@@ -69,6 +72,15 @@ dmg:
 # multibot: Windows. Bez podpisu (brak certyfikatu) — instalator pokaże
 # SmartScreen. icon.ico wygenerowana z build/icon-1024.png.
 win:
+  # multibot: Tor Expert Bundle (tor.exe + geoip/geoip6) leży w gitignorowanym
+  # vendor/, więc `pnpm package:win` najpierw sprawdza, czy ktoś je pobrał
+  # (`node scripts/fetch-tor.mjs`). Tylko Windows — mac/Linux używają
+  # systemowego `tor` (PLAN-TOR D7). Sekcje `extraResources` łączą się z globalną,
+  # a extraResources leżą poza asarem, więc rozpakowywanie nic tu nie zmienia:
+  # ścieżka w runtime to `process.resourcesPath/tor/tor.exe`.
+  extraResources:
+    - from: vendor/tor/win-x64
+      to: tor
   target:
     - target: nsis
       arch: x64

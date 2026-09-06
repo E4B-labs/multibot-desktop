@@ -9,6 +9,7 @@ dist-electron/
 build/
 release/
 clients/
+vendor/tor/
 uploads/
 *.tsbuildinfo
 *.db
