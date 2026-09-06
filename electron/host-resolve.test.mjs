@@ -11,6 +11,7 @@ import {
   sameDocument,
   sameOrigin,
   shouldStartLocalHarness,
+  uiOriginChanged,
 } from "./host-resolve.mjs";
 
 describe("host resolve", () => {
@@ -154,5 +155,15 @@ describe("activeIdAfterMerge", () => {
     expect(activeIdAfterMerge("local", hosts)).toBe("local");
     expect(activeIdAfterMerge(undefined, hosts)).toBe("local");
     expect(activeIdAfterMerge("h_inny", hosts)).toBe("h_inny");
+  });
+});
+
+describe("uiOriginChanged", () => {
+  // Wszystkie hosty dzielą jeden origin proxy, więc token i cookie zostają po
+  // poprzednim — bez tego przełączenie A→B wysyła do B poświadczenia od A.
+  it("says yes for a fresh origin and for a change of host, no for the same one", () => {
+    expect(uiOriginChanged({}, "https://1.2.3.4:8799")).toBe(true);
+    expect(uiOriginChanged({ uiOriginHost: "https://5.6.7.8:8799" }, "https://1.2.3.4:8799")).toBe(true);
+    expect(uiOriginChanged({ uiOriginHost: "https://1.2.3.4:8799" }, "https://1.2.3.4:8799")).toBe(false);
   });
 });

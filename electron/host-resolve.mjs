@@ -102,6 +102,13 @@ export function sameDocument(a, b) {
   return Boolean(a) && documentUrl(a) === documentUrl(b);
 }
 
+/** Czy lokalny origin proxy trzyma magazyn INNEGO hosta, niż ten, na który
+ * właśnie wchodzimy — czyli czy trzeba go wyczyścić. Reguła stoi tu, a nie w
+ * hosts.mjs, żeby dało się ją sprawdzić testem bez kontekstu Electrona. */
+export function uiOriginChanged(config, remoteUrl) {
+  return (config?.uiOriginHost ?? null) !== remoteUrl;
+}
+
 export function removeRemoteHost(hosts, id) {
   return hosts.filter((h) => h.id !== id);
 }

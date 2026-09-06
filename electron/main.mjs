@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
-import { addRemoteHost, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
+import { addRemoteHost, claimUiOrigin, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
 import { getJson, joinServer, probeServer } from "./host-probe.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
 import { normalizeRemoteUrl, sameDocument, shouldStartLocalHarness } from "./host-resolve.mjs";
@@ -408,6 +408,17 @@ async function loadTargetNow(win, { joinGrant } = {}) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
+    // Ten sam origin obsługuje KAŻDY host po kolei, a localStorage i cookie
+    // sesji należą do originu, nie do hosta. Bez tego czyszczenia pierwszy
+    // `fetch` po przełączeniu A→B wysyłał do B token wydany przez A.
+    // Ciastka Chromium kasuje szerzej niż origin (po domenie rejestrowalnej),
+    // więc przy okazji leci sesja lokalnego harnessu na 127.0.0.1 — i tak jest
+    // dobrze: ciastka nie są zakresowane portem, więc to ten sam worek.
+    if (origin && claimUiOrigin(target.url)) {
+      await session.defaultSession
+        .clearStorageData({ origin, storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"] })
+        .catch((err) => console.warn("[multibot] nie udało się wyczyścić magazynu proxy:", err?.message ?? err));
+    }
     // Okno mogło zniknąć, kiedy czekaliśmy — dotknięcie `webContents` po tym
     // rzuca „Object has been destroyed" prosto w handler IPC.
     if (win.isDestroyed()) return;

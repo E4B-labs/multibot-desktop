@@ -5,7 +5,7 @@ import { app, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-import { activeIdAfterMerge, mergeRemoteHost, normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, sameOrigin } from "./host-resolve.mjs";
+import { activeIdAfterMerge, mergeRemoteHost, normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, sameOrigin, uiOriginChanged } from "./host-resolve.mjs";
 
 function filePath() {
   return path.join(app.getPath("userData"), "remote-hosts.json");
@@ -126,6 +126,22 @@ export function removeHost(id) {
 export function setActiveHost(id) {
   const config = readRaw();
   writeRaw({ ...config, activeId: id, hosts: config.hosts ?? [] });
+}
+
+/** Bierze lokalny origin proxy (electron/remote-ui.mjs) na własność tego hosta.
+ * `true` znaczy „origin właśnie zmienił pana, wyczyść jego magazyn".
+ *
+ * Wszystkie hosty dostają TEN SAM origin `http://127.0.0.1:478xx` — port jest
+ * stały z rozmysłu, bo localStorage jest per origin. Skutek uboczny: token
+ * webui i cookie sesji zapisane dla hosta A zostają w tym originie i przy
+ * pierwszym żądaniu poleciałyby do hosta B. Zapamiętanie tego w pliku, a nie w
+ * pamięci procesu, jest konieczne: po restarcie apka inaczej nie wie, czyj
+ * magazyn zastała. */
+export function claimUiOrigin(remoteUrl) {
+  const config = readRaw();
+  if (!uiOriginChanged(config, remoteUrl)) return false;
+  writeRaw({ ...config, uiOriginHost: remoteUrl });
+  return true;
 }
 
 /** Resolves what main.mjs should load: {mode:"local"} or
