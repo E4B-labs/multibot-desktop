@@ -25,6 +25,6 @@ must(linux.includes('pnpm --dir "$ROOT" build:server'), "Linux installer omits s
 must(termux.includes("termux-services") && termux.includes(".termux/boot"), "Termux reboot persistence missing");
 must(termux.includes("termux-services/svlogger"), "Termux service logger missing");
 must(termux.includes('pnpm --dir "$ROOT" build:server'), "Termux installer omits server build");
-must(linux.includes("scripts/tunnel.sh") && linux.includes("Cloudflare Tunnel"), "Linux HTTPS guidance missing");
-must(termux.includes("scripts/tunnel.sh") && termux.includes("Cloudflare Tunnel"), "Termux HTTPS guidance missing");
+must(linux.includes("trusted reverse proxy in front of port 8799"), "Linux HTTPS guidance missing");
+must(termux.includes("trusted reverse proxy in front of port 8799"), "Termux HTTPS guidance missing");
 console.log("self-host install paths: OK (no services started)");

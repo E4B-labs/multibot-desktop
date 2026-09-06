@@ -15,12 +15,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 const FAKE_CODEX = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "auto-verify-test-access-token";
+let TOKEN = "";
 
 describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
   let child: ChildProcess;
@@ -75,7 +77,6 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
     writeFileSync(
       join(home, ".openmausbot", "config.json"),
       JSON.stringify({
-        auth: { token: TOKEN },
         instances: {
           grokPerm: {
             driver: "grokAgent",
@@ -121,6 +122,7 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    TOKEN = await bootstrapAccessToken(BASE);
   }, 30_000);
 
   afterAll(async () => {

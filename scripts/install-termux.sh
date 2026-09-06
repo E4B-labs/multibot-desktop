@@ -61,5 +61,5 @@ fi
 
 say "Address: http://$(hostname 2>/dev/null || echo phone):8799"
 say "Keep phone awake: termux-wake-lock (Boot script repeats this)"
-say "Public HTTPS: run scripts/tunnel.sh with a named Cloudflare Tunnel, or put a trusted reverse proxy in front of port 8799"
+say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
 say "Next: open MultiBot at the address, choose Set up server, then share host + server password"

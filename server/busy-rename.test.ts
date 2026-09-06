@@ -11,12 +11,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 let port = 0;
 let base = "";
-const TOKEN = "busy-rename-access-token";
+let TOKEN = "";
 
 let child: ChildProcess;
 let home: string;
@@ -51,7 +53,6 @@ beforeAll(async () => {
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({
-      auth: { token: TOKEN },
       instances: { fake: { driver: "grokAgent", displayName: "Fake", config: { cli: FAKE_CLI, fullAuto: false } } },
     }),
   );
@@ -87,6 +88,7 @@ beforeAll(async () => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
+  TOKEN = await bootstrapAccessToken(base);
 }, 30_000);
 
 afterAll(async () => {

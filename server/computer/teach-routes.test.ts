@@ -14,12 +14,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { startFakeCdp, type FakeCdp } from "../testing/fake-cdp.ts";
+import { bootstrapAccessToken } from "../testing/identity.ts";
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const ROOT = join(SERVER_DIR, "..");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "teach-test-access-token";
+let TOKEN = "";
 
 let child: ChildProcess;
 let home: string;
@@ -39,7 +40,7 @@ beforeAll(async () => {
   fake = await startFakeCdp();
   home = mkdtempSync(join(tmpdir(), "omb-teach-test-"));
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ auth: { token: TOKEN } }));
+  writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({}));
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
@@ -70,6 +71,7 @@ beforeAll(async () => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
+  TOKEN = await bootstrapAccessToken(BASE);
 }, 120_000);
 
 afterAll(async () => {

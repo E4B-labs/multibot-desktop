@@ -20,6 +20,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 const FAKE_CODEX = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
@@ -51,10 +53,9 @@ async function boot(
 }> {
   chmodSync(FAKE_CLI, 0o755);
   chmodSync(FAKE_CODEX, 0o755);
-  const token = `${prefix}-access-token`;
   const home = reuse?.home ?? mkdtempSync(join(tmpdir(), `omb-${prefix}-`));
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  if (!reuse) writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ auth: { token }, instances }));
+  if (!reuse) writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ instances }));
 
   // Windows reserves whole bands inside the ephemeral range (`netsh interface
   // ipv4 show excludedportrange`), and a spawn that lands in one dies with
@@ -127,6 +128,10 @@ async function boot(
       throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     }
   }
+
+  // Fresh data dir: set the server up and register the owner. A reused one is
+  // already configured, so the helper just signs the same profile back in.
+  const token = await bootstrapAccessToken(base, prefix);
 
   const api = async (method: string, path: string, body?: unknown) => {
     const res = await fetch(`${base}${path}`, {

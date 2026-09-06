@@ -11,6 +11,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 
@@ -73,13 +75,12 @@ const startHarness = async (extraEnv: Record<string, string>) => {
   chmodSync(FAKE_CLI, 0o755);
   const port = 18800 + Math.floor(Math.random() * 10_000);
   base = `http://127.0.0.1:${port}`;
-  token = "group-chat-access-token";
   home = mkdtempSync(join(tmpdir(), "omb-groupchat-"));
   stderr = "";
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
-    JSON.stringify({ auth: { token }, instances: { atlas: ATLAS, research: RESEARCH } }),
+    JSON.stringify({ instances: { atlas: ATLAS, research: RESEARCH } }),
   );
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -111,6 +112,7 @@ const startHarness = async (extraEnv: Record<string, string>) => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
+  token = await bootstrapAccessToken(base);
 };
 
 const stopHarness = async () => {

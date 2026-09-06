@@ -210,16 +210,6 @@ ipcMain.on("desktop:notify", (_event, raw) => {
   banner.show();
 });
 
-function localAccessTokenFragment() {
-  try {
-    const config = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".openmausbot", "config.json"), "utf8"));
-    const token = String(config?.auth?.token ?? "").trim();
-    return token ? `#access_token=${encodeURIComponent(token)}` : "";
-  } catch {
-    return "";
-  }
-}
-
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
   const proc = utilityProcess.fork(entry, [], {
@@ -313,11 +303,10 @@ const ERROR_PAGE =
     `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◈</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen MultiBot — if it keeps happening, restart your device.</p></div></body>`,
   );
 
-// multibot (C2): fragment credential hand-off, same trick as
-// localAccessTokenFragment() below but for a remote host's token instead of
-// the local ~/.openmausbot one. Never reaches HTTP — src/lib/auth.ts's
-// bootstrapLocalAuthToken() reads window.location.hash client-side, stores
-// it, and erases it before first paint.
+// multibot (C2): fragment credential hand-off for a remote host's token.
+// Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
+// window.location.hash client-side, stores it, and erases it before first
+// paint.
 function remoteFragment(token) {
   return token ? `#access_token=${encodeURIComponent(token)}` : "";
 }
@@ -614,10 +603,9 @@ ipcMain.handle("hosts:use-host", async (_event, id) => {
   setActiveHost(id);
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
-// Seam: server/firebase-auth.ts has no loopback-capable HTTP route yet (see
-// electron/oauth-loopback.mjs for the reusable receiver, unused until then).
+// Seam: PR 6 replaces this with a native `POST /api/auth/join` probe.
 ipcMain.handle("hosts:begin-browser-login", () => {
-  throw new Error("Browser sign-in isn't available yet — no Firebase project is configured. Paste the access token instead.");
+  throw new Error("Browser sign-in isn't available yet — sign in to the server inside the window instead.");
 });
 
 ipcMain.handle("desktop:export-diagnostics", async (event) => {

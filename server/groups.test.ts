@@ -8,11 +8,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "groups-test-access-token";
+let TOKEN = "";
 
 describe("grupy botów bez silnika", () => {
   let child: ChildProcess;
@@ -36,7 +38,6 @@ describe("grupy botów bez silnika", () => {
     writeFileSync(
       join(home, ".openmausbot", "config.json"),
       JSON.stringify({
-        auth: { token: TOKEN },
         instances: {
           fake: { driver: "claudeAgent", displayName: "Fake Claude", config: { cli: FAKE_CLI, permissionMode: "acceptEdits" } },
         },
@@ -70,6 +71,7 @@ describe("grupy botów bez silnika", () => {
       if (child.exitCode !== null) throw new Error(`serwer padł ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    TOKEN = await bootstrapAccessToken(BASE);
   }, 30_000);
 
   afterAll(async () => {

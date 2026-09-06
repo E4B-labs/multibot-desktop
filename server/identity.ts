@@ -445,6 +445,23 @@ export function identityBearer(req: { headers: Record<string, string | string[] 
 }
 
 export function isIdentityPublicRoute(method: string, path: string): boolean {
-  return (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server" || path === "/api/auth/status" || path === "/api/health")) ||
+  return (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server" || path === "/api/health")) ||
     (method === "POST" && ["/api/setup/server", "/api/auth/join", "/api/auth/register", "/api/auth/login", "/api/auth/recover"].includes(path));
+}
+
+/** A reverse proxy or a tunnel makes every request look like it came from
+ * 127.0.0.1. A forwarding header is proof the peer is NOT local, so one guard
+ * here closes the hole for every caller at once. */
+export function isLoopbackRequest(req: { socket: { remoteAddress?: string | undefined }; headers: Record<string, string | string[] | undefined> }): boolean {
+  if (req.headers["x-forwarded-for"] || req.headers["x-real-ip"]) return false;
+  const address = req.socket.remoteAddress ?? "";
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+/** A self-hosted install often runs on plain-http loopback (no TLS terminator
+ * in front). Unconditionally setting `Secure` would make the browser silently
+ * drop the session cookie there, so it is added only over real TLS. */
+export function isSecureRequest(req: { socket: unknown; headers: Record<string, string | string[] | undefined> }): boolean {
+  if ((req.socket as { encrypted?: boolean } | null)?.encrypted) return true;
+  return String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https";
 }

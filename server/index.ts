@@ -20,16 +20,13 @@ import {
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
 import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.ts";
-import { ensureAccessToken, mountAuth, rotateAccessToken, tokenMatches } from "./auth.ts";
-import { IdentityError, IdentityStore, identityCookie, type IdentityActor, type CreatedSession, isIdentityPublicRoute } from "./identity.ts";
-import { canBotContact } from "./acl.ts";
-// multibot (A1): logowanie Google przez Firebase -> lokalna sesja urządzenia.
+import { mountAuth } from "./auth.ts";
 import {
-  FirebaseAuthError, buildSessionCookie, createDeviceSession,
-  authorizeWorkspaceUser, createWorkspaceInvite, updateWorkspaceProfile, workspaceMembers,
-  isFirebaseConfigured, isLoopbackRequest, isSecureRequest,
-  sessionIdFromCookieHeader, verifyDeviceSession, verifyFirebaseIdToken, type WorkspaceActor,
-} from "./firebase-auth.ts";
+  IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
+  isLoopbackRequest, isSecureRequest,
+  type IdentityActor, type CreatedSession,
+} from "./identity.ts";
+import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
 import * as composio from "./composio.ts";
 // multibot (U28): powiadomienia push, gdy bot wchodzi w needsAttention.
 import { registerPushDevice, notifyPushDevices } from "./push.ts";
@@ -64,8 +61,6 @@ import * as computerControl from "./computer-control.ts";
 // back in the harness after the Python engine took them with it.
 import { computerTool, computerToolset } from "./computer/index.ts";
 import * as teach from "./computer/teach.ts";
-import { claimPairing, pairingPending, startPairing } from "./pairing.ts";
-import { pairingQrSvg } from "./qr.ts";
 import { filterSearchResults, searchText, type SearchResult } from "./search.ts";
 import { promptWithReply, resolveReplyTarget } from "./replies.ts";
 import { scoutProject } from "./project-scout.ts";
@@ -85,7 +80,6 @@ import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): w
 import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
-import { registerWindowsServerAutostart } from "./windows-autostart.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { canUseIntegration, clearTurnPolicy, rememberApprovalRule, setTurnPolicy, toolsetAllowed, turnPolicy } from "./turn-policy.ts";
 import { webMcpIntegration } from "./drivers/web-proxy.ts";
@@ -138,12 +132,7 @@ startOpenCodeModelRefresh();
 const cfg = loadConfig();
 const identity = new IdentityStore();
 identity.init();
-const access = ensureAccessToken(cfg);
 const identityAttempts = new Map<string, { startedAt: number; count: number }>();
-// multibot (H3): serwer MCP komputera jest zwykłym klientem HTTP tego harnessu,
-// więc jego terminal potrzebuje tego samego tokena. Env, nie argv — argv widać
-// w liście procesów. Ten sam wzorzec, co COMMS_TOKEN dla agents-proxy.
-process.env.MULTIBOT_HARNESS_TOKEN = access.token;
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
 const groupStore = new GroupStore();
@@ -1075,7 +1064,7 @@ const turnDebounce = new Map<string, ReturnType<typeof setTimeout>>();
 type QueuedTurnOptions = {
   attachments: ReturnType<AttachmentStore["resolveMany"]>;
   reasoning?: "low" | "medium" | "high" | "xhigh" | "max";
-  actor?: WorkspaceActor | null;
+  actor?: IdentityActor | null;
   /** Kto zaczął turę — peer message nie ma pushować "zaczyna pracę" do usera. */
   origin?: TurnOrigin;
 };
@@ -1258,30 +1247,30 @@ function publicFleetEnvironment(): FleetEnvironment {
   );
 }
 
-function fleetEnvironmentForActor(actor: WorkspaceActor | null): FleetEnvironment {
+function fleetEnvironmentForActor(actor: IdentityActor | null): FleetEnvironment {
   return fleetEnvironmentForBots(
     fleetEnvironment,
-    store.bots.filter((bot) => canAccessBot(bot, actor)),
+    store.bots.filter((bot) => canReadBot(bot, actor)),
   );
 }
 
-type EventClient = { res: ServerResponse; actor: WorkspaceActor | null };
+type EventClient = { res: ServerResponse; actor: IdentityActor | null };
 
-function eventVisible(payload: unknown, actor: WorkspaceActor | null): boolean {
+function eventVisible(payload: unknown, actor: IdentityActor | null): boolean {
   if (!payload || typeof payload !== "object") return true;
   const event = payload as Record<string, any>;
   if (event.kind === "environment.snapshot") {
     const snapshotBots = Array.isArray(event.environment?.bots) ? event.environment.bots : [];
-    return snapshotBots.every((entry: any) => canAccessBot(store.bot(String(entry?.id ?? "")), actor));
+    return snapshotBots.every((entry: any) => canReadBot(store.bot(String(entry?.id ?? "")), actor));
   }
   const botFor = (id: unknown) => {
     if (typeof id !== "string") return null;
     return store.bot(id) ?? (id.startsWith("mb-") ? store.botByThread(id.slice(3)) : null);
   };
-  if (event.kind === "bot") return canAccessBot(event.bot as BotRecord, actor);
+  if (event.kind === "bot") return canReadBot(event.bot as BotRecord, actor);
   if (event.kind === "bot.deleted") {
     if (event.visibility !== "private") return Boolean(actor);
-    return canAccessBot({
+    return canReadBot({
       id: String(event.botId ?? ""),
       threadId: "",
       name: "",
@@ -1300,33 +1289,33 @@ function eventVisible(payload: unknown, actor: WorkspaceActor | null): boolean {
   if (event.kind === "message" || event.kind === "message.patch") {
     const threadId = String(event.threadId ?? "");
     const bot = store.botByThread(threadId) ?? store.bot(isolatedTurnBots.get(threadId) ?? "");
-    return bot ? canAccessBot(bot, actor) : true;
+    return bot ? canReadBot(bot, actor) : true;
   }
   if (event.kind === "runtime") {
     const threadId = String(event.event?.threadId ?? "");
     const bot = store.botByThread(threadId) ?? store.bot(isolatedTurnBots.get(threadId) ?? "");
-    return bot ? canAccessBot(bot, actor) : true;
+    return bot ? canReadBot(bot, actor) : true;
   }
   // multibot: banerka niesie tytuł i treść od bota — prywatny bot nie może jej
   // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`).
-  if (event.kind === "notify") return canAccessBot(botFor(event.botId), actor);
+  if (event.kind === "notify") return canReadBot(botFor(event.botId), actor);
   if (event.kind === "screen" || event.kind === "workspace" || event.kind === "computer") {
-    if (event.kind === "screen") return canAccessBot(botFor(event.botId), actor);
+    if (event.kind === "screen") return canReadBot(botFor(event.botId), actor);
     return event.kind === "workspace" && event.botId === undefined
       ? Boolean(actor)
-      : canAccessBot(botFor(event.botId), actor);
+      : canReadBot(botFor(event.botId), actor);
   }
   if (event.kind === "goal") {
     const bot = store.botByThread(String(event.goal?.ownerThread ?? ""));
-    return bot ? canAccessBot(bot, actor) : true;
+    return bot ? canReadBot(bot, actor) : true;
   }
   if (event.kind === "room") {
     const ids = Array.isArray(event.room?.bot_ids) ? event.room.bot_ids : [];
-    return ids.length === 0 || ids.every((id: unknown) => canAccessBot(botFor(id), actor));
+    return ids.length === 0 || ids.every((id: unknown) => canReadBot(botFor(id), actor));
   }
   if (event.kind === "group") {
     const ids = Array.isArray(event.group?.bot_ids) ? event.group.bot_ids : [];
-    return ids.length === 0 || ids.every((id: unknown) => canAccessBot(botFor(id), actor));
+    return ids.length === 0 || ids.every((id: unknown) => canReadBot(botFor(id), actor));
   }
   return true;
 }
@@ -2271,7 +2260,7 @@ opts?: {
     /** nazwa rutyny do treści pushu „rutyna X wystartowała" */
     routineName?: string;
     /** Authenticated human who started this turn. */
-    actor?: WorkspaceActor | null;
+    actor?: IdentityActor | null;
   },
 ) {
   const bot = store.bot(botId);
@@ -2311,7 +2300,7 @@ opts?: {
     role: "user",
     kind: "text",
     text,
-    ...(opts?.actor ? { userId: opts.actor.uid, ...(opts.actor.name ? { userName: opts.actor.name } : {}) } : {}),
+    ...(opts?.actor ? { userId: opts.actor.userId, ...(opts.actor.displayName ? { userName: opts.actor.displayName } : {}) } : {}),
     // multibot (F12): badge na wiadomości usera TYLKO gdy ta tura użyła
     // jawnego override (natural language / `/model --once`) — niezależnie od
     // tego, czy model różni się od skonfigurowanego. Zwykłe tury — bez badge.
@@ -2331,10 +2320,12 @@ opts?: {
       .filter((m) => m.kind === "text" && m.text && m.id !== userMessage?.id)
       .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! })),
   );
-  const promptUser = opts?.actor ?? (() => {
-    const lastUser = store.messagesFor(bot.threadId).reverse().find((message) => message.role === "user" && message.userId);
-    return lastUser?.userId ? { uid: lastUser.userId, name: lastUser.userName } : undefined;
-  })();
+  const promptUser = opts?.actor
+    ? { uid: opts.actor.userId, name: opts.actor.displayName }
+    : (() => {
+      const lastUser = store.messagesFor(bot.threadId).reverse().find((message) => message.role === "user" && message.userId);
+      return lastUser?.userId ? { uid: lastUser.userId, name: lastUser.userName } : undefined;
+    })();
 
 
   // multibot (D7): kolejna tura usera JEST odpowiedzią na to, na co bot czekał
@@ -2577,9 +2568,7 @@ function configStatus() {
   return status;
 }
 
-function configStatusFor(actor: WorkspaceActor | null) {
-  const member = actor && workspaceMembers().find((item) => item.uid === actor.uid);
-  const identityMember = actor && identity.members().find((item) => item.userId === actor.uid);
+function configStatusFor(actor: IdentityActor | null) {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     opencode: {
@@ -2593,8 +2582,9 @@ function configStatusFor(actor: WorkspaceActor | null) {
     voice: { configured: Boolean(cfg.voice?.key) },
     // not a secret — the sidebar shows it
     profile: {
-      name: identityMember?.displayName ?? member?.name ?? (actor?.name ?? cfg.profile?.name ?? ""),
-      email: member?.email ?? (actor?.email ?? cfg.profile?.email ?? ""),
+      name: actor?.displayName ?? cfg.profile?.name ?? "",
+      // ponytail: e-mail wciąż mieszka w config.json — `users.email` dokłada PR 2.
+      email: cfg.profile?.email ?? "",
     },
     workspace: {
       id: cfg.workspace?.id ?? "default",
@@ -2608,15 +2598,8 @@ function configStatusFor(actor: WorkspaceActor | null) {
     autoVerify: normalizeAutoVerify(cfg.autoVerify),
     // multibot: kolejność sekcji sidebaru — wspólna dla desktopu i telefonu.
     sectionOrder: cfg.sectionOrder ?? [],
-    account: actor ? { uid: actor.uid, role: actor.role } : null,
+    account: actor ? { uid: actor.userId, role: actor.role } : null,
   };
-}
-
-function requestBearer(req: IncomingMessage): string | null {
-  const authorization = req.headers.authorization;
-  if (authorization?.startsWith("Bearer ")) return authorization.slice(7);
-  const header = req.headers["x-multibot-token"];
-  return typeof header === "string" ? header : null;
 }
 
 function identityActorForRequest(req: IncomingMessage): IdentityActor | null {
@@ -2629,57 +2612,24 @@ function identityActorForRequest(req: IncomingMessage): IdentityActor | null {
   return null;
 }
 
-function actorForRequest(req: IncomingMessage): WorkspaceActor | null {
-  const identityActor = identityActorForRequest(req);
-  if (identityActor) {
-    return { uid: identityActor.userId, name: identityActor.displayName, role: identityActor.role };
-  }
-  if (req.headers["x-multibot-auth"] === "token") {
-    return { uid: cfg.firebase?.ownerUid ?? "legacy-token", role: "owner", name: cfg.profile?.name, email: cfg.profile?.email };
-  }
-  const sessionId = sessionIdFromCookieHeader(req.headers.cookie);
-  const session = sessionId ? verifyDeviceSession(sessionId) : null;
-  if (session) return {
-    uid: session.uid,
-    email: session.email,
-    name: session.name,
-    role: workspaceMembers().find((item) => item.uid === session.uid)?.role
-      ?? (cfg.firebase?.ownerUid === session.uid ? "owner" : "member"),
-  };
-  if (tokenMatches(requestBearer(req), cfg.auth?.token ?? "")) {
-    return { uid: cfg.firebase?.ownerUid ?? "legacy-token", role: "owner", name: cfg.profile?.name, email: cfg.profile?.email };
-  }
-  return null;
-}
+const actorForRequest = identityActorForRequest;
 
-function actorMessageFields(actor: WorkspaceActor | null): Pick<Message, "userId" | "userName"> {
-  return actor ? { userId: actor.uid, ...(actor.name ? { userName: actor.name } : {}) } : {};
-}
-
-function canAccessBot(bot: BotRecord | null, actor: WorkspaceActor | null): boolean {
-  if (!bot) return false;
-  if (!actor) return false;
-  if (bot.visibility !== "private") return true;
-  return bot.ownerId === actor.uid;
-}
-
-function canManageBot(bot: BotRecord | null, actor: WorkspaceActor | null): boolean {
-  if (!bot || !actor) return false;
-  return bot.visibility !== "private" || bot.ownerId === actor.uid;
+function actorMessageFields(actor: IdentityActor | null): Pick<Message, "userId" | "userName"> {
+  return actor ? { userId: actor.userId, userName: actor.displayName } : {};
 }
 
 function botForReference(id: string): BotRecord | null {
   return store.bot(id) ?? (id.startsWith("mb-") ? store.botByThread(id.slice(3)) : null);
 }
 
-function botSetVisible(botIds: string[], actor: WorkspaceActor | null): boolean {
+function botSetVisible(botIds: string[], actor: IdentityActor | null): boolean {
   const bots = botIds.map(botForReference);
-  return bots.every((bot) => canAccessBot(bot, actor)) && bots.every((bot, index) =>
+  return bots.every((bot) => canReadBot(bot, actor)) && bots.every((bot, index) =>
     bots.slice(index + 1).every((peer) => canBotContact(bot, peer)),
   );
 }
 
-function groupVisible(group: { bot_ids: string[] }, actor: WorkspaceActor | null): boolean {
+function groupVisible(group: { bot_ids: string[] }, actor: IdentityActor | null): boolean {
   return botSetVisible(group.bot_ids, actor);
 }
 
@@ -3019,15 +2969,6 @@ async function handleIdentityRoute(
   if (method === "GET" && (path === "/api/public/handshake" || path === "/api/public/server")) {
     return identityHandled(res, 200, identity.publicInfo());
   }
-  if (method === "GET" && path === "/api/auth/status") {
-    return identityHandled(res, 200, {
-      protocol: identity.publicInfo().protocol,
-      server: identity.publicInfo(),
-      session: Boolean(actor),
-      user: actor ? identityUser(actor) : null,
-      google: { configured: false },
-    });
-  }
   if (method === "POST" && path === "/api/setup/server") {
     if (!isLoopbackRequest(req)) return identityHandled(res, 403, { error: "server setup is local-only" });
     if (identityRateLimited(req, "setup")) return identityHandled(res, 429, { error: "too many attempts" });
@@ -3116,8 +3057,6 @@ async function handleIdentityRoute(
         }
         return identityHandled(res, 200, { ok: true });
       }
-      if (method === "GET" && path === "/api/auth/token") return identityHandled(res, 410, { error: "legacy bearer tokens retired" });
-      if (method === "POST" && path === "/api/auth/token/rotate") return identityHandled(res, 410, { error: "legacy bearer tokens retired" });
       if (method === "GET" && path === "/api/auth/me") {
         return identityHandled(res, 200, { user: identityUser(actor), server: identity.publicInfo() });
       }
@@ -3149,7 +3088,6 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { id: info.serverId, name: info.name, members: identity.members(), currentUser: identityUser(actor) });
       }
       if (method === "GET" && path === "/api/workspace/members") return identityHandled(res, 200, { members: identity.members().map((member) => ({ uid: member.userId, name: member.displayName, username: member.username, role: member.role })) });
-      if (method === "POST" && path === "/api/workspace/invites") return identityHandled(res, 410, { error: "invites retired; use server password" });
     } catch (error) {
       const status = error instanceof IdentityError ? error.status : 400;
       return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
@@ -3162,10 +3100,8 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
   const method = req.method ?? "GET";
-  const actor = actorForRequest(req);
-  const identityActor = identityActorForRequest(req);
+  let actor = actorForRequest(req);
   const adminMutation = method !== "GET" && (
-    path === "/api/provision" ||
     path.startsWith("/api/models/custom/") ||
     path.startsWith("/api/cli-tools/") ||
     path.startsWith("/api/progress/") ||
@@ -3176,10 +3112,8 @@ const server = createServer(async (req, res) => {
   if (langParam === "pl" || langParam === "en") uiLang = langParam;
   try {
     const identityRoute = path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace");
-    // Let legacy local-token routes fall through to their compatibility
-    // handlers. Remote legacy bearers are rejected by mountAuth before this.
-    if (isIdentityPublicRoute(method, path) || (identityActor && identityRoute)) {
-      if (await handleIdentityRoute(req, res, path, method, identityActor)) return;
+    if (isIdentityPublicRoute(method, path) || (actor && identityRoute)) {
+      if (await handleIdentityRoute(req, res, path, method, actor)) return;
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
@@ -3666,7 +3600,7 @@ const server = createServer(async (req, res) => {
     // One server = one workspace. Members share team-visible bots and sections;
     // private bots are filtered by the access gate below.
     const botPath = path.match(/^\/api\/bots\/([^/]+)/);
-    if (botPath && !canAccessBot(store.bot(decodeURIComponent(botPath[1])), actor)) {
+    if (botPath && !canReadBot(store.bot(decodeURIComponent(botPath[1])), actor)) {
       return json(res, 404, { error: "no such bot" });
     }
 
@@ -3674,7 +3608,7 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/bots") {
       return json(res, 200, {
         bots: store.bots
-          .filter((b) => canAccessBot(b, actor))
+          .filter((b) => canReadBot(b, actor))
           .map((b) => ({ ...b, messages: chatMessages(b.threadId) })),
       });
     }
@@ -3712,7 +3646,7 @@ const server = createServer(async (req, res) => {
       if (!group || !groupVisible(group, actor)) return json(res, 404, { error: "no such group" });
       const botId = String(body.botId ?? "");
       const bot = botForReference(botId);
-      if (!bot || !canAccessBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
       if (!group.bot_ids.every((id) => canBotContact(bot, botForReference(id)))) return json(res, 404, { error: "no such bot" });
       const result = await addGroupMemberRecord(m[1], bot.id);
       return json(res, result.status, result.body);
@@ -3848,7 +3782,7 @@ const server = createServer(async (req, res) => {
       const bot = store.createBot();
       // bootSelection was resolved once at startup; rescanning every provider
       // here made the first screen wait on CLI processes.
-      store.patchBot(bot.id, { modelSelection: bootSelection, ownerId: actor?.uid, visibility });
+      store.patchBot(bot.id, { modelSelection: bootSelection, ownerId: actor?.userId, visibility });
       // multibot: nowy bot odzywa się PIERWSZY i mówi, co naprawdę potrafi
       // TERAZ. Rozgrzewka CLI nic nie mówiła użytkownikowi (patrzył w pusty
       // ekran), a bot dowiadywał się o swoich brakach dopiero, gdy pierwsze
@@ -3879,7 +3813,7 @@ const server = createServer(async (req, res) => {
         }
         const updated = store.patchBot(bot.id, {
           visibility,
-          ownerId: bot.ownerId ?? actor?.uid,
+          ownerId: bot.ownerId ?? actor?.userId,
           allowedUserIds: [],
         });
         broadcast({ kind: "bot", bot: updated });
@@ -3971,7 +3905,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const token = String(body.token ?? "").trim();
       if (!token) return json(res, 422, { error: "token required" });
-      registerPushDevice(m[1], token, body.botId ? String(body.botId) : undefined, actor?.uid);
+      registerPushDevice(m[1], token, body.botId ? String(body.botId) : undefined, actor?.userId);
       return json(res, 200, { ok: true });
     }
 
@@ -4631,145 +4565,17 @@ const server = createServer(async (req, res) => {
       });
     }
 
-    // ── multibot (G2): authenticated token reveal/check/rotation ────────
+    // Cheap "is this credential still good?" probe for the clients.
     if (method === "GET" && path === "/api/auth/check") {
       return json(res, 200, { ok: true });
     }
-    if (method === "GET" && path === "/api/auth/token") {
-      if (actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
-      res.setHeader("cache-control", "no-store");
-      return json(res, 200, { token: cfg.auth!.token });
-    }
-    // ── multibot (C1): parowanie telefonu kodem z QR ───────────────────
-    // `start` wymaga tokena (robi to zalogowany pulpit), `claim` NIE MOŻE —
-    // telefon dopiero się przedstawia. Bezpieczeństwo krótkiego kodu stoi na
-    // wygasaniu, jednorazowości i limicie prób (server/pairing.ts).
-    if (method === "POST" && path === "/api/pair/start") {
-      if (actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
-      const { code, expiresAt } = startPairing();
-      const requestHost = typeof req.headers.host === "string" ? req.headers.host.trim() : "";
-      const forwardedProto = req.headers["x-forwarded-proto"];
-      const protocol = typeof forwardedProto === "string" && forwardedProto ? forwardedProto.split(",")[0].trim() : isSecureRequest(req) ? "https" : "http";
-      const url = PUBLIC_URL || (requestHost && !/^\[?(?:0\.0\.0\.0|::|localhost)\]?(:\d+)?$/i.test(requestHost) ? `${protocol}://${requestHost}` : `http://${HOST}:${PORT}`);
-      return json(res, 200, { code, expiresAt, url, pairUrl: `${url}/?pair=${code}`, qrSvg: pairingQrSvg(`${url}/?pair=${code}`) });
-    }
-    if (method === "GET" && path === "/api/pair") {
-      return json(res, 200, { pending: pairingPending() });
-    }
-    if (method === "POST" && path === "/api/pair/claim") {
-      const body = await readBody(req).catch(() => ({}));
-      const result = claimPairing(body?.code);
-      // Jeden komunikat na każdą porażkę — rozróżnianie "zły kod" od "kod
-      // wygasł" mówiłoby zgadującemu, czy trafił w okno.
-      if (!result.ok) return json(res, 401, { error: "pairing failed" });
-      const sessionId = createDeviceSession("paired-device", String(body?.deviceName ?? body?.label ?? "phone"));
-      res.setHeader("set-cookie", buildSessionCookie(sessionId, isSecureRequest(req)));
-      res.setHeader("cache-control", "no-store");
-      return json(res, 200, { ok: true, token: cfg.auth!.token! });
-    }
-
-    // ── multibot (H4): sesja przeglądarki dla ekranu komputera ─────────
-    // Ekran to <iframe> z noVNC, a nawigacja iframe'a NIE MOŻE dołożyć nagłówka
-    // Authorization; websockify też nie zna naszego subprotokołu. Cookie jest
-    // jedynym poświadczeniem, które przejdzie przez oba — więc klient, który ma
-    // token, wymienia go raz na sesję urządzenia. Wymiana wymaga tokena, czyli
-    // nie osłabia bramki; sesje działają bez Firebase, bo tylko samo LOGOWANIE
-    // Google jest od niego zależne.
-    if (method === "POST" && path === "/api/auth/session") {
-      const body = await readBody(req).catch(() => ({}));
-      const sessionId = createDeviceSession(cfg.firebase?.ownerUid ?? "legacy-token", String(body?.label ?? "browser"), {
-        email: cfg.profile?.email,
-        name: cfg.profile?.name,
-      });
-      res.setHeader("set-cookie", buildSessionCookie(sessionId, isSecureRequest(req)));
-      res.setHeader("cache-control", "no-store");
-      return json(res, 200, { ok: true });
-    }
-
-    // ── multibot (A1): co ekran logowania ma pokazać ──────────────────
-    // Publiczna (patrz `mountAuth`): klient pyta o to, ZANIM ma czym się
-    // uwierzytelnić. Oddajemy tylko rzeczy, które i tak muszą trafić do
-    // przeglądarki, żeby logowanie Google w ogóle zadziałało.
-    if (method === "GET" && path === "/api/auth/status") {
-      const google = isFirebaseConfigured(cfg) && cfg.firebase?.apiKey && cfg.firebase?.clientId
-        ? {
-            configured: true as const,
-            projectId: cfg.firebase.projectId!,
-            apiKey: cfg.firebase.apiKey,
-            clientId: cfg.firebase.clientId,
-          }
-        : { configured: false as const };
-      const sessionId = sessionIdFromCookieHeader(req.headers.cookie);
-      const session = sessionId ? verifyDeviceSession(sessionId) : null;
-      res.setHeader("cache-control", "no-store");
-      return json(res, 200, {
-        google,
-        session: Boolean(session),
-        user: session ? { uid: session.uid, email: session.email ?? null, name: session.name ?? null } : null,
-        workspace: { id: cfg.workspace?.id ?? "default", name: cfg.workspace?.name ?? "MultiBot workspace" },
-      });
-    }
-
-    // ── multibot (A1): Firebase Google login → lokalna sesja urządzenia ──
-    if (method === "POST" && path === "/api/auth/firebase/session") {
-      if (!isFirebaseConfigured(cfg)) return json(res, 404, { error: "firebase not configured" });
-      try {
-        const body = await readBody(req);
-        const claims = await verifyFirebaseIdToken(String(body?.idToken ?? ""), cfg.firebase!.projectId!);
-        const bearer = req.headers.authorization?.startsWith("Bearer ")
-          ? req.headers.authorization.slice(7)
-          : req.headers["x-multibot-token"];
-        const member = authorizeWorkspaceUser(claims.uid, {
-          email: claims.email,
-          name: claims.name,
-        }, {
-          loopback: isLoopbackRequest(req),
-          bearerAuthed: tokenMatches(bearer, cfg.auth?.token ?? ""),
-          invite: String(body?.invite ?? ""),
-        });
-        const sessionId = createDeviceSession(claims.uid, String(body?.label ?? "device"), {
-          email: member.email,
-          name: member.name,
-        });
-        res.setHeader("set-cookie", buildSessionCookie(sessionId, isSecureRequest(req)));
-        res.setHeader("cache-control", "no-store");
-        return json(res, 200, { ok: true, uid: claims.uid, email: claims.email ?? null, role: member.role });
-      } catch (e) {
-        const status = e instanceof FirebaseAuthError ? 401 : 400;
-        return json(res, status, { error: e instanceof Error ? e.message : "invalid request" });
-      }
-    }
-    if (method === "POST" && path === "/api/auth/token/rotate") {
-      if (actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
-      const token = rotateAccessToken(cfg);
-      revokeAuthSessions(req.socket);
-      res.setHeader("cache-control", "no-store");
-      return json(res, 200, { token });
-    }
-
-    if (method === "GET" && path === "/api/workspace") {
-      return json(res, 200, {
-        id: cfg.workspace?.id ?? "default",
-        name: cfg.workspace?.name ?? "MultiBot workspace",
-        members: workspaceMembers(),
-        currentUser: actor ? { uid: actor.uid, email: actor.email ?? null, name: actor.name ?? null, role: actor.role } : null,
-      });
-    }
-    if (method === "GET" && path === "/api/workspace/members") {
-      return json(res, 200, { members: workspaceMembers() });
-    }
-    if (method === "POST" && path === "/api/workspace/invites") {
-      if (actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
-      return json(res, 201, createWorkspaceInvite(actor.uid));
-    }
-
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/search") {
       const query = url.searchParams.get("q") ?? "";
       const kind = url.searchParams.get("type") ?? "all";
       const results: SearchResult[] = [];
       for (const bot of store.bots) {
-        if (!canAccessBot(bot, actor)) continue;
+        if (!canReadBot(bot, actor)) continue;
         if (searchText(query, bot.name, bot.title, bot.description)) {
           results.push({ id: `agent:${bot.id}`, kind: "agent", title: bot.name, subtitle: bot.title || bot.description || "Agent", botId: bot.id });
         }
@@ -4857,7 +4663,7 @@ const server = createServer(async (req, res) => {
           name: typeof role.name === "string" && role.name.trim() ? role.name.trim().slice(0, 80) : role.role.slice(0, 80),
           title: typeof role.role === "string" ? role.role.slice(0, 80) : "",
           description: typeof role.description === "string" ? role.description.slice(0, 500) : "",
-          ownerId: actor?.uid,
+          ownerId: actor?.userId,
           visibility: "team",
         });
         const fresh = store.bot(bot.id)!;
@@ -4873,18 +4679,6 @@ const server = createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/api/device/resources") {
       return json(res, 200, deviceResources());
-    }
-    if (method === "POST" && path === "/api/provision") {
-      const body = await readBody(req);
-      // Packaged Electron passes its trusted absolute executable path. Only an
-      // explicit onboarding 24/7 choice installs per-user autostart.
-      if (body?.server === true && process.env.OMB_PACKAGED_EXE) {
-        await registerWindowsServerAutostart(process.env.OMB_PACKAGED_EXE);
-      }
-      // Silnik Hermesa był jedyną rzeczą, którą ta trasa dociągała; po jego
-      // usunięciu zostaje sama rejestracja autostartu serwera 24/7, która nic
-      // nie pobiera — więc nie ma czego śledzić przez /api/progress.
-      return json(res, 202, { ok: true });
     }
     m = path.match(/^\/api\/progress\/([\w-]+)$/);
     if (m && method === "GET") {
@@ -5072,19 +4866,22 @@ const server = createServer(async (req, res) => {
         }
         patch.opencode = { key: (body.opencode as { key: string }).key.trim() };
       }
-      if (body.profile && (!actor || actor.uid === "legacy-token" || actor.uid === "local")) patch.profile = body.profile;
-      if (body.profile && actor && actor.uid !== "legacy-token" && actor.uid !== "local") {
-        updateWorkspaceProfile(actor.uid, {
-          name: typeof body.profile.name === "string" ? body.profile.name : undefined,
-          email: typeof body.profile.email === "string" ? body.profile.email : undefined,
-        });
-      }
       // multibot: strefa i autoweryfikacja to ustawienia aplikacji, nie
       // poświadczenia serwera — osobny worek, żeby nie wpadły ani pod bramkę
       // "owner only", ani pod przeładowanie floty niżej (jak profil).
       // `autoVerify` scalamy z zapisanym stanem, więc UI może przysłać samo
       // `{enabled}` albo samą listę `rules` i nie wyzeruje tym drugiego.
       const settings: Partial<AppConfig> = {};
+      // Profil to ustawienie użytkownika, nie poświadczenie serwera — poza
+      // bramką "owner only" i poza przeładowaniem floty. Nazwa idzie DODATKOWO
+      // do identity (to ona pokazuje się w interfejsie); e-mail zostaje w
+      // config.json do czasu, aż PR 2 doda `users.email`.
+      if (body.profile && typeof body.profile === "object") {
+        settings.profile = body.profile;
+        if (actor && typeof body.profile.name === "string" && body.profile.name.trim()) {
+          actor = identity.updateProfile(actor, body.profile.name);
+        }
+      }
       if (typeof body.timeZone === "string") settings.timeZone = body.timeZone.trim();
       if (body.autoVerify && typeof body.autoVerify === "object") {
         settings.autoVerify = normalizeAutoVerify({
@@ -5103,17 +4900,14 @@ const server = createServer(async (req, res) => {
         )].slice(0, 200);
       }
       if (Object.keys(patch).length && actor?.role !== "owner") return json(res, 403, { error: "owner access required for server credentials" });
-      if (!Object.keys(patch).length && !Object.keys(settings).length
-        && !(body.profile && actor && actor.uid !== "legacy-token" && actor.uid !== "local")) {
+      if (!Object.keys(patch).length && !Object.keys(settings).length) {
         return json(res, 400, { error: "nothing to save" });
       }
-      if (Object.keys(patch).length || Object.keys(settings).length) {
-        saveConfig({ ...(patch as Partial<AppConfig>), ...settings });
-      }
+      saveConfig({ ...(patch as Partial<AppConfig>), ...settings });
       Object.assign(cfg, loadConfig());
       // provider keys change the fleet; a profile edit must not kill
       // in-flight turns with a pointless reload
-      if (Object.keys(patch).some((k) => k !== "profile")) await reloadProviders();
+      if (Object.keys(patch).length) await reloadProviders();
       const status = configStatusFor(actor);
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
@@ -5332,7 +5126,7 @@ server.on("upgrade", (req, socket: import("node:stream").Duplex) => {
   if (!socket.destroyed) socket.destroy();
 });
 // multibot (H4): the bot's screen. Mounted before auth so one gate covers it.
-mountVncUpgrade(server, (req, botId) => canAccessBot(store.bot(botId), actorForRequest(req)));
+mountVncUpgrade(server, (req, botId) => canReadBot(store.bot(botId), actorForRequest(req)));
 // Kanał zdarzeń po WS — ta sama ścieżka co SSE, ta sama bramka auth (montaż
 // przed `mountAuth`). Patrz `server/events-ws.ts`: tunel buforuje SSE.
 mountEventsWs(server, (url, send, req) => {
@@ -5354,23 +5148,9 @@ mountEventsWs(server, (url, send, req) => {
 });
 
 // Auth mounts after the WS upgrades so one wrapper covers harness HTTP and
-// every WS upgrade path.
-let revokeAuthSessions = (_except?: import("node:stream").Duplex) => {};
-revokeAuthSessions = mountAuth(
-  server,
-  () => cfg.auth!.token!,
-  // Sesja urządzenia jest równorzędna tokenowi. Gdy Firebase nie jest
-  // skonfigurowany, `verifyDeviceSession` nie ma czego znaleźć i jedyną
-  // drogą zostaje token — dokładnie jak dotąd.
-  (req) => {
-    const id = sessionIdFromCookieHeader(req.headers.cookie);
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const refreshSession = url.pathname === "/api/auth/access-token" && typeof req.headers["x-multibot-session"] === "string"
-      ? identity.actorForSessionToken(req.headers["x-multibot-session"])
-      : null;
-    return Boolean(identityActorForRequest(req) || refreshSession || (id && verifyDeviceSession(id)));
-  },
-).revokeSessions;
+// every WS upgrade path. Jedno poświadczenie: identity v2 (cookie sesji, token
+// dostępu w nagłówku/subprotokole, `?token=` na ekranie komputera).
+mountAuth(server, (req) => Boolean(identityActorForRequest(req)));
 
 // multibot (H1): every bot has a computer, so boot makes that true again.
 // Containers survive a harness restart on their own restart policy; this only
@@ -5396,7 +5176,6 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 });
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on http://${HOST}:${PORT}`);
-  if (access.created) console.log("[multibot] legacy access token initialized");
   void reconcileComputers().catch((e) => console.warn("[multibot] computer reconcile failed:", e));
   // multibot (A2): rozgrzewka rusza PO podniesieniu HTTP i nie czeka na nic —
   // serwer odpowiada od pierwszej sekundy, a workery wstają w tle.

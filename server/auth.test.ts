@@ -2,52 +2,64 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
-import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { ensureAccessToken, mountAuth, rotateAccessToken, tokenMatches } from "./auth.ts";
-import { DATA_DIR, type AppConfig } from "./config.ts";
+import { isPublicRoute, mountAuth } from "./auth.ts";
+import { isLoopbackRequest } from "./identity.ts";
 
-describe("access tokens", () => {
-  beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
-
-  it("generates once, persists, and compares without length constraints", () => {
-    const cfg: AppConfig = {};
-    const first = ensureAccessToken(cfg);
-    expect(first).toMatchObject({ created: true });
-    expect(first.token).toMatch(/^[a-f0-9]{64}$/);
-    expect(ensureAccessToken(cfg)).toEqual({ token: first.token, created: false });
-    expect(JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8")).auth.token).toBe(first.token);
-    expect(tokenMatches(first.token, first.token)).toBe(true);
-    expect(tokenMatches("short", first.token)).toBe(false);
+// Jedna szyna: identity v2. Nie ma allowlisty dla parowania ani Firebase, nie
+// ma 426 — niezalogowany dostaje 401 i tyle.
+describe("public allowlist", () => {
+  it("nie wpuszcza tras parowania ani Firebase", () => {
+    expect(isPublicRoute("POST", "/api/pair/claim")).toBe(false);
+    expect(isPublicRoute("POST", "/api/pair/start")).toBe(false);
+    expect(isPublicRoute("GET", "/api/pair")).toBe(false);
+    expect(isPublicRoute("POST", "/api/auth/firebase/session")).toBe(false);
+    expect(isPublicRoute("GET", "/api/auth/status")).toBe(false);
+    expect(isPublicRoute("GET", "/api/auth/token")).toBe(false);
   });
 
-  it("rotation replaces the durable token", () => {
-    const cfg: AppConfig = { auth: { token: "old-token" } };
-    const next = rotateAccessToken(cfg);
-    expect(next).not.toBe("old-token");
-    expect(cfg.auth?.token).toBe(next);
-    expect(JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8")).auth.token).toBe(next);
+  it("wpuszcza tylko to, czego ekran logowania naprawdę potrzebuje", () => {
+    expect(isPublicRoute("GET", "/api/public/server")).toBe(true);
+    expect(isPublicRoute("GET", "/api/health")).toBe(true);
+    expect(isPublicRoute("POST", "/api/auth/join")).toBe(true);
+    expect(isPublicRoute("POST", "/api/auth/login")).toBe(true);
+    expect(isPublicRoute("POST", "/api/auth/register")).toBe(true);
+    // statyczna powłoka tak, dane nigdy
+    expect(isPublicRoute("GET", "/index.html")).toBe(true);
+    expect(isPublicRoute("GET", "/api/bots")).toBe(false);
   });
 });
 
-// multibot (A1): the gate now has two equal keys — the bearer token and a
-// device-session cookie issued after Google login. These are the trust-boundary
-// cases, driven through a real http server rather than by re-implementing the
-// predicate.
-describe("mountAuth with device sessions", () => {
-  const TOKEN = "a".repeat(64);
+// Tunel albo reverse proxy sprawia, że KAŻDE żądanie wygląda na 127.0.0.1.
+// Nagłówek przekazujący adres jest dowodem, że rozmówca lokalny NIE jest.
+describe("isLoopbackRequest", () => {
+  const req = (headers: Record<string, string>, remoteAddress = "127.0.0.1") =>
+    ({ socket: { remoteAddress }, headers }) as unknown as IncomingMessage;
 
+  it("jest prawdą tylko dla gołego loopbacku", () => {
+    expect(isLoopbackRequest(req({}))).toBe(true);
+    expect(isLoopbackRequest(req({}, "::1"))).toBe(true);
+    expect(isLoopbackRequest(req({}, "::ffff:127.0.0.1"))).toBe(true);
+    expect(isLoopbackRequest(req({}, "10.0.0.7"))).toBe(false);
+  });
+
+  it("jest fałszem, gdy żądanie przyszło przez pośrednika", () => {
+    expect(isLoopbackRequest(req({ "x-forwarded-for": "1.2.3.4" }))).toBe(false);
+    expect(isLoopbackRequest(req({ "x-real-ip": "1.2.3.4" }))).toBe(false);
+  });
+});
+
+describe("mountAuth", () => {
   async function withServer(
-    hasSession: (req: IncomingMessage) => boolean,
+    authenticated: (req: IncomingMessage) => boolean,
     run: (base: string) => Promise<void>,
   ) {
     const server = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
-    mountAuth(server, () => TOKEN, hasSession);
+    mountAuth(server, authenticated);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const { port } = server.address() as AddressInfo;
     try {
@@ -57,57 +69,48 @@ describe("mountAuth with device sessions", () => {
     }
   }
 
-  it("refuses an anonymous API call, accepts the bearer token", async () => {
+  it("odrzuca anonimowe wywołanie API przez 401, nigdy 426", async () => {
     await withServer(() => false, async (base) => {
-      expect((await fetch(`${base}/api/bots`)).status).toBe(401);
-      const ok = await fetch(`${base}/api/bots`, { headers: { authorization: `Bearer ${TOKEN}` } });
-      expect(ok.status).toBe(200);
+      const anonymous = await fetch(`${base}/api/bots`);
+      expect(anonymous.status).toBe(401);
+      // stary klient z bearerem to teraz też po prostu anonim
+      const legacy = await fetch(`${base}/api/bots`, { headers: { authorization: "Bearer legacy-token" } });
+      expect(legacy.status).toBe(401);
+      expect((await fetch(`${base}/api/auth/status`)).status).toBe(401);
+      expect((await fetch(`${base}/api/pair`)).status).toBe(401);
+      expect((await fetch(`${base}/api/pair/claim`, { method: "POST", body: "{}" })).status).toBe(401);
+      expect((await fetch(`${base}/api/auth/firebase/session`, { method: "POST", body: "{}" })).status).toBe(401);
     });
   });
 
-  it("accepts a valid device session with no token at all", async () => {
-    await withServer((req) => req.headers.cookie === "mb_session=good", async (base) => {
-      const ok = await fetch(`${base}/api/bots`, { headers: { cookie: "mb_session=good" } });
-      expect(ok.status).toBe(200);
-      const bad = await fetch(`${base}/api/bots`, { headers: { cookie: "mb_session=revoked" } });
-      expect(bad.status).toBe(401);
+  it("wpuszcza poświadczenie identity", async () => {
+    await withServer((req) => req.headers.cookie === "mb_v2_session=good", async (base) => {
+      expect((await fetch(`${base}/api/bots`, { headers: { cookie: "mb_v2_session=good" } })).status).toBe(200);
+      expect((await fetch(`${base}/api/bots`, { headers: { cookie: "mb_v2_session=revoked" } })).status).toBe(401);
     });
   });
 
-  // Ekran logowania pyta o to bez zadnego poswiadczenia — inaczej nie wiedzialby,
-  // czy w ogole pokazac przycisk Google.
-  it("lets the login screen read auth status unauthenticated, GET only", async () => {
-    await withServer(() => false, async (base) => {
-      expect((await fetch(`${base}/api/auth/status`)).status).toBe(200);
-      expect((await fetch(`${base}/api/auth/status`, { method: "POST" })).status).toBe(401);
-    });
-  });
-
-  // H4: the screen's static noVNC client (page + assets) is public — the
-  // content is gated at the WS upgrade. A mobile WebView iframe carries no
-  // credential at all, and noVNC's subresources (app/ui.js) carry no query.
-  it("serves the noVNC page without credentials, keeps the rest gated", async () => {
+  // H4: statyczny klient noVNC (strona + assety) jest publiczny — to sam
+  // podgląd, bez danych. Ekran chroni brama na upgradzie WS.
+  it("serwuje stronę noVNC bez poświadczenia, resztę trzyma za bramą", async () => {
     await withServer(() => false, async (base) => {
       expect((await fetch(`${base}/api/bots/b1/computer/vnc/vnc_lite.html`)).status).toBe(200);
       expect((await fetch(`${base}/api/bots/b1/computer/vnc/app/ui.js`)).status).toBe(200);
-      // the sibling computer routes stay protected
       expect((await fetch(`${base}/api/bots/b1/computer`)).status).toBe(401);
       expect((await fetch(`${base}/api/bots/b1/computer/exec`)).status).toBe(401);
     });
   });
 
-  // H4: the mobile WebView's noVNC iframe opens the websockify upgrade with the
-  // bearer as ?token= (the loader cookie jar is split from the JS fetch jar that
-  // minted the device session). The gate must accept it — and only there, only
-  // with a valid token.
-  it("accepts the screen's websockify upgrade with ?token=, nothing else", async () => {
+  // Websockify na ekranie komputera niesie poświadczenie w `?token=`; czyta je
+  // `identity.actorForRequest`, więc bramka pyta o dokładnie to samo co wszędzie.
+  it("przepuszcza upgrade websockify wyłącznie z ważnym ?token=", async () => {
     const server = createServer();
     let reached = false;
     server.on("upgrade", (_req, socket: Duplex) => {
       reached = true;
       socket.end("HTTP/1.1 101 Switching Protocols\r\n\r\n");
     });
-    mountAuth(server, () => TOKEN, () => false);
+    mountAuth(server, (req) => new URL(req.url ?? "/", "http://localhost").searchParams.get("token") === "good");
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const { port } = server.address() as AddressInfo;
 
@@ -134,27 +137,14 @@ describe("mountAuth with device sessions", () => {
       expect(reached).toBe(false);
 
       reached = false;
-      expect(await status(`?token=${TOKEN}`)).toContain("101");
+      expect(await status("?token=good")).toContain("101");
       expect(reached).toBe(true);
 
-      // wrong token must not slip through
       reached = false;
       expect(await status("?token=wrong")).toBe("HTTP/1.1 401 Unauthorized");
       expect(reached).toBe(false);
     } finally {
       await new Promise((r) => server.close(r));
     }
-  });
-
-  // Without this a client can never log in: it has no token yet, which is the
-  // entire point of logging in.
-  it("lets the Firebase login exchange through unauthenticated", async () => {
-    await withServer(() => false, async (base) => {
-      const res = await fetch(`${base}/api/auth/firebase/session`, { method: "POST", body: "{}" });
-      expect(res.status).toBe(200);
-      // ...but only that exact route, and only for POST
-      expect((await fetch(`${base}/api/auth/firebase/session`)).status).toBe(401);
-      expect((await fetch(`${base}/api/auth/token`)).status).toBe(401);
-    });
   });
 });

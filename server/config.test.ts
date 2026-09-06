@@ -50,7 +50,7 @@ describe("instanceConfigs", () => {
 describe("saveConfig: ustawienia aplikacji", () => {
   it("utrwala strefę czasową i autoweryfikację, nie ruszając reszty pliku", () => {
     ensureDirs();
-    saveConfig({ auth: { token: "keep-me" } });
+    saveConfig({ box: { token: "keep-me" } });
     saveConfig({
       timeZone: "Europe/Warsaw",
       autoVerify: { enabled: true, rules: [{ id: "r1", when: "czytaj kalendarz", decision: "allow" }] },
@@ -62,7 +62,7 @@ describe("saveConfig: ustawienia aplikacji", () => {
       enabled: true,
       rules: [{ id: "r1", when: "czytaj kalendarz", decision: "allow" }],
     });
-    expect(disk.auth.token).toBe("keep-me");
+    expect(disk.box.token).toBe("keep-me");
     expect(loadConfig().timeZone).toBe("Europe/Warsaw");
   });
 
@@ -102,7 +102,7 @@ describe("config permissions", () => {
     chmodSync(path, 0o666);
 
     ensureDirs();
-    saveConfig({ auth: { token: "test-token" } });
+    saveConfig({ box: { token: "test-token" } });
 
     expect(statSync(DATA_DIR).mode & 0o777).toBe(0o700);
     expect(statSync(path).mode & 0o777).toBe(0o600);

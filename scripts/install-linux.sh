@@ -23,7 +23,7 @@ if [[ "$MODE" == docker ]]; then
   say "Docker route: the harness is the only published port (8799, loopback)."
   command -v docker >/dev/null || { say "missing docker" >&2; exit 1; }
   run docker compose -f "$ROOT/docker-compose.selfhost.yml" up -d --build
-  say "Public HTTPS: run scripts/tunnel.sh with a named Cloudflare Tunnel, or put a trusted reverse proxy in front of port 8799"
+  say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
   say "Next: open MultiBot at the address, choose Set up server, then share host + server password"
   exit 0
 fi
@@ -69,5 +69,5 @@ EOF
 fi
 
 say "Address: http://$(hostname -f 2>/dev/null || hostname):8799"
-say "Public HTTPS: run scripts/tunnel.sh with a named Cloudflare Tunnel, or put a trusted reverse proxy in front of port 8799"
+say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
 say "Next: open MultiBot at the address, choose Set up server, then share host + server password"

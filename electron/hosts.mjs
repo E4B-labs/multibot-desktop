@@ -1,8 +1,6 @@
 // Remote-host registry for the Electron shell (C2). Persisted in its own
 // file under userData — separate from the harness's own
-// ~/.openmausbot/config.json (owned by server/config.ts) and from
-// localAccessTokenFragment()'s local-mode token handling in main.mjs, which
-// stays untouched.
+// ~/.openmausbot/config.json (owned by server/config.ts).
 import { app, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
