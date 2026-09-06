@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 // Downloads the Tor Expert Bundle for Windows x86_64, verifies its SHA-256
 // against the official sums file, and keeps only what the desktop app needs:
-// tor.exe, whatever DLLs ship next to it, and the two geoip databases.
-// Pluggable transports (lyrebird/conjure), tor-gencert and the docs are
-// dropped — MultiBot only ever runs a plain client/onion service.
+// tor.exe plus whatever DLLs ship next to it. Everything else is dropped —
+// pluggable transports (lyrebird/conjure), tor-gencert, the docs, and the
+// geoip/geoip6 databases. The last one is 24 MB of the 34 and buys nothing:
+// they only feed ExcludeNodes/EntryNodes-by-country and bridge statistics,
+// which a client-only tor with a fixed onion target never asks for. Without
+// them tor logs two "Path for GeoIPFile (<default>) is relative" warnings and
+// bootstraps to 100% normally (verified on 15.0.21).
 //
 // Not run at install time: the result lands in vendor/tor/win-x64/ which is
 // gitignored, so whoever builds the Windows installer runs this once.
@@ -73,8 +77,6 @@ rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 const keep = [
   ["tor/tor.exe", "tor.exe"],
-  ["data/geoip", "geoip"],
-  ["data/geoip6", "geoip6"],
   ...readdirSync(resolve(tmp, "tor"))
     .filter((f) => f.toLowerCase().endsWith(".dll"))
     .map((f) => [`tor/${f}`, f]),

@@ -5,14 +5,15 @@ desktop installer additionally ships the binaries listed below, unmodified.
 
 ## Tor
 
-`tor.exe`, `geoip` and `geoip6` come from the **Tor Expert Bundle
-15.0.21** (tor 0.4.9.11), Windows x86_64, downloaded and SHA-256 verified by
+`tor.exe` comes from the **Tor Expert Bundle 15.0.21** (tor 0.4.9.11),
+Windows x86_64, downloaded and SHA-256 verified by
 `scripts/fetch-tor.mjs` from
 <https://archive.torproject.org/tor-package-archive/torbrowser/15.0.21/>.
 
-The binary is shipped **unmodified and unrenamed**. Only the pluggable
-transports (`lyrebird`, `conjure-client`), `tor-gencert` and the bundle's docs
-are left out, because MultiBot only ever runs a plain client and onion service.
+The binary is shipped **unmodified and unrenamed**. Everything else in the
+bundle is left out — pluggable transports (`lyrebird`, `conjure-client`),
+`tor-gencert`, the docs and the `geoip`/`geoip6` databases — because MultiBot
+only ever runs a plain client and onion service.
 Source for the exact build is at <https://gitlab.torproject.org/tpo/core/tor>.
 
 "Tor" and the Onion Logo are registered trademarks of The Tor Project, Inc.
@@ -81,13 +82,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 notice for the exact build we ship is `docs/tor.txt` inside the Expert Bundle
 archive named above; OpenSSL, zlib and libevent have their own files next to
 it (`docs/openssl.txt`, `docs/zlib.txt`, `docs/libevent.txt`).
-
-### geoip / geoip6
-
-The `geoip` and `geoip6` databases are based on the IPFire Location Database
-(<https://location.ipfire.org/>) and are distributed under Creative Commons
-**BY-SA 4.0** — <https://creativecommons.org/licenses/by-sa/4.0/>. They ship
-unmodified.
 
 ### Not bundled elsewhere
 

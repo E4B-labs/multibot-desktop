@@ -142,8 +142,8 @@ Tor to osobny projekt (The Tor Project) — MultiBot go tylko uruchamia i nigdy 
 
 Adres `.onion` potrzebuje procesu `tor` — i tylko Windows dostaje go w paczce.
 
-- **Windows (desktop i serwer)**: instalator niesie `tor.exe` razem z bazami
-  `geoip` i `geoip6` w zasobach aplikacji, czyli `process.resourcesPath/tor/`
+- **Windows (desktop i serwer)**: instalator niesie `tor.exe` w zasobach
+  aplikacji, czyli `process.resourcesPath/tor/`
   (`electron-builder.yml`, sekcja `win.extraResources`). Binarka pochodzi z
   Tor Expert Bundle i jest **niezmieniona i nieprzemianowana** — zmiana nazwy
   albo przepakowanie podnosi szansę na fałszywy alarm w Defenderze, a i tak
@@ -163,9 +163,14 @@ node scripts/fetch-tor.mjs
 ```
 
 Skrypt ściąga Expert Bundle, **sprawdza SHA-256** względem oficjalnego
-`sha256sums-unsigned-build.txt`, wyrzuca pluggable transports i docsy i zostawia
-w `vendor/tor/win-x64/` tylko `tor.exe`, ewentualne DLL-e i dwie bazy geoip
-(~36 MB na dysku, w instalatorze mniej — NSIS to kompresuje). `pnpm package:win`
+`sha256sums-unsigned-build.txt` i zostawia w `vendor/tor/win-x64/` tylko
+`tor.exe` i ewentualne DLL-e obok niego (**9.7 MB**). Reszta leci w kosz:
+pluggable transports, `tor-gencert`, docsy oraz bazy `geoip`/`geoip6`. Te
+ostatnie to 24 z 34 MB i nie robią nic dla nas — służą wyłącznie doborowi
+węzłów po kraju (`ExcludeNodes`, `EntryNodes`) i statystykom mostków, a nasz
+klient chodzi do jednego adresu `.onion`. Bez nich tor wypisuje dwa ostrzeżenia
+`Path for GeoIPFile (<default>) is relative` i normalnie bootstrapuje do 100%
+(sprawdzone na 15.0.21). `pnpm package:win`
 zaczyna od `node scripts/fetch-tor.mjs --check` i przerywa z czytelnym błędem,
 jeśli paczki nie ma. Wersję i atrybucję trzyma `THIRD-PARTY.md` w korzeniu repo
 — plik jedzie też do zasobów instalatora. **Uwaga licencyjna:** źródła Tora są

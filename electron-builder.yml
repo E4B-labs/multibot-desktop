@@ -72,7 +72,7 @@ dmg:
 # multibot: Windows. Bez podpisu (brak certyfikatu) — instalator pokaże
 # SmartScreen. icon.ico wygenerowana z build/icon-1024.png.
 win:
-  # multibot: Tor Expert Bundle (tor.exe + geoip/geoip6) leży w gitignorowanym
+  # multibot: tor.exe z Tor Expert Bundle leży w gitignorowanym
   # vendor/, więc `pnpm package:win` najpierw sprawdza, czy ktoś je pobrał
   # (`node scripts/fetch-tor.mjs`). Tylko Windows — mac/Linux używają
   # systemowego `tor` (PLAN-TOR D7). Sekcje `extraResources` łączą się z globalną,
