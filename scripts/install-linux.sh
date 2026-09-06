@@ -11,7 +11,7 @@ while [[ $# -gt 0 ]]; do
     --mode=systemd) MODE="systemd"; shift ;;
     --mode=docker) MODE="docker"; shift ;;
     --dry-run|--plan) DRY_RUN=1; shift ;;
-    --self-test) bash -n "$0" && bash -n "$ROOT/scripts/start-multibot.sh" && echo "linux installer: OK"; exit 0 ;;
+    --self-test) bash -n "$0" && bash -n "$ROOT/scripts/start-multibot.sh" && bash -n "$ROOT/scripts/print-setup-values.sh" && echo "linux installer: OK"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -25,7 +25,10 @@ if [[ "$MODE" == docker ]]; then
   run docker compose -f "$ROOT/docker-compose.selfhost.yml" up -d --build
   say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
   say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
-  say "Next: open MultiBot at the address, choose Set up server, then share host + server password"
+  # setup.json lives inside the container volume, so the values come out of the
+  # log the entrypoint prints them to, not out of a file on this host.
+  say "Three values (address, name, password): docker compose -f $ROOT/docker-compose.selfhost.yml logs app"
+  say "Enter these three values in MultiBot on any device → Sign in to a server."
   exit 0
 fi
 
@@ -57,6 +60,7 @@ WorkingDirectory=$ROOT
 Environment=HOME=%h
 Environment=OMB_HOST=0.0.0.0
 Environment=OMB_PORT=8799
+Environment=OMB_DATA_DIR=${OMB_DATA_DIR:-$HOME/.openmausbot}
 ExecStart=$BASH_BIN $ROOT/scripts/start-multibot.sh
 Restart=always
 RestartSec=5
@@ -69,7 +73,14 @@ EOF
   if command -v loginctl >/dev/null; then loginctl enable-linger "$USER" || say "enable linger manually: loginctl enable-linger $USER"; fi
 fi
 
-say "Address: https://$(hostname -f 2>/dev/null || hostname):8799"
 say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
 say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
-say "Next: open MultiBot at the address, choose Set up server, then share host + server password"
+
+# The server mints its three values on its first boot and writes them to
+# setup.json; systemd has just started it, so wait for the file instead of
+# guessing an address from `hostname`.
+if (( DRY_RUN )); then
+  say "print the three values from \$HOME/.openmausbot/setup.json"
+else
+  bash "$ROOT/scripts/print-setup-values.sh" 30 || true
+fi

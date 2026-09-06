@@ -1,7 +1,7 @@
 // multibot (G6): one-command, per-user Windows server install.
 // No elevation: Task Scheduler ONLOGON + LIMITED runs hidden PowerShell.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { get as httpsGet } from "node:https";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -38,6 +38,9 @@ export function windowsServerPlan(env = process.env, packagedExe) {
     packagedExe: installedApp,
     host: "127.0.0.1",
     port: PORT,
+    // The harness writes its three values here on first boot (OMB_DATA_DIR is
+    // not set for this task, so it is the default under the user profile).
+    dataDir: join(home, ".openmausbot"),
     task: {
       command: "schtasks.exe",
       createArgs: ["/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK_NAME, "/TR", packagedAction],
@@ -46,6 +49,34 @@ export function windowsServerPlan(env = process.env, packagedExe) {
     },
     publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs OMB_TLS=off on loopback",
   };
+}
+
+/** The three values a device needs, read back from the file the harness writes
+ * on its first boot. Nothing is printed once a profile has claimed the server —
+ * the file is deleted then, and there is nothing left to hand out. */
+function printSetupValues(plan) {
+  const file = join(plan.dataDir, "setup.json");
+  let setup;
+  try {
+    setup = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    // The file is deleted the moment a profile claims the server; every other
+    // failure (unreadable, half-written, corrupt) is worth saying out loud.
+    if (error?.code === "ENOENT") console.log("Server already set up; sign in with an existing profile.");
+    else console.log(`Could not read ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (!setup.address || !setup.serverName || !setup.serverPassword) {
+    console.log(`${file} is incomplete — restart the server and read it again.`);
+    return;
+  }
+  const rows = [["Address", setup.address], ["Name", setup.serverName], ["Password", setup.serverPassword]];
+  if (setup.tlsFingerprint) rows.push(["Fingerprint", setup.tlsFingerprint]);
+  const pad = Math.max(...rows.map(([name]) => name.length));
+  console.log("");
+  for (const [name, value] of rows) console.log(`  ${name.padEnd(pad)}   ${value}`);
+  console.log("\n  Enter these three values in MultiBot on any device \u2192 Sign in to a server.");
+  console.log(`  They stay in ${file} until the first profile is created.`);
 }
 
 function run(command, args, options = {}) {
@@ -135,8 +166,9 @@ async function install() {
     await waitForServer(plan.port);
     console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
     console.log(`HTTPS: ${plan.publicHttps}`);
-    console.log("Next: open MultiBot and choose Set up server. This service listens on loopback only —");
+    console.log("This service listens on loopback only, so the address below is https://127.0.0.1 —");
     console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
+    printSetupValues(plan);
     return;
   }
 
@@ -162,8 +194,9 @@ async function install() {
 
   console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
   console.log(`HTTPS: ${plan.publicHttps}`);
-  console.log("Next: open MultiBot and choose Set up server. This service listens on loopback only —");
+  console.log("This service listens on loopback only, so the address below is https://127.0.0.1 —");
   console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
+  printSetupValues(plan);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

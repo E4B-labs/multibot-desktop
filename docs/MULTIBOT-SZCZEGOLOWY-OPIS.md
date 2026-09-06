@@ -1517,7 +1517,15 @@ bash scripts/install-termux.sh
 Usługa używa `termux-services`, Termux:Boot i wake lock. Chat, memory,
 routines i skills działają.
 
-### 23.5. Zdalny HTTPS
+### 23.5. Trzy wartości po pierwszym boocie
+
+Każdy instalator kończy wypisaniem adresu, nazwy serwera i hasła serwera
+(plus odcisku certyfikatu) z `DATA_DIR/setup.json`; w kontenerze te same
+wartości idą raz do `docker compose logs app`. Wpisuje się je w MultiBot na
+dowolnym urządzeniu w `Sign in to a server`. Gdy pliku nie ma, serwer ma już
+profil i trzeba zalogować się na istniejący. Szczegóły: `docs/REMOTE-ACCESS.md`.
+
+### 23.6. Zdalny HTTPS
 
 Od 0.4.0 harness sam słucha po HTTPS (`https://<adres>:8799`) na certyfikacie z
 własnym podpisem, który wystawia sobie przy pierwszym boocie — nic dodatkowego

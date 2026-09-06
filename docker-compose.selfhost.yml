@@ -8,6 +8,10 @@ services:
     ports:
       - "127.0.0.1:8799:8799"
     volumes:
+      # HOME=/data, so the first boot writes the three values (address, server
+      # name, server password) to /data/.openmausbot/setup.json inside this
+      # volume, 0600. They are also in `docker compose logs app` once; after the
+      # first profile is created the file is gone.
       - multibot-data:/data
 volumes:
   multibot-data:
