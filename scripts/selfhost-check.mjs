@@ -25,6 +25,18 @@ must(linux.includes('pnpm --dir "$ROOT" build:server'), "Linux installer omits s
 must(termux.includes("termux-services") && termux.includes(".termux/boot"), "Termux reboot persistence missing");
 must(termux.includes("termux-services/svlogger"), "Termux service logger missing");
 must(termux.includes('pnpm --dir "$ROOT" build:server'), "Termux installer omits server build");
-must(linux.includes("trusted reverse proxy in front of port 8799"), "Linux HTTPS guidance missing");
-must(termux.includes("trusted reverse proxy in front of port 8799"), "Termux HTTPS guidance missing");
+must(linux.includes("self-signed certificate") && linux.includes("OMB_TLS=off"), "Linux HTTPS guidance missing");
+must(termux.includes("self-signed certificate") && termux.includes("OMB_TLS=off"), "Termux HTTPS guidance missing");
+// TLS jest ZAWSZE: harness wystawia sobie certyfikat na pierwszym boocie i
+// słucha po HTTPS. Instalacja, która by o tym zapomniała, wypuszcza serwer na
+// świat gołym tekstem — stąd sprawdzenie strukturalne, nie tylko dokumentacja.
+const indexTs = read("server/index.ts");
+must(existsSync(join(root, "server", "tls-cert.ts")), "self-signed certificate module missing");
+must(indexTs.includes("createHttpsServer({ key: TLS.keyPem, cert: TLS.certPem }"), "harness does not serve HTTPS");
+// Domyślny nasłuch to pętla zwrotna; wyjście do sieci wybiera instalator.
+must(indexTs.includes('const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1"'), "harness default bind is no longer loopback");
+must(linux.includes("OMB_HOST=0.0.0.0") && termux.includes("OMB_HOST=0.0.0.0"), "installers no longer expose the server on the network");
+// Bez TLS-a wolno stać tylko za reverse proxy na loopbacku — i to ma być
+// odmowa startu, nie ostrzeżenie ginące w logu.
+must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("process.exit(1)"), "OMB_TLS=off is not restricted to loopback");
 console.log("self-host install paths: OK (no services started)");

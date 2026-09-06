@@ -13,13 +13,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = `https://127.0.0.1:${PORT}`;
 // Real identity v2 credential, minted in beforeAll by actually setting the
 // server up and registering its first (owner) profile.
 let TOKEN = "";
 let serverName = "";
 let serverPassword = "";
 let setupAddress = "";
+let setupFingerprint: string | null = null;
 let setupValuesBehindProxy = 0;
 let setupValuesWithoutToken = 0;
 
@@ -153,10 +154,11 @@ beforeAll(async () => {
   setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
   const setup = await fetch(`${BASE}/api/setup/values`, { headers: withToken });
   if (setup.status !== 200) throw new Error(`setup values unavailable (${setup.status}): ${await setup.text()}`);
-  const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[] };
+  const values = await setup.json() as { serverName: string; serverPassword: string; address: string; addresses: string[]; tlsFingerprint: string | null };
   serverName = values.serverName;
   serverPassword = values.serverPassword;
   setupAddress = values.address;
+  setupFingerprint = values.tlsFingerprint;
   const registered = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -899,7 +901,10 @@ describe("harness HTTP API", () => {
     expect(setupValuesBehindProxy).toBe(404);
     // …and a local app that cannot read setup.json gets nothing either.
     expect(setupValuesWithoutToken).toBe(404);
-    expect(setupAddress).toMatch(/^http:\/\//);
+    // Trzy wartości opisują serwer po HTTPS i niosą odcisk, po którym klient
+    // pozna, że rozmawia z TYM serwerem (server/tls-cert.ts).
+    expect(setupAddress).toMatch(/^https:\/\//);
+    expect(setupFingerprint).toMatch(/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/);
     // beforeAll already registered the owner, so the route is closed for good.
     expect((await fetch(`${BASE}/api/setup/values`)).status).toBe(404);
     expect(existsSync(join(home, ".openmausbot", "setup.json"))).toBe(false);

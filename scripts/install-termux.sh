@@ -59,7 +59,8 @@ EOF
   sv-enable multibot
 fi
 
-say "Address: http://$(hostname 2>/dev/null || echo phone):8799"
+say "Address: https://$(hostname 2>/dev/null || echo phone):8799"
 say "Keep phone awake: termux-wake-lock (Boot script repeats this)"
-say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
+say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
+say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
 say "Next: open MultiBot at the address, choose Set up server, then share host + server password"

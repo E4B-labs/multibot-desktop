@@ -23,7 +23,8 @@ if [[ "$MODE" == docker ]]; then
   say "Docker route: the harness is the only published port (8799, loopback)."
   command -v docker >/dev/null || { say "missing docker" >&2; exit 1; }
   run docker compose -f "$ROOT/docker-compose.selfhost.yml" up -d --build
-  say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
+  say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
+  say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
   say "Next: open MultiBot at the address, choose Set up server, then share host + server password"
   exit 0
 fi
@@ -68,6 +69,7 @@ EOF
   if command -v loginctl >/dev/null; then loginctl enable-linger "$USER" || say "enable linger manually: loginctl enable-linger $USER"; fi
 fi
 
-say "Address: http://$(hostname -f 2>/dev/null || hostname):8799"
-say "Public HTTPS: put a trusted reverse proxy in front of port 8799"
+say "Address: https://$(hostname -f 2>/dev/null || hostname):8799"
+say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
+say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
 say "Next: open MultiBot at the address, choose Set up server, then share host + server password"

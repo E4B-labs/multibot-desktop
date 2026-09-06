@@ -2,6 +2,7 @@
 // No elevation: Task Scheduler ONLOGON + LIMITED runs hidden PowerShell.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { get as httpsGet } from "node:https";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +44,7 @@ export function windowsServerPlan(env = process.env, packagedExe) {
       sourceCreateArgs: ["/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK_NAME, "/TR", sourceAction],
       runArgs: ["/Run", "/TN", TASK_NAME],
     },
-    publicHttps: "a trusted HTTPS reverse proxy",
+    publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs OMB_TLS=off on loopback",
   };
 }
 
@@ -57,14 +58,36 @@ function run(command, args, options = {}) {
   });
 }
 
+// Harness słucha po HTTPS z certyfikatem z własnego podpisu (server/tls-cert.ts),
+// więc `fetch` odrzuciłby go bez pytania — stąd surowy `https.get`. To pętla
+// zwrotna do procesu, który właśnie sami uruchomiliśmy: nie ma czego przypinać.
+function healthOnce(port) {
+  return new Promise((resolvePromise) => {
+    const req = httpsGet(
+      { host: "127.0.0.1", port, path: "/api/health", rejectUnauthorized: false, timeout: 2_000 },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (raw += chunk));
+        res.on("end", () => {
+          try {
+            resolvePromise(res.statusCode === 200 ? JSON.parse(raw) : null);
+          } catch {
+            resolvePromise(null);
+          }
+        });
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", () => resolvePromise(null));
+  });
+}
+
 async function waitForServer(port, timeoutMs = 15 * 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2_000) });
-      const body = response.ok ? await response.json() : null;
-      if (body?.app === "multibot" && body.static === true) return;
-    } catch {}
+    const body = await healthOnce(port);
+    if (body?.app === "multibot" && body.static === true) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
   }
   throw new Error(`server did not become ready on 127.0.0.1:${port}`);
@@ -110,9 +133,10 @@ async function install() {
     await run(plan.task.command, plan.task.createArgs);
     await run(plan.task.command, plan.task.runArgs);
     await waitForServer(plan.port);
-    console.log(`\nMultibot server: http://127.0.0.1:${plan.port}`);
-    console.log(`Public HTTPS: ${plan.publicHttps}`);
-    console.log("Next: open MultiBot, choose Set up server, then share host + server password.");
+    console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
+    console.log(`HTTPS: ${plan.publicHttps}`);
+    console.log("Next: open MultiBot and choose Set up server. This service listens on loopback only —");
+    console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
     return;
   }
 
@@ -136,9 +160,10 @@ async function install() {
     throw new Error(`could not register per-user startup task. Run manually:\n${plan.task.command} ${plan.task.sourceCreateArgs.join(" ")}\n${error}`);
   }
 
-  console.log(`\nMultibot server: http://127.0.0.1:${plan.port}`);
-  console.log(`Public HTTPS: ${plan.publicHttps}`);
-  console.log("Next: open MultiBot, choose Set up server, then share host + server password.");
+  console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
+  console.log(`HTTPS: ${plan.publicHttps}`);
+  console.log("Next: open MultiBot and choose Set up server. This service listens on loopback only —");
+  console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

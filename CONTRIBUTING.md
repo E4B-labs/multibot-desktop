@@ -29,7 +29,7 @@ test suite runs on macOS, Linux, and Windows.
 git clone https://github.com/E4B-labs/multibot-desktop.git && cd multibot-desktop
 corepack enable && pnpm install --frozen-lockfile
 
-pnpm dev:server    # harness server → 127.0.0.1:8799
+pnpm dev:server    # harness server → https://127.0.0.1:8799 (self-signed, curl -k)
 pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # Electron shell (macOS)
 

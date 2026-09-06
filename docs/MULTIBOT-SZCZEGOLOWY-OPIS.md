@@ -1519,9 +1519,12 @@ routines i skills działają.
 
 ### 23.5. Zdalny HTTPS
 
-Do dostępu z telefonu postawić zaufane reverse proxy z HTTPS przed
-`http://127.0.0.1:8799` — to samo, co drukują `scripts/install-linux.sh` i
-`scripts/install-termux.sh`. Bez usług trzecich i bez tuneli.
+Od 0.4.0 harness sam słucha po HTTPS (`https://<adres>:8799`) na certyfikacie z
+własnym podpisem, który wystawia sobie przy pierwszym boocie — nic dodatkowego
+nie trzeba stawiać. Zaufanie idzie po odcisku SHA-256 (TOFU), a odcisk widać w
+logu startowym i w `GET /api/public/server`. Zaufane reverse proxy jest opcją;
+wtedy TLS kończy się na nim, a harness stoi na `OMB_HOST=127.0.0.1 OMB_TLS=off`.
+Szczegóły: `docs/REMOTE-ACCESS.md`. Bez usług trzecich i bez tuneli.
 
 ---
 

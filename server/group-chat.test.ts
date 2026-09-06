@@ -74,7 +74,7 @@ const newGroup = async (name: string, botIds: string[]) =>
 const startHarness = async (extraEnv: Record<string, string>) => {
   chmodSync(FAKE_CLI, 0o755);
   const port = 18800 + Math.floor(Math.random() * 10_000);
-  base = `http://127.0.0.1:${port}`;
+  base = `https://127.0.0.1:${port}`;
   home = mkdtempSync(join(tmpdir(), "omb-groupchat-"));
   stderr = "";
   mkdirSync(join(home, ".openmausbot"), { recursive: true });

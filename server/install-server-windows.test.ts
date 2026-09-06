@@ -23,7 +23,7 @@ describe("Windows one-command server installer", () => {
       installDir: join(localAppData, "Multibot Server"),
       packagedExe,
       task: { command: "schtasks.exe" },
-      publicHttps: "a trusted HTTPS reverse proxy",
+      publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs OMB_TLS=off on loopback",
     });
     expect(plan.task.createArgs).toEqual(expect.arrayContaining(["/SC", "ONLOGON", "/RL", "LIMITED"]));
     expect(plan.task.createArgs.join(" ")).not.toMatch(/HIGHEST|\/RU\s+SYSTEM/i);
@@ -41,7 +41,7 @@ describe("Windows one-command server installer", () => {
     expect(main).toContain('process.argv.includes("--server-only")');
     expect(main).toContain('OMB_HOST: "127.0.0.1"');
     expect(main).toContain('OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : ""');
-    expect(main).toContain("body?.service === true");
+    expect(main).toContain("json?.service === true");
     // Fragment z tokenem powstaje teraz ze sklejki (obok jedzie `join=<grant>`
     // powłoki), więc literału „#access_token=" już w kodzie nie ma.
     expect(main).toContain("access_token=${encodeURIComponent(token)}");

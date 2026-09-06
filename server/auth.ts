@@ -3,7 +3,8 @@
 // subprotocol / `?token=` the screen's websockify upgrade carries), then 401.
 // There is no second rail any more: an unauthenticated caller is always 401,
 // never 426.
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
+import type { Server as HttpsServer } from "node:https";
 import type { Duplex } from "node:stream";
 
 import { matchVncRoute } from "./computer-vnc-proxy.ts";
@@ -45,7 +46,7 @@ export function requestActor<T>(req: IncomingMessage): T | null {
  * including the events and per-bot computer sockets. `authenticate` is the
  * identity lookup — it already reads the cookie, the bearer, the `multibot-v2`
  * subprotocol and the screen's `?token=` — and returns the actor or null. */
-export function mountAuth<T>(server: Server, authenticate: (req: IncomingMessage) => T | null) {
+export function mountAuth<T>(server: HttpServer | HttpsServer, authenticate: (req: IncomingMessage) => T | null) {
   const sessions = new Set<Duplex>();
   const tracked = new WeakSet<Duplex>();
   const track = (socket: Duplex) => {

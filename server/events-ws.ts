@@ -11,7 +11,8 @@
 // Bramka autoryzacji jest jedna — `mountAuth` opakowuje listener `upgrade`, więc
 // ten moduł montujemy PRZED nim (jak `mountVncUpgrade`).
 import { createHash } from "node:crypto";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage, Server as HttpServer } from "node:http";
+import type { Server as HttpsServer } from "node:https";
 import type { Duplex } from "node:stream";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -98,7 +99,7 @@ export function eventsWsClientCount(): number {
 /** Montuje upgrade `/api/events`. `onOpen` dostaje URL (parametry jak w SSE)
  *  i nadajnik pierwszej ramki. */
 export function mountEventsWs(
-  server: Server,
+  server: HttpServer | HttpsServer,
   onOpen: (url: URL, send: (text: string) => void, req: IncomingMessage) => EventFilter | void,
 ): void {
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {

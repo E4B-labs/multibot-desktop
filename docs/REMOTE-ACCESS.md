@@ -37,16 +37,33 @@ Setup serwera jest dozwolony wyłącznie z loopbacka urządzenia hostującego. J
 
 Nie ma QR, Tailscale, WireGuard ani ręcznego wklejania tokenu w normalnym flow.
 
-## Publiczny HTTPS
+## HTTPS
 
-Serwer lokalny nasłuchuje domyślnie na porcie `8799`. Do publicznego dostępu postaw zaufane reverse proxy z poprawnym certyfikatem HTTPS wskazujące na `http://127.0.0.1:8799`.
+Od 0.4.0 harness słucha **wyłącznie po HTTPS**, na porcie `8799`. Domyślnie nasłuchuje na pętli zwrotnej — wyjście do sieci to świadoma decyzja (`OMB_HOST=0.0.0.0`, tak robią `scripts/install-linux.sh` i `scripts/install-termux.sh`). Certyfikat wystawia sobie sam na pierwszym boocie: klucz P-256 i X.509 na 10 lat w `DATA_DIR/tls.key` (0600, na Windowsie dodatkowo `icacls`) i `DATA_DIR/tls.crt`, z SAN-em obejmującym adresy IP tej maszyny z chwili wystawienia oraz `localhost`. Odcisk SHA-256 idzie do logu startowego, do `setup.json`, do `GET /api/public/server`, `GET /api/setup/values` i `GET /api/server`.
 
-Przed udostępnieniem adresu sprawdź:
+Certyfikat nie ma urzędu, który by go potwierdził, więc zaufanie działa jak w SSH: klient zapamiętuje odcisk przy pierwszym połączeniu i pilnuje go potem (desktop robi to sam, `electron/tls-pin.mjs`; przeglądarka pokazuje ostrzeżenie raz na profil). **Zmiana odcisku to twardy błąd**, nie cicha zgoda.
+
+Dlatego certyfikat jest wystawiany RAZ i nie wymienia się sam. Nowy powstaje tylko wtedy, gdy pliku nie da się wczytać, klucz nie pasuje do certyfikatu albo certyfikat wygasł. Zmiana adresów maszyny (DHCP, VPN, `docker0`, tymczasowe IPv6) NIE jest powodem — przypięty klient patrzy na odcisk, nie na SAN, a wymiana zrywałaby zaufanie u wszystkich naraz. Skutek uboczny: pod adresem spoza SAN-u przeglądarka doda do swojego ostrzeżenia „niezgodna nazwa" — to to samo okno, które i tak pokazuje dla certyfikatu z własnym podpisem. Kto chce certyfikat na nowy adres: skasować `tls.key` i `tls.crt` i zrestartować serwer (wszyscy klienci będą musieli zaufać na nowo).
+
+**Service worker** (tryb offline PWA) rejestruje się dopiero na originie, któremu przeglądarka ufa. Dopóki użytkownik nie zaakceptuje certyfikatu, `navigator.serviceWorker.register` odrzuca — aplikacja działa normalnie, tylko bez cache'u offline (`src/main.tsx` łapie ten błąd i wpisuje go do konsoli jako `info`).
+
+Sprawdzenie z zewnątrz (`-k`, bo certyfikat jest z własnym podpisem — odcisk porównaj z tym z logu):
 
 ```bash
-curl -i https://PUBLIC_HOST/api/public/server
-curl -i https://PUBLIC_HOST/api/bots
+curl -k -i https://PUBLIC_HOST:8799/api/public/server
+curl -k -i https://PUBLIC_HOST:8799/api/bots
+openssl s_client -connect PUBLIC_HOST:8799 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 -text | grep -A1 "Subject Alternative Name"
 ```
+
+### Reverse proxy przed harnessem
+
+Proxy z certyfikatem od prawdziwego urzędu jest opcją, nie wymogiem. Jeśli je stawiasz, to **ono kończy TLS**, a do harnessa idzie po pętli zwrotnej gołym HTTP:
+
+```
+OMB_HOST=127.0.0.1 OMB_TLS=off
+```
+
+To JEDYNY wspierany sposób na `OMB_TLS=off`: przy `OMB_HOST` spoza pętli zwrotnej serwer **odmawia startu**, zamiast cicho wystawiać hasła gołym tekstem. Proxy ma dokładać `X-Forwarded-Proto: https` — po tym nagłówku serwer wie, że sesja jedzie po TLS, i dopina ciasteczku `Secure`; nagłówek liczy się wyłącznie od klienta z pętli zwrotnej, czyli od proxy stojącego na tej samej maszynie.
 
 `/api/public/server` jest publiczne. `/api/bots` bez sesji musi zwracać `401`.
 

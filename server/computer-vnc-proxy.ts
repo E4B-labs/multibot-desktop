@@ -9,7 +9,8 @@
 // same 101 rewrite — but the upstream port is resolved per bot on every request
 // because docker reassigns it on each container restart.
 import type { Socket } from "node:net";
-import { request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { request as httpRequest, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import type { Server as HttpsServer } from "node:https";
 import type { Duplex } from "node:stream";
 
 import { readPort } from "./hosted-computer.ts";
@@ -102,7 +103,7 @@ export async function pipeVncWs(req: IncomingMessage, socket: Duplex, head: Buff
 
 /** Mount the screen proxy's WebSocket half. The HTTP half is dispatched from
  *  the main router in index.ts, which already owns path matching. */
-export function mountVncUpgrade(server: Server, canAccess: (req: IncomingMessage, botId: string) => boolean = () => true): void {
+export function mountVncUpgrade(server: HttpServer | HttpsServer, canAccess: (req: IncomingMessage, botId: string) => boolean = () => true): void {
   server.on("upgrade", (req, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const hit = matchVncRoute(url.pathname);
