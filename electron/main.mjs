@@ -300,11 +300,28 @@ async function ensureLocalHarness() {
   return serverReady;
 }
 
-const ERROR_PAGE =
-  "data:text/html;charset=utf-8," +
-  encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◈</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen MultiBot — if it keeps happening, restart your device.</p></div></body>`,
+function errorPage(title, body) {
+  return (
+    "data:text/html;charset=utf-8," +
+    encodeURIComponent(
+      `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◈</div><h2 style="font-weight:600;margin:12px 0 6px">${title}</h2><p style="color:#fcfcfc99;line-height:1.5">${body}</p></div></body>`,
+    )
   );
+}
+
+const ERROR_PAGE = errorPage(
+  "Couldn't start the bot server",
+  "Something else is using its ports. Quit and reopen MultiBot — if it keeps happening, restart your device.",
+);
+
+// Skok przez `about:blank` (patrz loadActiveTarget) zostawia PUSTE okno, gdy
+// właściwe wczytanie odpadnie — a odpada realnie: host zgasł, adres się zmienił,
+// certyfikat odrzucony. Bez tej strony użytkownik ma czarny prostokąt bez
+// jednego słowa i bez drogi wyjścia.
+const HOST_ERROR_PAGE = errorPage(
+  "Couldn't reach that server",
+  "MultiBot couldn't load the server it is signed in to. Check that it is running and reachable, then press Ctrl+Shift+H (⌘⇧H on a Mac) to pick another one.",
+);
 
 // multibot (C2): fragment credential hand-off for a remote host's token.
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
@@ -382,7 +399,7 @@ function startupTargetMode() {
 /** Decides what `win` should load: a saved remote host, or the existing
  * local flow (packaged server / dev vite), completely unchanged when no
  * remote host is active. */
-async function loadActiveTarget(win, { joinGrant } = {}) {
+async function loadTargetNow(win, { joinGrant } = {}) {
   const target = resolveLoadTarget();
   if (target.mode === "remote") {
     // multibot: interfejs bierzemy z PACZKI, a z hosta wyłącznie dane. Wcześniej
@@ -391,18 +408,28 @@ async function loadActiveTarget(win, { joinGrant } = {}) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
+    // Okno mogło zniknąć, kiedy czekaliśmy — dotknięcie `webContents` po tym
+    // rzuca „Object has been destroyed" prosto w handler IPC.
+    if (win.isDestroyed()) return;
     const url = `${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`;
     // Ponowne logowanie do TEGO SAMEGO hosta zmienia w adresie wyłącznie
     // fragment (`#join=…`). Dla przeglądarki to nawigacja w obrębie tego samego
     // dokumentu: strona żyje dalej, nikt nie czyta granta, a formularz zostaje
     // z „Łączenie…" na zawsze — i grant zostaje w pasku adresu. Zerowa strona
     // po drodze robi z tego prawdziwe wczytanie dokumentu.
-    if (sameDocument(win.webContents.getURL(), url)) await win.loadURL("about:blank").catch(() => {});
+    if (sameDocument(win.webContents.getURL(), url)) {
+      await win.loadURL("about:blank").catch(() => {});
+      if (win.isDestroyed()) return;
+    }
     win.loadURL(url).catch((err) => {
       // Nawigacja potrafi odpaść po fakcie (odrzucony certyfikat, host zniknął)
       // — to nie jest wyjątek dla wołającego, tylko wpis w logu. Logujemy sam
       // kod i origin: w adresie siedzi fragment z grantem albo tokenem.
       console.warn("[multibot] nie udało się wczytać hosta:", err?.code ?? "load failed", target.url);
+      // Po skoku przez zerową stronę nie ma do czego wrócić: okno zostałoby
+      // puste do końca sesji. Nieudane wczytanie BEZ tego skoku zostawia
+      // poprzedni ekran, więc tam nie ma czego ratować.
+      if (!win.isDestroyed() && win.webContents.getURL() === "about:blank") win.loadURL(HOST_ERROR_PAGE);
     });
     return;
   }
@@ -412,12 +439,26 @@ async function loadActiveTarget(win, { joinGrant } = {}) {
     // Start z aktywnym hostem zdalnym pomija harness — dopiero tutaj, gdy
     // celem naprawdę jest tryb lokalny, wolno go podnieść.
     await ensureLocalHarness();
+    if (win.isDestroyed()) return;
     // Fragment never reaches HTTP. Renderer stores it, then erases URL before
     // first paint, so fresh packaged installs do not deadlock on login.
     win.loadURL(serverReady ? `${localHarnessUrl(SERVER_PORT)}/` : ERROR_PAGE);
   } else {
     win.loadURL(DEV_URL);
   }
+}
+
+// Jedna kolejka na wszystkie drogi do przeładowania okna. Bez niej „zaloguj
+// się" z głównego okna i „użyj" z wyboru hosta potrafią wejść tu równolegle:
+// obie widzą `remoteUi === null`, obie stawiają proxy, jedno nadpisuje drugie —
+// a porzucony serwer trzyma port do końca życia procesu.
+let loadQueue = Promise.resolve();
+function loadActiveTarget(win, options) {
+  const next = loadQueue.then(() => loadTargetNow(win, options));
+  // Kolejka nie może się wywrócić na cudzym błędzie; wołający dostaje swój
+  // własny `next` i sam decyduje, co z nim zrobić.
+  loadQueue = next.catch(() => {});
+  return next;
 }
 
 function createWindow() {
@@ -626,7 +667,18 @@ ipcMain.handle("hosts:add-remote", (event, host) => {
   if (!isLocalSender(event)) throw new Error("forbidden");
   return addRemoteHost(host ?? {});
 });
-ipcMain.handle("hosts:remove", (_event, id) => removeHost(id));
+// Skasowanie AKTYWNEGO hosta przestawia activeId na „local" — i musi też
+// przeładować okno, dokładnie jak `hosts:use-local`. Bez tego w oknie zostaje
+// strona skasowanego serwera, a `isSetupSender` (warunek `getActiveId() ===
+// "local"`) zaczyna dla niej zwracać true, czyli oddaje jej hasło serwera tego
+// urządzenia. Ta sama bramka co przy `hosts:use-host`: cudza strona nie ma
+// prawa kasować zapisanych adresów.
+ipcMain.handle("hosts:remove", async (event, id) => {
+  if (!isLocalSender(event)) throw new Error("forbidden");
+  const wasActive = getActiveId() === id;
+  removeHost(id);
+  if (wasActive && mainWindow) await loadActiveTarget(mainWindow);
+});
 // multibot: „← Wstecz" z ekranu logowania. Otwiera wyłącznie natywny wybór
 // hosta — NIE przestawia activeId. Wcześniej ten przycisk wołał
 // `hosts:use-local`, więc powrót z hosta zdalnego cicho przełączał komputer na

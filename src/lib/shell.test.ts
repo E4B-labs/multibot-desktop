@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { deviceId, randomId, hasCustomWindowControls, isShellMessage, joinLocalHarness, registerPushViaShell, resolveHost, shellPost } from "./shell";
 
 describe("hasCustomWindowControls", () => {
@@ -51,6 +51,26 @@ describe("resolveHost w powłoce desktopowej", () => {
   it("kod błędu z powłoki przechodzi nietknięty — formularz wskazuje po nim pole", async () => {
     const host = { ogb: { joinHost: async () => ({ ok: false, error: "wrong_server_password" }) } };
     expect(await resolveHost("https://10.0.0.5:8799", "brave-otter", "zle", host)).toEqual({ ok: false, error: "wrong_server_password" });
+  });
+
+  // Droga awaryjna: lokalny origin nie wstał, więc ekran przyszedł PROSTO z
+  // hosta. `hosts:join` przyjmuje tylko wołania ze swojego originu i odpowiada
+  // `forbidden` — a ta strona jest już w originie serwera, więc join idzie
+  // zwykłym fetchem. Bez tego zejścia ekran logowania nie miał jak wejść.
+  it("`forbidden` z powłoki schodzi na join w tym samym originie", async () => {
+    const wyslane: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      wyslane.push(url);
+      return { ok: true, status: 200, json: async () => ({ joinGrant: "g-same-origin", hasUsers: false }) };
+    });
+    const host = { ogb: { joinHost: async () => ({ ok: false, error: "forbidden" }) } };
+    expect(await resolveHost("https://10.0.0.5:8799", "brave-otter", "7f3k", host)).toEqual({
+      ok: true,
+      grant: "g-same-origin",
+      hasUsers: false,
+    });
+    expect(wyslane).toEqual(["/api/auth/join"]);
+    vi.unstubAllGlobals();
   });
 });
 

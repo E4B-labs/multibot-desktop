@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activeIdAfterMerge,
   mergeRemoteHost,
   normalizeRemoteUrl,
   removeRemoteHost,
@@ -121,5 +122,37 @@ describe("sameDocument", () => {
   it("a different origin or a blank window is a real load", () => {
     expect(sameDocument("http://127.0.0.1:8799/", "http://127.0.0.1:47820/#join=g")).toBe(false);
     expect(sameDocument("", "http://127.0.0.1:47820/#join=g")).toBe(false);
+  });
+
+  // Porównujemy adres, który ZBUDOWALIŚMY z rekordu hosta, z tym, co oddaje
+  // `webContents.getURL()` — a przeglądarka kanonizuje nazwę hosta i port.
+  // Surowe `===` mówiło tu „inny dokument", więc skok przez `about:blank` nie
+  // następował i grant w `#join=` przepadał.
+  it("canonicalises host casing and the default port", () => {
+    expect(sameDocument("https://host.TS.net:8799/", "https://host.ts.net:8799/#join=g")).toBe(true);
+    expect(sameDocument("https://host.ts.net:443/", "https://host.ts.net/#join=g")).toBe(true);
+    expect(sameDocument("about:blank", "http://127.0.0.1:47820/#join=g")).toBe(false);
+  });
+});
+
+describe("activeIdAfterMerge", () => {
+  // Objaw: dwa rekordy tego samego serwera, activeId na tym DRUGIM. Scalanie
+  // zostawia pierwszy i kasuje drugi, więc activeId zawisa i apka cicho wraca
+  // na „to urządzenie" mimo udanego logowania.
+  it("repoints a dangling activeId at the record that swallowed it", () => {
+    const pierwszy = { id: "h_a", url: "https://1.2.3.4:8799", createdAt: 1 };
+    const drugi = { id: "h_b", url: "https://1.2.3.4:8799/", createdAt: 2 };
+    const hosts = mergeRemoteHost([pierwszy, drugi], { id: "h_nowy", url: "https://1.2.3.4:8799", createdAt: 3 });
+    expect(hosts).toHaveLength(1);
+    expect(activeIdAfterMerge("h_b", hosts)).toBe("h_a");
+    expect(resolveActiveTarget({ activeId: activeIdAfterMerge("h_b", hosts), hosts }).mode).toBe("remote");
+  });
+
+  it("leaves local and a still-live id alone — adding a host must not activate it", () => {
+    const inny = { id: "h_inny", url: "https://5.6.7.8:8799", createdAt: 1 };
+    const hosts = mergeRemoteHost([inny], { id: "h_nowy", url: "https://1.2.3.4:8799", createdAt: 2 });
+    expect(activeIdAfterMerge("local", hosts)).toBe("local");
+    expect(activeIdAfterMerge(undefined, hosts)).toBe("local");
+    expect(activeIdAfterMerge("h_inny", hosts)).toBe("h_inny");
   });
 });

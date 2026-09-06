@@ -5,7 +5,7 @@ import { app, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-import { mergeRemoteHost, normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, sameOrigin } from "./host-resolve.mjs";
+import { activeIdAfterMerge, mergeRemoteHost, normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, sameOrigin } from "./host-resolve.mjs";
 
 function filePath() {
   return path.join(app.getPath("userData"), "remote-hosts.json");
@@ -70,7 +70,7 @@ export function setHostFingerprint(url, tlsFingerprint) {
   const fresh = hosts.filter((h) => sameOrigin(h.url, url) && !h.tlsFingerprint);
   if (!fresh.length || !tlsFingerprint) return;
   for (const host of fresh) host.tlsFingerprint = tlsFingerprint;
-  writeRaw({ activeId: config.activeId, hosts });
+  writeRaw({ ...config, hosts });
 }
 
 /** Wyrzuca przypięcie, żeby następne połączenie zaufało od nowa. Jedyna droga
@@ -82,7 +82,7 @@ export function forgetHostFingerprint(url) {
   const pinned = hosts.filter((h) => sameOrigin(h.url, url) && h.tlsFingerprint);
   if (!pinned.length) return false;
   for (const host of pinned) delete host.tlsFingerprint;
-  writeRaw({ activeId: config.activeId, hosts });
+  writeRaw({ ...config, hosts });
   return true;
 }
 
@@ -106,13 +106,13 @@ export function addRemoteHost({ name, url, token, tlsFingerprint, assumeHttps = 
   // Jeden rekord na serwer, z przejęciem tego, czego nowy wpis nie przyniósł —
   // reguła siedzi w host-resolve.mjs, żeby dało się ją sprawdzić testem.
   const hosts = mergeRemoteHost(config.hosts ?? [], host);
-  writeRaw({ activeId: config.activeId, hosts });
   // ZAPISANY rekord, nie ten wejściowy: przy ponownym logowaniu do znanego już
   // serwera scalanie zachowuje STARE id, a wołający ustawia nim activeId
   // (`hosts:join`). Oddanie świeżo wylosowanego id zostawiało activeId, do
   // którego nie pasuje żaden host — czyli ciche „mode: local" i powrót na ekran
-  // wyboru zamiast wejścia na serwer.
-  const saved = hosts.find((h) => sameOrigin(h.url, normalized)) ?? host;
+  // wyboru zamiast wejścia na serwer. Scalony rekord stoi na pozycji 0.
+  const [saved] = hosts;
+  writeRaw({ ...config, activeId: activeIdAfterMerge(config.activeId, hosts), hosts });
   return { id: saved.id, name: saved.name, url: saved.url, createdAt: saved.createdAt };
 }
 
@@ -120,12 +120,12 @@ export function removeHost(id) {
   const config = readRaw();
   const hosts = removeRemoteHost(config.hosts ?? [], id);
   const activeId = config.activeId === id ? "local" : config.activeId;
-  writeRaw({ activeId, hosts });
+  writeRaw({ ...config, activeId, hosts });
 }
 
 export function setActiveHost(id) {
   const config = readRaw();
-  writeRaw({ activeId: id, hosts: config.hosts ?? [] });
+  writeRaw({ ...config, activeId: id, hosts: config.hosts ?? [] });
 }
 
 /** Resolves what main.mjs should load: {mode:"local"} or

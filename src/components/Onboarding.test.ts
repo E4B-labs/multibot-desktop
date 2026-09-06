@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { addressNote, authRequest, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, startingPoint } from "./Onboarding";
+import { addressNote, authRequest, backLeavesWizard, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, startingPoint } from "./Onboarding";
 
 // Vitest runs in `node` here and the repo has no jsdom, so the screens
 // themselves are not rendered (same as WindowControls.test.ts). Everything that
@@ -198,5 +198,14 @@ describe("where onboarding starts", () => {
 
   it("keeps the choice screen everywhere else", () => {
     expect(startingPoint("", "https://127.0.0.1:8799")).toEqual({ step: "choice", address: "https://127.0.0.1:8799" });
+  });
+
+  // Objaw: „Wstecz" z ekranu logowania w trybie zdalnym wracało na ekran
+  // wyboru, a „Postaw serwer" na nim woła `useLocalHost()` — czyli przycisk
+  // cicho zdejmował komputer z hosta, na którym stał.
+  it("has nowhere to step back to from the first screen of remote mode", () => {
+    expect(backLeavesWizard("https://192.168.1.42:8799", "signin")).toBe(true);
+    expect(backLeavesWizard("https://192.168.1.42:8799", "profileKind")).toBe(false);
+    expect(backLeavesWizard("", "signin")).toBe(false);
   });
 });

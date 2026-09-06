@@ -243,6 +243,31 @@ test("adres hosta wstrzykiwany jest jako literał, więc `</script>` w nim nic n
   assert.match(glowa, /\\u003c\/script>/, "`<` ucieka jako \\u003c");
 });
 
+// `String.replace` z ŁAŃCUCHEM zastępującym rozwija w nim `$&`, ``$` ``, `$'`
+// i `$$` — już PO naszym uciekaniu `<`. Adres z ``$` `` wklejał więc w miejsce
+// flagi całą głowę dokumentu, a `$'` całą resztę pliku.
+test("adres z `$` w środku nie rozwija się we wzorzec zastępujący", async () => {
+  // Poprzedni test zajmował ten sam port i go zwolnił, a domyślny agent trzyma
+  // do niego martwe gniazdo — bez tego `get` dostaje ECONNRESET zamiast strony.
+  globalAgent.destroy();
+  const zlosliwy = await startRemoteUiServer({ staticDir, remoteUrl: "http://zly.invalid/$`$&$'" });
+  const res = await get(`${zlosliwy.url}/`);
+  await zlosliwy.close();
+  assert.ok(
+    res.body.includes(`window.__MULTIBOT_HOST__=${JSON.stringify("http://zly.invalid/$`$&$'")}`),
+    "adres ma trafić do okna dosłownie",
+  );
+  assert.equal(res.body.match(/<title>/g).length, 1, "nic z dokumentu nie może się zduplikować");
+  assert.equal(Number(res.headers["content-length"]), Buffer.byteLength(res.body));
+});
+
+// Bez tego `remoteUrl` był oglądany wyłącznie w gałęzi `!pin`, więc z
+// przypięciem w ręku `undefined` jechało dalej — aż na ekran logowania do
+// serwera o nazwie „undefined".
+test("brak adresu hosta jest błędem od razu, także gdy przypięcie jest w ręku", async () => {
+  await assert.rejects(() => startRemoteUiServer({ staticDir, remoteUrl: undefined, pin: { get: () => "AA", set: () => {} } }), /Invalid URL/);
+});
+
 test("brak zapakowanego interfejsu degraduje do trybu sprzed zmiany, nie do białego ekranu", async () => {
   const pusty = mkdtempSync(join(tmpdir(), "multibot-ui-pusty-"));
   const wynik = await startRemoteUiServer({ staticDir: pusty, remoteUrl: host.url });
