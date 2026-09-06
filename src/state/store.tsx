@@ -14,7 +14,7 @@ import {
 import type { MascotShape } from "@/lib/mascotShapes";
 import type { MausColor, MausMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
 import { MAUS_COLORS } from "@/lib/mascot";
-import { authFetch, authenticatedEventSource, ensureBrowserSession, getAuthMode } from "@/lib/auth";
+import { authFetch, authenticatedEventSource } from "@/lib/auth";
 import { getLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import {
@@ -1052,8 +1052,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then(({ rooms }) => alive && rawDispatch({ type: "roomsSet", rooms: Array.isArray(rooms) ? rooms : [] }))
         .catch(() => {});
     };
-    const sessionReady = getAuthMode() === "v2" ? ensureBrowserSession() : Promise.resolve();
-    void sessionReady.finally(loadAll);
+    loadAll();
     const catalogTimer = window.setInterval(() => {
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))

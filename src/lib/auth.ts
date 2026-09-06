@@ -1,7 +1,11 @@
 // G2: one authenticated transport for every browser request.
 const TOKEN_KEY = "multibot.auth.token";
-const TOKEN_MODE_KEY = "multibot.auth.mode";
+// Native shells cannot keep the `mb_v2_session` cookie their WebView gets, so
+// they drop the session token here before the app boots; browser and Electron
+// ride the cookie instead.
+const SESSION_KEY = "multibot.auth.session";
 const AUTH_REQUIRED = "multibot:auth-required";
+const REFRESH_PATH = "/api/auth/access-token";
 
 export function getAuthToken(): string {
   try {
@@ -11,25 +15,12 @@ export function getAuthToken(): string {
   }
 }
 
-export function setAuthToken(token: string, mode: "legacy" | "v2" = "legacy"): void {
-  try {
-    const value = token.trim();
-    if (value) {
-      localStorage.setItem(TOKEN_KEY, value);
-      localStorage.setItem(TOKEN_MODE_KEY, mode);
-    } else {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(TOKEN_MODE_KEY);
-    }
-  } catch {
-    /* storage can be disabled in private browsing */
-  }
-}
-
 export function clearAuthToken(): void {
   try {
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(TOKEN_MODE_KEY);
+    // Bez tego wylogowanie zostawia natywnemu klientowi materiał na wybicie
+    // sobie nowego tokenu przy pierwszym 401.
+    localStorage.removeItem(SESSION_KEY);
   } catch {
     /* storage can be disabled in private browsing */
   }
@@ -38,38 +29,105 @@ export function clearAuthToken(): void {
 export function bootstrapLocalAuthToken(): void {
   const token = new URLSearchParams(location.hash.slice(1)).get("access_token");
   if (!token) return;
-  setAuthToken(token);
+  setV2AuthToken(token);
   history.replaceState(null, "", `${location.pathname}${location.search}`);
 }
 
-export function getAuthMode(): "legacy" | "v2" | null {
+export function setV2AuthToken(token: string): void {
   try {
-    const mode = localStorage.getItem(TOKEN_MODE_KEY);
-    return mode === "v2" || mode === "legacy" ? mode : null;
+    const value = token.trim();
+    if (value) localStorage.setItem(TOKEN_KEY, value);
+    else localStorage.removeItem(TOKEN_KEY);
   } catch {
-    return null;
+    /* storage can be disabled in private browsing */
   }
 }
 
-export function setV2AuthToken(token: string): void {
-  setAuthToken(token, "v2");
+function storedSessionToken(): string {
+  try {
+    return localStorage.getItem(SESSION_KEY) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 export function authEventName(): string {
   return AUTH_REQUIRED;
 }
 
-export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+/**
+ * Access tokens live 15 minutes, sessions live forever, so an expired token is
+ * not a logout: the session cookie (or the native session token) mints a new
+ * one. Deduplicated, because a screenful of panels hits 401 in the same second
+ * and one refresh serves them all.
+ */
+type RefreshResult = "ok" | "rejected" | "offline";
+
+let refreshing: Promise<RefreshResult> | null = null;
+
+export function refreshAccessToken(): Promise<RefreshResult> {
+  return (refreshing ??= requestAccessToken().finally(() => {
+    refreshing = null;
+  }));
+}
+
+async function requestAccessToken(): Promise<RefreshResult> {
+  try {
+    // Bez `Authorization`: ważny token dostępu wystawiłby sam sobie następcę i
+    // 15-minutowy limit przestałby cokolwiek znaczyć. Odnawia wyłącznie sesja
+    // (ciasteczko albo token sesji natywnej powłoki).
+    const headers = new Headers({ "x-multibot-protocol": "2" });
+    const session = storedSessionToken();
+    if (session) headers.set("x-multibot-session", session);
+    const response = await fetch(REFRESH_PATH, { method: "POST", headers, credentials: "same-origin" });
+    if (!response.ok) return response.status === 401 || response.status === 403 ? "rejected" : "offline";
+    const body = (await response.json().catch(() => ({}))) as { accessToken?: string };
+    if (!body.accessToken) return "offline";
+    setV2AuthToken(body.accessToken);
+    return "ok";
+  } catch {
+    // Restart serwera, zerwana sieć — to nie jest problem z poświadczeniami,
+    // więc sesja zostaje, a wołający dostaje swoje 401. Wylogowuje wyłącznie
+    // odmowa sesji, nigdy awaria transportu.
+    return "offline";
+  }
+}
+
+function requireAuth(): void {
+  window.dispatchEvent(new Event(AUTH_REQUIRED));
+}
+
+function isRefreshRequest(input: RequestInfo | URL): boolean {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  return url.includes(REFRESH_PATH);
+}
+
+function sendAuthed(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("x-multibot-protocol", "2");
   if (!headers.has("content-type") && init.body) headers.set("content-type", "application/json");
   const token = getAuthToken();
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const response = await fetch(input, { ...init, headers });
-  if (response.status === 401) {
-    window.dispatchEvent(new Event(AUTH_REQUIRED));
+  return fetch(input, { ...init, headers });
+}
+
+export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const response = await sendAuthed(input, init);
+  if (response.status !== 401) return response;
+  // A 401 on the refresh route itself is the real thing — nothing left to try.
+  if (isRefreshRequest(input)) {
+    requireAuth();
+    return response;
   }
-  return response;
+  const refreshed = await refreshAccessToken();
+  if (refreshed !== "ok") {
+    if (refreshed === "rejected") requireAuth();
+    return response;
+  }
+  // A stream body is consumed by the first attempt, so a replay would send an
+  // empty request. The caller gets the 401 but stays signed in.
+  if (init.body instanceof ReadableStream) return response;
+  return sendAuthed(input, init);
 }
 
 type EventChannel = {
@@ -163,16 +221,26 @@ function sseEventSource(path: string, source: EventChannel): EventChannel {
   const wait = () => new Promise<void>((resolve) => {
     pendingWait = setTimeout(resolve, retry * 1000);
   });
+  // Ile 401 z rzędu. Pierwsze `authFetch` już odświeżyło token i powtórzyło
+  // żądanie, więc tu wystarczy dać strumieniowi drugie podejście; dopiero
+  // 401 z rzędu oznacza koniec sesji. Drugiego odświeżenia stąd NIE wołamy:
+  // gdyby tamto padło, `AUTH_REQUIRED` już poszło i token jest skasowany.
+  let unauthorized = 0;
   void (async () => {
     while (!stopped) {
       let delivered = false;
       try {
         const response = await authFetch(path, { headers: { accept: "text/event-stream" } });
         if (response.status === 401) {
-          // Nieważny token — ponawianie tylko zapętla odpytywanie. Kończymy.
-          source.onerror?.();
-          return;
+          if (++unauthorized > 1) {
+            source.onerror?.();
+            return;
+          }
+          if (stopped) return;
+          await wait();
+          continue;
         }
+        unauthorized = 0;
         if (!response.ok || !response.body) {
           source.onerror?.();
           retry = Math.min(retry + 1, 5);
@@ -225,30 +293,6 @@ function sseEventSource(path: string, source: EventChannel): EventChannel {
 export function authenticatedWebSocket(path: string, protocol = location.protocol): WebSocket {
   const token = getAuthToken();
   const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
-  const mode = getAuthMode();
-  return new WebSocket(`${wsProtocol}//${location.host}${path}`, token ? [mode === "v2" ? "multibot-v2" : "multibot-auth", token] : undefined);
+  return new WebSocket(`${wsProtocol}//${location.host}${path}`, token ? ["multibot-v2", token] : undefined);
 }
 
-/**
- * multibot (H4): trade the bearer token for a session cookie, once.
- *
- * The bot's screen is an <iframe> of noVNC and its websocket is opened by
- * noVNC itself. Neither can carry an Authorization header or our WS
- * subprotocol, so a cookie is the only credential that reaches them. The
- * exchange itself requires the token, so this does not widen the auth gate.
- */
-let sessionPromise: Promise<void> | null = null;
-
-export function ensureBrowserSession(): Promise<void> {
-  if (getAuthMode() !== "v2") return Promise.resolve();
-  return (sessionPromise ??= authFetch("/api/auth/session", {
-    method: "POST",
-    body: JSON.stringify({ label: "browser" }),
-  })
-    .then(() => undefined)
-    .catch(() => {
-      // A missing cookie only costs the screen; the rest of the app keeps
-      // working on the token. Retry on the next call rather than latching.
-      sessionPromise = null;
-    }));
-}
