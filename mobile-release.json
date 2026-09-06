@@ -1,7 +1,7 @@
 {
   "platform": "android",
-  "version": "0.3.9",
-  "versionCode": 22,
-  "apkUrl": "https://expo.dev/artifacts/eas/-op6_H4HfI--4maJECGhdB2ljbmx-x_T7j7jkSKkRgc.apk",
-  "notes": "Push notifications (FCM), group chat, bot rooms, blob mascots, sidebar sections. Runtime 1.4.0."
+  "version": "0.4.0",
+  "versionCode": 23,
+  "apkUrl": "https://expo.dev/artifacts/eas/grJ45IgvFXDmWVE2U9GWXZun_nVgAqVUHNXVksEkmWM.apk",
+  "notes": "HTTPS server with certificate pinning, native sign-in, Termux-assisted setup, webui 0.4.0 onboarding and admin tab. Runtime 1.5.0."
 }
