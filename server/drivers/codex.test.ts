@@ -171,6 +171,32 @@ describe("CodexDriver turns (fake app-server)", () => {
     });
   });
 
+  // multibot: #68 przywróciło komputer bota, ale sprawdzał go tylko test na
+  // samym `codexMcpConfig` — nikt nie pilnował, czy ten blok DOJEŻDŻA do
+  // `thread/start`. Bot na telefonie meldował "BRAK-NARZĘDZI" przy pełnym
+  // dostępie, więc cała droga (integrations → config → thread/start) ma teraz
+  // własny test.
+  it("carries the computer server, its whitelist and the mcp tool-visibility override into thread/start", async () => {
+    await create();
+    const dump = join(scratch, "computer-start.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-computer",
+      text: "open example.com",
+      integrations: { localComputer: { command: "node", args: ["mcp.js"], env: {} } },
+    } as SendTurnInput);
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: any }>;
+    const start = calls.find((c) => c.method === "thread/start")!;
+    expect(start.params.config.mcp_servers.computer).toMatchObject({ command: "node", required: true });
+    expect(start.params.config.mcp_servers.computer.enabled_tools).toEqual([...COMPUTER_MCP_TOOLS]);
+    // Bez tego przełącznika codex 0.153 ODKŁADA narzędzia MCP i nie daje modelowi
+    // niczego, czym można by je odzyskać — patrz komentarz w codex.ts.
+    expect(start.params.config.features).toEqual({ tool_search_always_defer_mcp_tools: false });
+  });
+
   it("falls back to a fresh thread when resume fails", async () => {
     await create(); // fake rejects thread/resume outside resume mode
     await instance.adapter.sendTurn({ threadId: "t-fallback", text: "go", resumeCursor: "gone-thread" });

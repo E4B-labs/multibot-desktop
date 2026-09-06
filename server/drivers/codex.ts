@@ -87,7 +87,9 @@ const DENY_TIMEOUT_NOTE =
 // multibot (H3): Codex's mcp_servers carried only `agents`; the bot's computer
 // has to ride along or Codex is the one driver that cannot touch the desktop
 // the user is watching. Same stdio contract as every other server here.
-export function codexMcpConfig(turn: SendTurnInput): { config?: { mcp_servers: Record<string, unknown> } } {
+export function codexMcpConfig(turn: SendTurnInput): {
+  config?: { mcp_servers: Record<string, unknown>; features: Record<string, boolean> };
+} {
   const mcp_servers: Record<string, unknown> = {};
   if (turn.integrations?.agents) mcp_servers.agents = turn.integrations.agents;
   if (turn.integrations?.web && canUseIntegration(turn.threadId, "browser")) mcp_servers.web = turn.integrations.web;
@@ -165,7 +167,24 @@ export function codexMcpConfig(turn: SendTurnInput): { config?: { mcp_servers: R
       }
     }
   }
-  return Object.keys(mcp_servers).length ? { config: { mcp_servers } } : {};
+  // multibot: bez tego bot Z ZAMONTOWANYM komputerem meldował „BRAK-NARZĘDZI".
+  //
+  // codex 0.153.3 jedzie z włączoną (serwerowo) flagą
+  // `ToolSearchAlwaysDeferMcpTools`: narzędzia MCP nie idą do modelu w liście
+  // narzędzi, tylko czekają na doładowanie przez `tool_search`. Feature
+  // `ToolSearch` NIE jest przy tym włączony — model nie dostaje ani narzędzi,
+  // ani niczego, czym mógłby je znaleźć. Efekt: WSZYSTKIE serwery MCP tury
+  // (computer, agents, tasktree, composio, web) znikają naraz, a bot uczciwie
+  // odpowiada, że narzędzi nie ma. Mierzone na telefonie (s10e, codex-cli
+  // 0.153.3): świeży wątek z jednym serwerem `computer` wołał
+  // `mcp__computer__status` naprawdę, ten sam wątek z pełnym zestawem serwerów
+  // odpowiadał „UNAVAILABLE".
+  //
+  // Przełącznik wyłącza samo odkładanie, więc narzędzia wracają do listy —
+  // jedno pole w tym samym bloku `config`, którym i tak wieziemy serwery.
+  return Object.keys(mcp_servers).length
+    ? { config: { mcp_servers, features: { tool_search_always_defer_mcp_tools: false } } }
+    : {};
 }
 
 // multibot (H3): serwery MCP wchodzą do wątku codeksa przy `thread/start` i
@@ -185,8 +204,13 @@ export function codexMcpConfig(turn: SendTurnInput): { config?: { mcp_servers: R
  *
  * 5 → 6: serwer MCP komputera wrócił z silnika Hermesa do harnessu
  * (`server/computer/mcp.ts`). Nazwy narzędzi te same, ale opisy i kształt
- * odpowiedzi nie — wątek sprzed usunięcia silnika musi zacząć od nowa. */
-export const COMPUTER_TOOLS_VERSION = 6;
+ * odpowiedzi nie — wątek sprzed usunięcia silnika musi zacząć od nowa.
+ *
+ * 6 → 7: wątki założone między 0.3.36 a tą poprawką powstały BEZ widocznych
+ * narzędzi MCP (patrz `tool_search_always_defer_mcp_tools` w `codexMcpConfig`),
+ * a `thread/resume` narzędzi nie dokłada — bez tego podbicia bot z zepsutym
+ * wątkiem wznawiałby go bez komputera już na zawsze. */
+export const COMPUTER_TOOLS_VERSION = 7;
 
 export function cursorMcpKey(cfg: ReturnType<typeof codexMcpConfig>): string {
   return Object.keys(cfg.config?.mcp_servers ?? {})
