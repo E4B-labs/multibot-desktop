@@ -23,7 +23,6 @@ describe("ekran logowania: nagłówek", () => {
     expect(loginTitle("register", false)).toBe("Join existing server");
     expect(loginTitle("login", false)).toBe("Sign in to server");
     expect(loginTitle("recover", false)).toBe("Recover account");
-    expect(loginTitle("legacy", false)).toBe("Legacy migration");
   });
 
   it("mówi po polsku w każdym trybie", () => {
@@ -31,7 +30,6 @@ describe("ekran logowania: nagłówek", () => {
     expect(loginTitle("register", true)).toBe("Dołącz do istniejącego serwera");
     expect(loginTitle("login", true)).toBe("Zaloguj się do serwera");
     expect(loginTitle("recover", true)).toBe("Odzyskaj konto");
-    expect(loginTitle("legacy", true)).toBe("Migracja starego tokenu");
   });
 });
 
@@ -46,20 +44,18 @@ describe("ekran logowania: przełącznik trybu w stopce", () => {
     expect(loginSwitch("register", true, false)).toEqual({ next: "login", label: "I have an account" });
     expect(loginSwitch("recover", true, false)).toEqual({ next: "login", label: "I have an account" });
   });
-
-  it("milczy przy migracji starego tokenu", () => {
-    expect(loginSwitch("legacy", false, false)).toBeNull();
-    expect(loginSwitch("legacy", true, false)).toBeNull();
-  });
 });
 
-describe("ekran logowania: przycisk Wstecz i stary token", () => {
+describe("ekran logowania: przycisk Wstecz i koniec starego tokenu", () => {
   it("Wstecz rysuje się tylko z mostkiem desktopowym, bez pozornego history.back()", () => {
     expect(app).not.toContain("window.history.back()");
     expect(app).toContain("{backToHostPicker && <button");
   });
 
-  it("stary token ma pod polem napisane, czym jest", () => {
-    expect(app).toContain("auth.token");
+  // Szyna `auth.token` jest skasowana: token dostępu odnawia się sam
+  // (src/lib/auth.ts), więc nie ma czego migrować ani czym się logować.
+  it("nie ma już migracji starego tokenu", () => {
+    expect(app).not.toContain("auth.token");
+    expect(app).not.toContain("legacy");
   });
 });

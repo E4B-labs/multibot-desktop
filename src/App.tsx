@@ -34,11 +34,11 @@ import { hasCustomWindowControls } from "@/lib/shell";
 const frameless = hasCustomWindowControls();
 // multibot: Cmd/Ctrl+K paleta komend
 import { CmdK } from "@/components/CmdK";
-import { authEventName, authFetch, clearAuthToken, getAuthToken, setAuthToken, setV2AuthToken } from "@/lib/auth";
+import { authEventName, authFetch, clearAuthToken, getAuthToken, refreshAccessToken, setV2AuthToken } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { unreadConversationCount } from "@/lib/unread";
 
-export type LoginMode = "login" | "register" | "host" | "recover" | "legacy";
+export type LoginMode = "login" | "register" | "host" | "recover";
 
 /** Nagłówek ekranu logowania idzie z trybu, nie ze stanu serwera. Kiedy szedł
  * ze `configured`, ekran „dołącz do istniejącego" dalej miał na sobie „Utwórz
@@ -47,7 +47,6 @@ export function loginTitle(mode: LoginMode, polish: boolean): string {
   if (mode === "host") return polish ? "Utwórz serwer" : "Create server";
   if (mode === "register") return polish ? "Dołącz do istniejącego serwera" : "Join existing server";
   if (mode === "recover") return polish ? "Odzyskaj konto" : "Recover account";
-  if (mode === "legacy") return polish ? "Migracja starego tokenu" : "Legacy migration";
   return polish ? "Zaloguj się do serwera" : "Sign in to server";
 }
 
@@ -59,7 +58,6 @@ export function loginSwitch(
   configured: boolean,
   polish: boolean,
 ): { next: LoginMode; label: string } | null {
-  if (mode === "legacy") return null;
   if (!configured)
     return mode === "host"
       ? { next: "register", label: polish ? "Dołącz do istniejącego serwera" : "Join existing server" }
@@ -82,7 +80,6 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -99,21 +96,13 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       })
       .catch(() => setError(polish ? "Nie można odczytać stanu serwera." : "Could not read server status."));
     return () => { alive = false; };
-  }, [onLogin, polish]);
+  }, [polish]);
 
   const submit = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      if (mode === "legacy") {
-        if (!token.trim()) return;
-        setAuthToken(token, "legacy");
-        const response = await authFetch("/api/instances");
-        if (!response.ok) throw new Error(response.status === 401 ? (polish ? "Nieprawidłowy token dostępu" : "Invalid access token") : polish ? "Serwer niedostępny" : "Server unavailable");
-        onLogin();
-        return;
-      }
       let response: Response;
       if (mode === "host") {
         if (!configured) {
@@ -139,7 +128,6 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
       if (body.recoveryCode) window.alert(`${polish ? "Zapisz recovery code. Pokażemy go tylko raz:" : "Save recovery code. It is shown once:"}\n\n${body.recoveryCode}`);
       onLogin();
     } catch (e) {
-      if (mode === "legacy") clearAuthToken();
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -164,26 +152,21 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
         <h1 className="text-[18px] font-semibold">{loginTitle(mode, polish)}</h1>
         <p className="mt-1 text-[13px] text-ink-secondary">{status?.server?.name ?? (polish ? "Bezpieczny wspólny workspace" : "Secure shared workspace")}</p>
         {mode === "host" && <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} aria-label="Server name" className={field} autoFocus />}
-        {mode !== "legacy" && <>
-          {(mode === "register" || mode === "host") && <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={polish ? "Nazwa profilu" : "Display name"} aria-label="Display name" className={field} />}
-          <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" aria-label="Username" autoComplete="username" className={field} />
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "recover" ? polish ? "Nowe hasło profilu" : "New profile password" : polish ? "Hasło profilu" : "Profile password"} aria-label="Profile password" autoComplete={mode === "login" ? "current-password" : "new-password"} className={field} />
-          {(mode === "host" || mode === "register") && <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Hasło serwera" : "Server password"} aria-label="Server password" autoComplete="off" className={field} />}
-          {mode === "recover" && <input value={recoveryCode} onChange={(event) => setRecoveryCode(event.target.value)} placeholder={polish ? "Jednorazowy recovery code" : "One-time recovery code"} aria-label="Recovery code" autoComplete="one-time-code" className={field} />}
-          {/* rejestracja na serwerze bez właściciela kończy się 409 „server setup
-              required" (server/identity.ts) — nie ma tu żadnego adresu obcego
-              hosta, wszystko idzie na to samo pochodzenie. */}
-          {mode === "register" && !configured && <p className="mt-2 text-[12px] text-ink-secondary">{polish ? "Ten serwer nie ma jeszcze właściciela — najpierw trzeba go utworzyć. Do cudzego serwera dołączasz, otwierając jego adres." : "This server has no owner yet — it has to be created first. You join someone else's server by opening its address."}</p>}
-        </>}
-        {mode === "legacy" && <input autoFocus type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={polish ? "Stary token migracyjny" : "Legacy migration token"} aria-label="Legacy migration token" autoComplete="current-password" className={field} />}
-        {mode === "legacy" && <p className="mt-2 text-[12px] text-ink-secondary">{polish ? "Token `auth.token` z config.json starego serwera (katalog ~/.openmausbot). Serwer przyjmuje go wyłącznie z tego komputera." : "The auth.token value from the old server's config.json (~/.openmausbot). The server accepts it only from this machine."}</p>}
+        {(mode === "register" || mode === "host") && <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={polish ? "Nazwa profilu" : "Display name"} aria-label="Display name" className={field} />}
+        <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" aria-label="Username" autoComplete="username" className={field} />
+        <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "recover" ? polish ? "Nowe hasło profilu" : "New profile password" : polish ? "Hasło profilu" : "Profile password"} aria-label="Profile password" autoComplete={mode === "login" ? "current-password" : "new-password"} className={field} />
+        {(mode === "host" || mode === "register") && <input type="password" value={serverPassword} onChange={(event) => setServerPassword(event.target.value)} placeholder={polish ? "Hasło serwera" : "Server password"} aria-label="Server password" autoComplete="off" className={field} />}
+        {mode === "recover" && <input value={recoveryCode} onChange={(event) => setRecoveryCode(event.target.value)} placeholder={polish ? "Jednorazowy recovery code" : "One-time recovery code"} aria-label="Recovery code" autoComplete="one-time-code" className={field} />}
+        {/* rejestracja na serwerze bez właściciela kończy się 409 „server setup
+            required" (server/identity.ts) — nie ma tu żadnego adresu obcego
+            hosta, wszystko idzie na to samo pochodzenie. */}
+        {mode === "register" && !configured && <p className="mt-2 text-[12px] text-ink-secondary">{polish ? "Ten serwer nie ma jeszcze właściciela — najpierw trzeba go utworzyć. Do cudzego serwera dołączasz, otwierając jego adres." : "This server has no owner yet — it has to be created first. You join someone else's server by opening its address."}</p>}
         <button type="submit" disabled={busy} className="mt-3 w-full rounded-lg bg-accent py-2.5 text-[13px] font-medium text-white disabled:opacity-50">
-          {busy ? (polish ? "Praca…" : "Working…") : mode === "host" ? polish ? "Utwórz serwer i profil" : "Create server and profile" : mode === "register" ? polish ? "Dołącz i utwórz profil" : "Join and create profile" : mode === "recover" ? polish ? "Odzyskaj konto" : "Recover account" : mode === "legacy" ? polish ? "Użyj tokenu migracyjnego" : "Use migration token" : polish ? "Zaloguj się" : "Sign in"}
+          {busy ? (polish ? "Praca…" : "Working…") : mode === "host" ? polish ? "Utwórz serwer i profil" : "Create server and profile" : mode === "register" ? polish ? "Dołącz i utwórz profil" : "Join and create profile" : mode === "recover" ? polish ? "Odzyskaj konto" : "Recover account" : polish ? "Zaloguj się" : "Sign in"}
         </button>
         <div className="mt-4 flex flex-wrap gap-2 text-[12px] text-ink-secondary">
           {switchLink && <button type="button" onClick={() => setMode(switchLink.next)} className="hover:text-ink">{switchLink.label}</button>}
           {configured && mode !== "recover" && <button type="button" onClick={() => setMode("recover")} className="hover:text-ink">{polish ? "Odzyskaj" : "Recover"}</button>}
-          <button type="button" onClick={() => setMode(mode === "legacy" ? (configured ? "login" : "host") : "legacy")} className="ml-auto hover:text-ink">{mode === "legacy" ? polish ? "Nowe logowanie" : "New sign-in" : polish ? "Masz stary token dostępu? Migracja" : "Have an old access token? Legacy migration"}</button>
         </div>
         {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
       </form>
@@ -296,9 +279,9 @@ export default function App() {
   // Pod Electronem token nie dowodzi niczego — spakowana apka wstawia własny
   // przez fragment adresu przy PIERWSZYM starcie. Zliczanie go jako
   // konfiguracji kasowało onboarding, zanim się pokazał, a razem z nim jedyne
-  // wejście do konfiguracji serwera (`POST /api/provision` woła wyłącznie
-  // Onboarding). Efekt: świeża instalacja desktopowa wchodziła od razu do
-  // aplikacji, z pominięciem całego kreatora.
+  // wejście do konfiguracji serwera (kreator w `Onboarding`). Efekt: świeża
+  // instalacja desktopowa wchodziła od razu do aplikacji, z pominięciem
+  // całego kreatora.
   // …ALE ten wyjątek dotyczy tylko Electrona z LOKALNYM serwerem. W trybie
   // zdalnym (C2) okno ładuje interfejs prosto z cudzego hosta, a token wjeżdża
   // fragmentem adresu — Electron jest wtedy tylko widzem i onboarding „postaw
@@ -313,9 +296,13 @@ export default function App() {
   // interfejs prosto z hosta: flagi wtedy nie ma, ale adres jest zdalny.
   const configured = emailGateDone() || Boolean(getAuthToken());
   const [gated, setGated] = useState(() => !configured);
-  // Sesja z logowania Google siedzi w ciasteczku HttpOnly, więc `getAuthToken`
-  // jej nie widzi — `LoginScreen` sam sprawdza `/api/auth/status` i wpuszcza.
+  // Ciasteczko sesji (`mb_v2_session`) siedzi w HttpOnly i żyje dłużej niż
+  // 15-minutowy token dostępu, więc pusty localStorage to jeszcze nie
+  // wylogowanie: tryb prywatny, wyczyszczone dane albo jedno błędne 401 i
+  // token znika, choć serwer nadal nas zna. Zanim pokażemy formularz, prosimy
+  // sesję o nowy token — jedno wołanie, które przy okazji od razu go daje.
   const [authenticated, setAuthenticated] = useState(() => Boolean(getAuthToken()));
+  const [checkingSession, setCheckingSession] = useState(() => !getAuthToken());
   useEffect(() => {
     initAnalytics();
     const onAuthRequired = () => {
@@ -323,13 +310,20 @@ export default function App() {
       setAuthenticated(false);
     };
     window.addEventListener(authEventName(), onAuthRequired);
+    if (checkingSession) void refreshAccessToken().then((result) => {
+      if (result === "ok") setAuthenticated(true);
+      setCheckingSession(false);
+    });
     return () => window.removeEventListener(authEventName(), onAuthRequired);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sonda sesji leci raz, przy montowaniu
   }, []);
   // Zalogowanie gasi też bramkę: skoro serwer przyjął token (albo ciasteczko,
   // albo Google), to istnieje i jest skonfigurowany — onboarding „postaw
   // serwer" nie ma po nim sensu. Bez tego świeża przeglądarka liczyła
   // `configured` PRZED zalogowaniem (token jeszcze pusty), więc zaraz po
   // wpisaniu tokenu nad aplikacją wyskakiwał drugi panel logowania.
+  // Pusty ekran, a nie mignięcie formularzem, gdy sesja właśnie się potwierdza.
+  if (checkingSession) return null;
   if (!authenticated) return <LoginScreen onLogin={() => { setAuthenticated(true); setGated(false); }} />;
   return (
     <StoreProvider>
