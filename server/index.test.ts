@@ -14,7 +14,10 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "index-test-access-token";
+// Real identity v2 credential, minted in beforeAll by actually setting the
+// server up and registering its first (owner) profile.
+let TOKEN = "";
+let serverPassword = "";
 
 let child: ChildProcess;
 let home: string;
@@ -30,7 +33,11 @@ const TTS_AUDIO = Buffer.from("ID3-fake-mp3-bytes");
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { authorization: `Bearer ${TOKEN}`, ...(body ? { "content-type": "application/json" } : {}) },
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "x-multibot-protocol": "2",
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, body: await res.json() };
@@ -62,7 +69,6 @@ beforeAll(async () => {
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({
-      auth: { token: TOKEN },
       voice: { key: "tts-test-key" },
       instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } },
     }),
@@ -128,6 +134,32 @@ beforeAll(async () => {
     if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
     await new Promise((r) => setTimeout(r, 150));
   }
+
+  // Bootstrap for real: there is no installation-wide bearer any more, so the
+  // suite sets the server up over loopback and registers the first profile —
+  // exactly what a fresh install does. The returned access token is the only
+  // credential every test below uses.
+  const setup = await fetch(`${BASE}/api/setup/server`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Index test server" }),
+  });
+  if (setup.status !== 201) throw new Error(`server setup failed (${setup.status}): ${await setup.text()}`);
+  serverPassword = (await setup.json() as { serverPassword: string }).serverPassword;
+  const registered = await fetch(`${BASE}/api/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "index-tester",
+      password: "index-test-profile-password",
+      displayName: "Index Tester",
+      serverPassword,
+      deviceName: "vitest",
+    }),
+  });
+  if (registered.status !== 201) throw new Error(`owner registration failed (${registered.status}): ${await registered.text()}`);
+  TOKEN = (await registered.json() as { accessToken: string }).accessToken;
+  if (!TOKEN) throw new Error("registration returned no access token");
 }, 120_000);
 
 afterAll(async () => {
@@ -733,7 +765,7 @@ describe("harness HTTP API", () => {
   // dymek zostaje szary. WebSocket ten sam tunel przepuszcza na żywo.
   it("dowozi zdarzenia po WebSocket na tej samej ścieżce co SSE", async () => {
     const socket = new WebSocket(`${BASE.replace("http", "ws")}/api/events?lang=pl`, [
-      "multibot-auth",
+      "multibot-v2",
       TOKEN,
     ]);
     const frames: any[] = [];
@@ -771,21 +803,66 @@ describe("harness HTTP API", () => {
     expect(res.body.error).toContain("/api/definitely-not-a-route");
   });
 
-  it("reveals and rotates the token only to an authenticated session", async () => {
-    const reveal = await api("GET", "/api/auth/token");
-    expect(reveal.body).toEqual({ token: TOKEN });
+  // cfg.profile jest WSPÓLNY dla całego serwera. Zanim to naprawiliśmy, dowolny
+  // członek nadpisywał nim nazwę i e-mail wszystkim; nazwa konta należy do
+  // konta i idzie przez identity.
+  it("keeps shared config profile owner-only while every member renames themselves", async () => {
+    const joined = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "index-member",
+        password: "index-member-profile-pass",
+        displayName: "Index Member",
+        serverPassword,
+        deviceName: "vitest-member",
+      }),
+    });
+    expect(joined.status).toBe(201);
+    const memberToken = (await joined.json() as { accessToken: string }).accessToken;
+    const asMember = (body: unknown) => fetch(`${BASE}/api/config`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${memberToken}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const ownerBefore = (await api("GET", "/api/config")).body.profile;
+    const renamed = await asMember({ profile: { name: "Member Renamed", email: "member@example.test" } });
+    expect(renamed.status).toBe(200);
+    // Own display name changed…
+    expect((await renamed.json() as { profile: { name: string } }).profile.name).toBe("Member Renamed");
+    // …a wspólny profil serwera został nietknięty dla właściciela.
+    expect((await api("GET", "/api/config")).body.profile).toEqual(ownerBefore);
+
+    // Za długa nazwa to 422, nie 500.
+    expect((await asMember({ profile: { name: "x".repeat(81) } })).status).toBe(422);
+
+    // Owner nadal pisze do wspólnego profilu.
+    const asOwner = await api("PATCH", "/api/config", { profile: { name: "Index Tester", email: "owner@example.test" } });
+    expect(asOwner.status).toBe(200);
+    expect((await api("GET", "/api/config")).body.profile.email).toBe("owner@example.test");
+  });
+
+  // The identity access token is the whole credential surface now: the SSE
+  // stream opens with it, and every retired rail is simply gone.
+  it("streams events with the identity access token and has no legacy auth rails left", async () => {
     const events = await fetch(`${BASE}/api/events`, { headers: { authorization: `Bearer ${TOKEN}` } });
     const reader = events.body!.getReader();
-    expect(new TextDecoder().decode((await reader.read()).value)).toContain('"kind":"hello"');
-    const closed = reader.read().then(({ done }) => done).catch(() => true);
-    const rotated = await api("POST", "/api/auth/token/rotate");
-    expect(rotated.status).toBe(200);
-    expect(rotated.body.token).toMatch(/^[a-f0-9]{64}$/);
-    expect(rotated.body.token).not.toBe(TOKEN);
-    expect(await Promise.race([closed, new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000))])).toBe(true);
-    expect((await fetch(`${BASE}/api/bots`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(401);
-    expect(
-      (await fetch(`${BASE}/api/bots`, { headers: { authorization: `Bearer ${rotated.body.token}` } })).status,
-    ).toBe(200);
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("\"kind\":\"hello\"");
+    void reader.cancel();
+
+    // Authenticated, so a surviving handler would answer 200 — these are gone.
+    for (const path of ["/api/auth/token", "/api/auth/status", "/api/pair"]) {
+      expect((await api("GET", path)).status).toBe(404);
+    }
+    for (const path of ["/api/auth/token/rotate", "/api/pair/start", "/api/pair/claim", "/api/auth/firebase/session", "/api/workspace/invites"]) {
+      expect((await api("POST", path, {})).status).toBe(404);
+    }
+    // …ale `/api/provision` zostaje do PR 7 — onboarding świeżej instalacji je woła.
+    expect((await api("POST", "/api/provision", { server: false })).status).toBe(202);
+    // An old client with the retired bearer is just anonymous: 401, never 426.
+    for (const path of ["/api/auth/token", "/api/pair", "/api/auth/status", "/api/bots"]) {
+      expect((await fetch(`${BASE}${path}`, { headers: { authorization: "Bearer index-test-legacy-token" } })).status).toBe(401);
+    }
   });
 });

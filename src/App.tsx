@@ -72,7 +72,8 @@ export function loginSwitch(
 function LoginScreen({ onLogin }: { onLogin: () => void }) {
   const polish = useLanguage() === "pl";
   type Mode = LoginMode;
-  type Status = { server?: { configured: boolean; name: string; serverId: string }; session?: boolean };
+  type ServerInfo = { configured: boolean; name: string; serverId: string };
+  type Status = { server?: ServerInfo };
   const [status, setStatus] = useState<Status | null>(null);
   const [mode, setMode] = useState<Mode>("login");
   const [serverName, setServerName] = useState("");
@@ -87,13 +88,14 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    void fetch("/api/auth/status")
-      .then((response) => response.json() as Promise<Status>)
-      .then((next) => {
+    // `/api/auth/status` skasowane razem ze starymi szynami logowania; stan
+    // serwera czytamy z jedynej publicznej trasy. PR 7 przepisuje ten ekran.
+    void fetch("/api/public/server")
+      .then((response) => response.json() as Promise<ServerInfo>)
+      .then((server) => {
         if (!alive) return;
-        setStatus(next);
-        if (next.session) onLogin();
-        else if (!next.server?.configured) setMode("host");
+        setStatus({ server });
+        if (!server.configured) setMode("host");
       })
       .catch(() => setError(polish ? "Nie można odczytać stanu serwera." : "Could not read server status."));
     return () => { alive = false; };

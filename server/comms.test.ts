@@ -16,6 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 import { chainDepth, mentionedBots } from "./store.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -23,7 +25,7 @@ const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 const FAKE_CODEX = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "comms-test-access-token";
+let TOKEN = "";
 
 describe("mentionedBots", () => {
   const peers = [
@@ -98,7 +100,6 @@ describe("comms e2e (fake ACP fleet)", () => {
     writeFileSync(
       join(home, ".openmausbot", "config.json"),
       JSON.stringify({
-        auth: { token: TOKEN },
         instances: {
           grok: {
             driver: "grokAgent",
@@ -188,6 +189,7 @@ describe("comms e2e (fake ACP fleet)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    TOKEN = await bootstrapAccessToken(BASE);
   }, 30_000);
 
   afterAll(async () => {

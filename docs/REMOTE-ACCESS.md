@@ -39,32 +39,24 @@ Nie ma QR, Tailscale, WireGuard ani ręcznego wklejania tokenu w normalnym flow.
 
 ## Publiczny HTTPS
 
-Serwer lokalny nasłuchuje domyślnie na porcie `8799`. Do publicznego dostępu użyj Cloudflare Tunnel albo zaufanego reverse proxy z poprawnym certyfikatem HTTPS.
-
-Szybki tunel testowy:
-
-```bash
-~/multibot/scripts/tunnel.sh
-```
-
-Do stałej pracy skonfiguruj nazwany Cloudflare Tunnel wskazujący na `http://127.0.0.1:8799`, ustaw publiczny hostname i uruchamiaj usługę `cloudflared` w Termuxie. Losowy quick tunnel zmienia adres po restarcie; używaj go wyłącznie do testów.
+Serwer lokalny nasłuchuje domyślnie na porcie `8799`. Do publicznego dostępu postaw zaufane reverse proxy z poprawnym certyfikatem HTTPS wskazujące na `http://127.0.0.1:8799`.
 
 Przed udostępnieniem adresu sprawdź:
 
 ```bash
-curl -i https://PUBLIC_HOST/api/auth/status
+curl -i https://PUBLIC_HOST/api/public/server
 curl -i https://PUBLIC_HOST/api/bots
 ```
 
-`/api/auth/status` jest publiczne. `/api/bots` bez sesji musi zwracać `401`.
+`/api/public/server` jest publiczne. `/api/bots` bez sesji musi zwracać `401`.
 
 ## Protokół v2
 
-Nowi klienci wysyłają `x-multibot-protocol: 2`, a WebSocket używa subprotocolu `multibot-v2`. Stary zdalny bearer token jest odrzucany kodem `426`, żeby nie mieszać starego modelu tokenowego z kontami użytkowników.
+Nowi klienci wysyłają `x-multibot-protocol: 2`, a WebSocket używa subprotocolu `multibot-v2`. Stare szyny logowania (bearer `auth.token`, Firebase, parowanie QR) są skasowane: każde żądanie bez sesji albo tokenu dostępu identity dostaje `401`, nigdy `426`.
 
 Najważniejsze endpointy:
 
-- `GET /api/auth/status` — status konfiguracji serwera;
+- `GET /api/public/server` — status konfiguracji serwera;
 - `POST /api/setup/server` — lokalna inicjalizacja serwera;
 - `POST /api/auth/register` — nowe konto;
 - `POST /api/auth/login` — logowanie;

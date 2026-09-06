@@ -328,8 +328,9 @@ może utworzyć zaproszenie dla kolejnej osoby.
 
 ### 5.8. Połączenie z istniejącym serwerem
 
-Ścieżka **Zaloguj się do serwera** przyjmuje adres serwera, np. HTTPS przez
-Cloudflare Tunnel lub inny reverse proxy. W Electronie host jest zapisywany przez
+Ścieżka **Zaloguj się do serwera** przyjmuje adres serwera — bezpośredni albo
+przez zaufane reverse proxy z HTTPS przed portem 8799 (tak jak mówią
+instalatory). Żadnych usług trzecich. W Electronie host jest zapisywany przez
 bridge, a w zwykłej przeglądarce następuje nawigacja pod podany adres.
 
 Po stronie serwera logowanie odbywa się przez konto lokalne i hasło profilu.
@@ -1518,9 +1519,9 @@ routines i skills działają.
 
 ### 23.5. Zdalny HTTPS
 
-Do dostępu z telefonu użyć HTTPS przez nazwany Cloudflare Tunnel albo stabilny
-reverse proxy. Quick tunnel z losowym adresem nadaje się wyłącznie do testów;
-stały zespół potrzebuje stałego hostname.
+Do dostępu z telefonu postawić zaufane reverse proxy z HTTPS przed
+`http://127.0.0.1:8799` — to samo, co drukują `scripts/install-linux.sh` i
+`scripts/install-termux.sh`. Bez usług trzecich i bez tuneli.
 
 ---
 

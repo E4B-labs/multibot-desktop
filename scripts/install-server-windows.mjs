@@ -1,8 +1,7 @@
 // multibot (G6): one-command, per-user Windows server install.
 // No elevation: Task Scheduler ONLOGON + LIMITED runs hidden PowerShell.
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +31,6 @@ export function windowsServerPlan(env = process.env, packagedExe) {
     root: ROOT,
     installDir,
     tempDir,
-    configFile: join(home, ".openmausbot", "config.json"),
     runner,
     entry,
     staticDir,
@@ -45,7 +43,7 @@ export function windowsServerPlan(env = process.env, packagedExe) {
       sourceCreateArgs: ["/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK_NAME, "/TR", sourceAction],
       runArgs: ["/Run", "/TN", TASK_NAME],
     },
-    publicHttps: "scripts/tunnel.sh or a trusted HTTPS reverse proxy",
+    publicHttps: "a trusted HTTPS reverse proxy",
   };
 }
 
@@ -76,20 +74,6 @@ function pnpmArgs(args) {
   const cli = process.env.npm_execpath;
   if (!cli) throw new Error("run through pnpm: pnpm install:server:windows");
   return [process.execPath, [cli, ...args]];
-}
-
-function accessToken(configFile) {
-  let config = {};
-  try {
-    config = JSON.parse(readFileSync(configFile, "utf8"));
-  } catch {}
-  const existing = String(config?.auth?.token ?? "").trim();
-  if (existing) return existing;
-  const token = randomBytes(32).toString("hex");
-  config.auth = { ...(config.auth ?? {}), token };
-  mkdirSync(dirname(configFile), { recursive: true });
-  writeFileSync(configFile, JSON.stringify(config, null, 2));
-  return token;
 }
 
 function runnerText(plan) {
@@ -123,7 +107,6 @@ async function install() {
   // Clean-machine path: existing NSIS ships Electron/Node, compiled harness,
   // UI and provisioner. No development toolchain is installed system-wide.
   if (existsSync(plan.packagedExe)) {
-    const token = accessToken(plan.configFile);
     await run(plan.task.command, plan.task.createArgs);
     await run(plan.task.command, plan.task.runArgs);
     await waitForServer(plan.port);
@@ -144,7 +127,6 @@ async function install() {
 
   mkdirSync(plan.tempDir, { recursive: true });
 
-  const token = accessToken(plan.configFile);
   writeFileSync(plan.runner, runnerText(plan));
   try {
     await run(plan.task.command, plan.task.sourceCreateArgs);

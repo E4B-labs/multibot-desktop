@@ -13,11 +13,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = "turn-steer-test-token";
+let TOKEN = "";
 const DEBOUNCE_MS = 200;
 
 describe("auto-steer podczas trwającej tury (atrapa codeksa)", () => {
@@ -65,7 +67,6 @@ describe("auto-steer podczas trwającej tury (atrapa codeksa)", () => {
     writeFileSync(
       join(home, ".openmausbot", "config.json"),
       JSON.stringify({
-        auth: { token: TOKEN },
         instances: { steerable: { driver: "codex", displayName: "Steerable", config: { cli: FAKE_CLI, fullAuto: true } } },
       }),
     );
@@ -99,6 +100,7 @@ describe("auto-steer podczas trwającej tury (atrapa codeksa)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    TOKEN = await bootstrapAccessToken(BASE);
     for (const seeded of await bots()) await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
   }, 30_000);
 

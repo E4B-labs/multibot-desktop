@@ -13,11 +13,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { bootstrapAccessToken } from "./testing/identity.ts";
+
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 let port = 0;
 let base = "";
-const TOKEN = "push-test-access-token";
+let TOKEN = "";
 /** Token, na który atrapa exp.host odpowiada ticketem `DeviceNotRegistered`. */
 const DEAD_TOKEN = "ExponentPushToken[dead]";
 
@@ -120,7 +122,6 @@ describe("push na telefon (fake ACP fleet)", () => {
     writeFileSync(
       join(home, ".openmausbot", "config.json"),
       JSON.stringify({
-        auth: { token: TOKEN },
         instances: {
           happy: { driver: "grokAgent", config: { cli: FAKE_CLI, fullAuto: true } },
           grokAsk: {
@@ -179,6 +180,7 @@ describe("push na telefon (fake ACP fleet)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    TOKEN = await bootstrapAccessToken(base);
     await api("POST", "/api/devices/test-phone/push", { token: "ExponentPushToken[test]" });
   }, 40_000);
 

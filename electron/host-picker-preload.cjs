@@ -9,7 +9,4 @@ contextBridge.exposeInMainWorld("hostPicker", {
   remove: (id) => ipcRenderer.invoke("hosts:remove", id),
   useLocal: () => ipcRenderer.invoke("hosts:use-local"),
   useHost: (id) => ipcRenderer.invoke("hosts:use-host", id),
-  /** Seam — rejects until server/firebase-auth.ts exposes a loopback-capable
-   * login route (see electron/oauth-loopback.mjs). */
-  beginBrowserLogin: (url) => ipcRenderer.invoke("hosts:begin-browser-login", url),
 });

@@ -60,10 +60,13 @@ sekcji 5.
 
 ## 4. Uwierzytelnianie
 
-Jeden token Bearer. `server/auth.ts` porównuje go przez `timingSafeEqual` na
-skrótach SHA-256 obu stron (hash najpierw, żeby porównanie zawsze widziało
-bufory tej samej długości). Opcjonalnie dochodzi logowanie Google przez
-Firebase: `server/firebase-auth.ts`, `server/identity.ts`.
+Jedna szyna: identity v2 w `server/identity.ts` (SQLite `identity.db`, hasła
+scryptem, role owner/member). Poświadczeniem jest cookie sesji `mb_v2_session`
+albo krótko żyjący token dostępu — w nagłówku `Authorization: Bearer`, w
+subprotokole WebSocketa `multibot-v2` lub, wyłącznie dla ekranu komputera, w
+`?token=`. `server/auth.ts` to jedna bramka: publiczna allowlista → aktor z
+identity → 401. Nie ma tokenu instalacyjnego, logowania Google ani parowania
+QR — niezalogowany dostaje 401, nigdy 426.
 
 **Nie ma żadnej warstwy płatności ani rozliczeń.** Słowo `billing` w kodzie
 dotyczy wyłącznie rozliczeń cudzych usług: pauzowania sandboxa u zewnętrznego

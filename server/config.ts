@@ -10,8 +10,6 @@ import type { InstanceConfig, InstanceConfigMap } from "./contracts.ts";
 // jego klucze API — patrz `server/mcp-connectors.ts` (import wyłącznie typów,
 // więc cyklu w runtime nie ma).
 import type { McpConnector } from "./mcp-connectors.ts";
-// multibot (A1): jw. — kształt sesji urządzenia mieszka w server/firebase-auth.ts.
-import type { DeviceSession } from "./firebase-auth.ts";
 // multibot: kształt reguł autoweryfikacji mieszka w server/auto-verify.ts (jw.
 // — import wyłącznie typu).
 import type { AutoVerifyState } from "./auto-verify.ts";
@@ -27,8 +25,6 @@ export interface PushDevice {
 }
 
 export interface AppConfig {
-  /** multibot (G2): remote-access bearer token. Never returned by /api/config. */
-  auth?: { token?: string };
   xai?: { key?: string; url?: string };
   /** Shared OpenCode Go key. Never returned by /api/config. */
   opencode?: { key?: string };
@@ -46,40 +42,8 @@ export interface AppConfig {
   instances?: Record<string, InstanceConfig & { model?: { default?: string; baseUrl?: string } }>;
   // multibot (F7): id → konektor MCP użytkownika (tokeny w `env`/`headers`).
   mcpConnectors?: Record<string, Omit<McpConnector, "id">>;
-  /** multibot (A1): Firebase Google login. Absent entirely (no project id) =
-   * server/firebase-auth.ts stays completely inert and the single bearer
-   * access token above keeps working unchanged. */
-  firebase?: {
-    projectId?: string;
-    /** Web API key projektu — publiczny z definicji, przeglądarka wymienia nim
-     *  token Google na token Firebase (`accounts:signInWithIdp`). */
-    apiKey?: string;
-    /** OAuth client ID (typ „Web application") — Google Identity Services. */
-    clientId?: string;
-    ownerUid?: string;
-    /** Authenticated team members. Keys are Firebase UIDs. */
-    members?: Record<string, {
-      uid: string;
-      email?: string;
-      name?: string;
-      role: "owner" | "member";
-      joinedAt: number;
-    }>;
-    /** One-time server invitations. Keys are SHA-256 hashes of raw codes. */
-    invites?: Record<string, {
-      createdBy: string;
-      createdAt: number;
-      expiresAt: number;
-      usedBy?: string;
-      usedAt?: number;
-    }>;
-  };
   /** One self-hosted server is one workspace. */
   workspace?: { id?: string; name?: string };
-  /** multibot (A1): device sessions from Google login, keyed by
-   * sha256(session id) hex — the raw session id (the cookie value) is never
-   * persisted, only its hash. */
-  deviceSessions?: Record<string, DeviceSession>;
   /** multibot (U28): tokeny powiadomień push (Expo) na telefon, obok sesji. */
   pushDevices?: Record<string, PushDevice>;
   /** multibot: strefa czasowa IANA ("Europe/Warsaw"), którą prompt bota podaje
@@ -175,8 +139,9 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   // multibot (F7): `mcpConnectors` dołącza do listy — merge po kluczu, więc
   // zapis jednego konektora nie kasuje reszty, a `undefined` w wartości kasuje
   // wpis (JSON.stringify pomija takie pole).
+  // multibot: `auth`, `firebase` i `deviceSessions` (stare szyny logowania) są
+  // celowo poza listą — pliki na dysku zostają nietknięte, serwer ich nie czyta.
   for (const key of [
-    "auth",
     "xai",
     "opencode",
     "composio",
@@ -185,8 +150,6 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     "profile",
     "workspace",
     "mcpConnectors",
-    "firebase",
-    "deviceSessions",
     "pushDevices",
     "autoVerify",
   ] as const) {

@@ -19,9 +19,9 @@ Dokumentacja inżynierska: [`docs/engineering/`](docs/engineering/).
 | Katalog | Co tam jest |
 |---|---|
 | `src/` | Interfejs: React 19 + Vite 7 + Tailwind v4 (motyw ciemny na sztywno), stan w useReducer+Context (`src/state/store.tsx`), jeden kanał zdarzeń `/api/events` (WebSocket → SSE fallback). UI dwujęzyczne PL/EN przez `{polish ? … : …}`. |
-| `server/` | Harness Node: surowy `node:http` bez frameworka, cała obsługa HTTP w `server/index.ts`. Auth Bearer (+ opcjonalny Firebase Google). Drivery dostawców w `drivers/` (claude, codex, grok, agenty ACP, `openaiCompatible` = własne endpointy zgodne z OpenAI). Goals, rooms, routines, approvals, memory, skills, grupy, komputer bota, TTS. |
+| `server/` | Harness Node: surowy `node:http` bez frameworka, cała obsługa HTTP w `server/index.ts`. Auth: identity v2 (`server/identity.ts`, SQLite `identity.db`, scrypt, role owner/member) — cookie sesji albo krótko żyjący token dostępu, jedna bramka w `server/auth.ts`. Drivery dostawców w `drivers/` (claude, codex, grok, agenty ACP, `openaiCompatible` = własne endpointy zgodne z OpenAI). Goals, rooms, routines, approvals, memory, skills, grupy, komputer bota, TTS. |
 | `electron/` | Powłoka desktopowa: proces główny `main.mjs`, preload, IPC przez `window.ogb`, auto-update na vendored `vendor/electron-updater.cjs` (po budowaniu `git checkout --`). |
-| `scripts/` | Instalatory linux/termux/windows, skrypty komputera bota, tunel. |
+| `scripts/` | Instalatory linux/termux/windows, skrypty komputera bota. |
 | `docs/` | `engineering/` (protokół), FEATURES, COMPARISON, REMOTE-ACCESS, GOOGLE-WORKSPACE. |
 
 Kluczowe pliki: `server/index.ts` (endpointy HTTP), `server/contracts.ts`
