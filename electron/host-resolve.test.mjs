@@ -18,6 +18,17 @@ describe("host resolve", () => {
     expect(() => normalizeRemoteUrl("")).toThrow();
   });
 
+  it("normalizeRemoteUrl fills https:// in for a bare address:port", () => {
+    // Tak wygląda adres z trzech wartości serwera przepisany z drugiego
+    // urządzenia. Serwer 0.4.0 słucha wyłącznie po HTTPS, więc schemat jest
+    // rozstrzygnięty, a nie zgadywany.
+    expect(normalizeRemoteUrl("192.168.1.42:8799")).toBe("https://192.168.1.42:8799");
+    expect(normalizeRemoteUrl(" [2a00:f41:8c4:1::7]:8799/ ")).toBe("https://[2a00:f41:8c4:1::7]:8799");
+    expect(normalizeRemoteUrl("brave-otter.local:8799")).toBe("https://brave-otter.local:8799");
+    // Bez portu to już zgadywanie — zostaje błąd.
+    expect(() => normalizeRemoteUrl("192.168.1.42")).toThrow();
+  });
+
   it("upsertRemoteHost replaces by id and keeps newest first", () => {
     const a = { id: "a", name: "A", url: "https://a" };
     const b = { id: "b", name: "B", url: "https://b" };

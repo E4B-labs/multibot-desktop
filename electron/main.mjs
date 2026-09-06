@@ -5,8 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
-import { addRemoteHost, getActiveId, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost } from "./hosts.mjs";
-import { shouldStartLocalHarness } from "./host-resolve.mjs";
+import { addRemoteHost, getActiveId, getHostFingerprint, isKnownHost, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
+import { joinServer, probeServer } from "./host-probe.mjs";
+import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
+import { normalizeRemoteUrl, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { activateForBot, normalizeNotification } from "./notifications.mjs";
@@ -307,8 +309,20 @@ const ERROR_PAGE =
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
 // window.location.hash client-side, stores it, and erases it before first
 // paint.
-function remoteFragment(token) {
-  return token ? `#access_token=${encodeURIComponent(token)}` : "";
+function remoteFragment(token, joinGrant) {
+  const parts = [];
+  if (token) parts.push(`access_token=${encodeURIComponent(token)}`);
+  // Krótkotrwały bilet z `POST /api/auth/join`, wymieniany przez webui na
+  // rejestrację albo logowanie profilu. Nigdy nie trafia do logów ani na dysk.
+  if (joinGrant) parts.push(`join=${encodeURIComponent(joinGrant)}`);
+  return parts.length ? `#${parts.join("&")}` : "";
+}
+
+/** Odcisk certyfikatu tego hosta: skąd go brać i gdzie zapisać przy pierwszym
+ * kontakcie. Jeden magazyn dla proxy, dla natywnych wywołań probe/join i dla
+ * bezpośredniego `loadURL`, żeby TOFU znaczyło wszędzie to samo. */
+function hostPin(url) {
+  return { get: () => getHostFingerprint(url), set: (fingerprint) => setHostFingerprint(url, fingerprint) };
 }
 
 // multibot: katalog z ZAPAKOWANYM interfejsem — tym, który przychodzi razem z
@@ -336,7 +350,7 @@ async function remoteUiOriginFor(remoteUrl) {
   if (remoteUi && remoteUi.remoteUrl === remoteUrl) return remoteUi.url;
   await closeRemoteUi();
   try {
-    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl });
+    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl, pin: hostPin(remoteUrl) });
   } catch (err) {
     console.warn("[multibot] lokalny origin nie wstał:", err?.message ?? err);
     remoteUi = null;
@@ -359,7 +373,7 @@ function startupTargetMode() {
 /** Decides what `win` should load: a saved remote host, or the existing
  * local flow (packaged server / dev vite), completely unchanged when no
  * remote host is active. */
-async function loadActiveTarget(win) {
+async function loadActiveTarget(win, { joinGrant } = {}) {
   const target = resolveLoadTarget();
   if (target.mode === "remote") {
     // multibot: interfejs bierzemy z PACZKI, a z hosta wyłącznie dane. Wcześniej
@@ -368,7 +382,7 @@ async function loadActiveTarget(win) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
-    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token)}`);
+    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`);
     return;
   }
   // Wracamy na lokalny harness — port zdalnego originu nie ma po co wisieć.
@@ -603,6 +617,59 @@ ipcMain.handle("hosts:use-host", async (_event, id) => {
   setActiveHost(id);
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
+// multibot (0.4.0): adres hosta rozwiązuje POWŁOKA, natywnie. Renderer nie ma
+// jak tego zrobić — webui żyje dopiero w originie serwera, a serwer nie wysyła
+// żadnych nagłówków CORS, więc poświadczenia trzeba wymienić, ZANIM okno tam
+// pojedzie. Odpowiedzi są wąskie z rozmysłem: kod błędu, nic więcej.
+ipcMain.handle("hosts:probe", async (_event, url) => {
+  let normalized;
+  try {
+    normalized = normalizeRemoteUrl(url);
+  } catch {
+    return { ok: false, error: "unreachable" };
+  }
+  return probeServer(normalized, { pin: hostPin(normalized) });
+});
+
+// Hasło serwera i grant nie idą NIGDZIE poza to wywołanie: nie do logów, nie na
+// dysk. W rekordzie hosta lądują wyłącznie adres i odcisk certyfikatu, który
+// właśnie zobaczyliśmy w uścisku dłoni (TOFU — dalsze połączenia go pilnują).
+ipcMain.handle("hosts:join", async (_event, url, serverName, serverPassword) => {
+  let normalized;
+  try {
+    normalized = normalizeRemoteUrl(url);
+  } catch {
+    return { ok: false, error: "unreachable" };
+  }
+  const result = await joinServer(normalized, { serverName, serverPassword, pin: hostPin(normalized) });
+  if (!result.ok) return result;
+  const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });
+  setActiveHost(host.id);
+  if (mainWindow) await loadActiveTarget(mainWindow, { joinGrant: result.joinGrant });
+  return { ok: true, joinGrant: result.joinGrant, expiresAt: result.expiresAt, hasUsers: result.hasUsers };
+});
+
+// Bezpośredni `loadURL` na hosta (droga awaryjna, gdy lokalny origin nie
+// wstał) trafia na certyfikat z własnego podpisu i Chromium zrywa połączenie,
+// zanim ktokolwiek zdąży cokolwiek zobaczyć. Zgoda tylko dla ZAPISANEGO hosta
+// i tylko na ten sam certyfikat co poprzednio; pierwszy kontakt zapamiętuje
+// odcisk, każda zmiana to odmowa. Obce originy idą zwykłą drogą Chromium.
+app.on("certificate-error", (event, _webContents, url, _error, certificate, callback) => {
+  if (!isKnownHost(url)) {
+    callback(false);
+    return;
+  }
+  try {
+    const { learned } = verifyFingerprint({ stored: getHostFingerprint(url), actual: fingerprintOfPem(certificate?.data ?? "") });
+    if (learned) setHostFingerprint(url, learned);
+    event.preventDefault();
+    callback(true);
+  } catch (err) {
+    console.warn("[multibot] odrzucony certyfikat hosta:", err?.message ?? err);
+    callback(false);
+  }
+});
+
 ipcMain.handle("desktop:export-diagnostics", async (event) => {
   if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   const picked = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {

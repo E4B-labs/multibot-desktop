@@ -25,6 +25,8 @@ import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { extname, join, resolve, sep } from "node:path";
 
+import { CERT_CHANGED, pinRequest } from "./tls-pin.mjs";
+
 // Nagłówki jednego skoku — przepisanie ich psuje ramkowanie odpowiedzi.
 const HOP_BY_HOP = ["connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection"];
 
@@ -128,11 +130,15 @@ function upstreamOptions(req, remote, { keepHandshake = false } = {}) {
       method: req.method,
       path: target.pathname + target.search,
       headers,
+      // Hosty 0.4.0 mają certyfikat z własnego podpisu, więc łańcucha nie ma
+      // czym sprawdzić; zaufanie stoi na odcisku przypiętym w `pin`
+      // (electron/tls-pin.mjs) — bez niego byłoby to gołe „ufam każdemu".
+      rejectUnauthorized: false,
     },
   };
 }
 
-function proxyHttp(req, res, remote) {
+function proxyHttp(req, res, remote, pin) {
   const { target, options } = upstreamOptions(req, remote);
   const upstream = requestFor(target)(options, (up) => {
     const headers = { ...up.headers };
@@ -140,9 +146,12 @@ function proxyHttp(req, res, remote) {
     res.writeHead(up.statusCode ?? 502, headers);
     up.pipe(res);
   });
+  if (pin) pinRequest(upstream, pin);
   upstream.on("error", (err) => {
     if (!res.headersSent) res.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
-    res.end(JSON.stringify({ error: `host unreachable: ${err.message}` }));
+    // Podmieniony certyfikat to nie „host nieosiągalny" — użytkownik ma
+    // zobaczyć dokładnie to zdanie, bo tylko ono mówi, co się stało.
+    res.end(JSON.stringify({ error: err.code === CERT_CHANGED ? err.message : `host unreachable: ${err.message}` }));
   });
   req.pipe(upstream);
 }
@@ -171,9 +180,10 @@ function bail(socket, status, reason) {
  * 101 przepisujemy z powrotem i od tej chwili spinamy gniazda bajt w bajt. Subprotokół zostaje NIETKNIĘTY, bo to
  * w nim jedzie token (`["multibot-v2", <token>]`).
  */
-function pipeWs(req, socket, head, remote, live) {
+function pipeWs(req, socket, head, remote, live, pin) {
   const { target, options } = upstreamOptions(req, remote, { keepHandshake: true });
   const upstream = requestFor(target)({ ...options, method: "GET" });
+  if (pin) pinRequest(upstream, pin);
   upstream.on("upgrade", (upRes, upSocket, upHead) => {
     socket.write(raw101(upRes));
     if (upHead?.length) socket.write(upHead);
@@ -238,7 +248,7 @@ async function listenOnStablePort(server) {
  * zachowania sprzed tej zmiany. Brak tego serwera ma degradować apkę do
  * poprzedniego trybu, nigdy do białego ekranu.
  */
-export async function startRemoteUiServer({ staticDir, remoteUrl }) {
+export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
   if (!staticDir || !existsSync(join(staticDir, "index.html"))) return null;
   const root = resolve(staticDir);
   // Gniazda WebSocketa przejęte przy upgradzie — patrz komentarz w `pipeWs`.
@@ -248,13 +258,13 @@ export async function startRemoteUiServer({ staticDir, remoteUrl }) {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const file = req.method === "GET" || req.method === "HEAD" ? staticFileFor(root, pathname) : null;
       if (file) serveStatic(res, file, req.method);
-      else proxyHttp(req, res, remoteUrl);
+      else proxyHttp(req, res, remoteUrl, pin);
     } catch (err) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(err) }));
     }
   });
-  server.on("upgrade", (req, socket, head) => pipeWs(req, socket, head, remoteUrl, live));
+  server.on("upgrade", (req, socket, head) => pipeWs(req, socket, head, remoteUrl, live, pin));
   server.on("clientError", (_err, socket) => socket.destroy());
   const port = await listenOnStablePort(server);
   if (port == null) {

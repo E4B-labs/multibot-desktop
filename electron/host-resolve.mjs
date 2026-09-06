@@ -2,14 +2,18 @@
 // of Electron/fs/safeStorage imports so it runs under plain `node` in the
 // self-check (host-resolve.test.mjs) without a packaged app context.
 
-/** @typedef {{ id: string, name: string, url: string, tokenEnc: string, createdAt: number }} RemoteHost */
+/** @typedef {{ id: string, name: string, url: string, tokenEnc: string, tlsFingerprint?: string, createdAt: number }} RemoteHost */
 /** @typedef {{ activeId: string, hosts: RemoteHost[] }} HostsConfig */
 
-/** Strips trailing slashes and rejects anything that isn't http(s). */
+/** Strips trailing slashes and rejects anything that isn't http(s). A pasted
+ * address usually arrives bare — `192.168.1.42:8799`, `[2a00:…]:8799` — and
+ * 0.4.0 servers listen on HTTPS only, so that is the scheme filled in for it.
+ * Anything else without a scheme stays an error instead of a guess. */
 export function normalizeRemoteUrl(raw) {
   const trimmed = String(raw ?? "")
     .trim()
     .replace(/\/+$/, "");
+  if (/^(?:[\w.-]+|\[[0-9a-fA-F:]+\]):\d{1,5}$/.test(trimmed)) return `https://${trimmed}`;
   if (!/^https?:\/\/.+/i.test(trimmed)) {
     throw new Error("Host address must start with http:// or https://");
   }

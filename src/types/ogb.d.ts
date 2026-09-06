@@ -29,6 +29,15 @@ declare global {
       addRemoteHost?(url: string): Promise<void>;
       /** Returns to local host, restoring local onboarding when it is pending. */
       useLocalHost?(): Promise<void>;
+      /** Asks the shell whether a MultiBot server answers at this address, and
+       * whether it already has a name and password of its own. Native, because
+       * the server sends no CORS headers and the webui is not in its origin
+       * yet. Absent in the browser and in shells older than 0.4.0. */
+      probeHost?(url: string): Promise<HostProbeResult>;
+      /** Trades the server name + password for a short-lived join grant, saves
+       * the host and switches the window to it with `#join=<grant>`. The
+       * password never leaves the main process. */
+      joinHost?(url: string, serverName: string, serverPassword: string): Promise<HostJoinResult>;
       /** Opens the native host picker WITHOUT changing the active host. */
       showHostPicker?(): Promise<void>;
       /** Unread-conversation count for the taskbar badge. Fire-and-forget;
@@ -77,6 +86,20 @@ declare global {
     };
   }
 }
+
+/** `error` codes: transport ones are `unreachable` | `timeout` |
+ * `not-multibot` | `certificate_changed` (a pinned certificate changed — see
+ * electron/tls-pin.mjs). */
+export type HostProbeResult =
+  | { ok: true; configured: boolean; tlsFingerprint?: string }
+  | { ok: false; error: string };
+
+/** On failure `error` is the server's own code — `wrong_server_name`,
+ * `wrong_server_password`, `server_not_set_up`, `rate_limited` — or one of the
+ * transport codes above, so the form can point at the field at fault. */
+export type HostJoinResult =
+  | { ok: true; joinGrant: string; expiresAt?: number; hasUsers?: boolean }
+  | { ok: false; error: string };
 
 export interface UpdaterState {
   status: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
