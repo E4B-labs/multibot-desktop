@@ -7,6 +7,8 @@ import {
   normalizeRemoteUrl,
   removeRemoteHost,
   resolveActiveTarget,
+  sameDocument,
+  sameOrigin,
   shouldStartLocalHarness,
 } from "./host-resolve.mjs";
 
@@ -88,5 +90,36 @@ describe("local harness startup decision", () => {
   it("never starts the harness in dev, whatever the target", () => {
     expect(shouldStartLocalHarness({ isPackaged: false, mode: "local" })).toBe(false);
     expect(shouldStartLocalHarness({ isPackaged: false, mode: "remote" })).toBe(false);
+  });
+});
+
+describe("re-joining a server that is already known", () => {
+  // Objaw: po ponownym „Połącz" apka wracała na ekran wyboru zamiast wejść na
+  // serwer. `mergeRemoteHost` zachowuje STARE id, a `hosts:join` ustawia nim
+  // activeId — więc rekord trzeba wziąć z listy PO scaleniu, nie z wejścia.
+  it("keeps the id that activeId has to point at", () => {
+    const stary = { id: "h_stary", name: "telefon", url: "https://1.2.3.4:8799", tlsFingerprint: "AA", createdAt: 1 };
+    const swiezy = { id: "h_nowy", name: "", url: "https://1.2.3.4:8799", createdAt: 2 };
+    const hosts = mergeRemoteHost([stary], swiezy);
+    const zapisany = hosts.find((h) => sameOrigin(h.url, swiezy.url));
+    expect(zapisany.id).toBe("h_stary");
+    expect(resolveActiveTarget({ activeId: zapisany.id, hosts })).toEqual({ mode: "remote", host: zapisany });
+    // To był błąd: id z wejścia nie pasuje do żadnego rekordu, więc apka
+    // cicho lądowała w trybie lokalnym.
+    expect(resolveActiveTarget({ activeId: swiezy.id, hosts })).toEqual({ mode: "local" });
+  });
+});
+
+describe("sameDocument", () => {
+  // Zmiana samego fragmentu to nawigacja w obrębie dokumentu: strona się nie
+  // przeładowuje, więc `#join=<grant>` nigdy nie zostaje odczytany.
+  it("spots a fragment-only change", () => {
+    expect(sameDocument("http://127.0.0.1:47820/", "http://127.0.0.1:47820/#join=g")).toBe(true);
+    expect(sameDocument("http://127.0.0.1:47820/#join=a", "http://127.0.0.1:47820/#join=b")).toBe(true);
+  });
+
+  it("a different origin or a blank window is a real load", () => {
+    expect(sameDocument("http://127.0.0.1:8799/", "http://127.0.0.1:47820/#join=g")).toBe(false);
+    expect(sameDocument("", "http://127.0.0.1:47820/#join=g")).toBe(false);
   });
 });

@@ -79,10 +79,21 @@ function staticFileFor(staticDir, pathname) {
  * jest asynchroniczny (IPC), więc na tę decyzję za późno. Wstrzykujemy więc
  * flagę prosto w `index.html`, i to WYŁĄCZNIE tutaj: lokalny harness serwuje
  * ten sam plik bez niej.
+ *
+ * Razem z flagą jedzie ADRES hosta. Bez niego ekran logowania w trybie zdalnym
+ * pokazywał origin proxy (`http://127.0.0.1:47820`) jako „adres serwera" i nie
+ * miał czym wypełnić formularza, więc onboarding zaczynał od pytania „postawić
+ * serwer czy zalogować się", choć host jest już wybrany. Adres nie jest
+ * tajemnicą — ta strona i tak w całości jedzie z tego serwera.
  */
-const REMOTE_FLAG = "<script>window.__MULTIBOT_REMOTE__=true</script>";
+function remoteFlag(remoteUrl) {
+  // `<` uciekamy sami: adres wpisuje użytkownik, a `</script>` w nim zamknęłoby
+  // ten blok i wszystko dalej byłoby już zwykłym HTML-em.
+  const literal = JSON.stringify(String(remoteUrl)).replace(/</g, "\\u003c");
+  return `<script>window.__MULTIBOT_REMOTE__=true;window.__MULTIBOT_HOST__=${literal}</script>`;
+}
 
-function serveStatic(res, file, method) {
+function serveStatic(res, file, method, remoteUrl) {
   const ext = extname(file).toLowerCase();
   const headers = {
     "content-type": MIME[ext] ?? "application/octet-stream",
@@ -93,7 +104,7 @@ function serveStatic(res, file, method) {
   if (file.endsWith("index.html")) {
     // Długość liczymy z treści PO wstrzyknięciu — rozmiar z dysku byłby o
     // flagę za krótki i przeglądarka ucięłaby koniec dokumentu.
-    const body = Buffer.from(readFileSync(file, "utf8").replace("</head>", REMOTE_FLAG + "</head>"));
+    const body = Buffer.from(readFileSync(file, "utf8").replace("</head>", remoteFlag(remoteUrl) + "</head>"));
     res.writeHead(200, { ...headers, "content-length": String(body.length) });
     res.end(method === "HEAD" ? undefined : body);
     return;
@@ -280,7 +291,7 @@ export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
     try {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const file = req.method === "GET" || req.method === "HEAD" ? staticFileFor(root, pathname) : null;
-      if (file) serveStatic(res, file, req.method);
+      if (file) serveStatic(res, file, req.method, remoteUrl);
       else proxyHttp(req, res, remoteUrl, pin, agent);
     } catch (err) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });

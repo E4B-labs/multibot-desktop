@@ -8,7 +8,7 @@ import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { addRemoteHost, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
 import { getJson, joinServer, probeServer } from "./host-probe.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
-import { normalizeRemoteUrl, shouldStartLocalHarness } from "./host-resolve.mjs";
+import { normalizeRemoteUrl, sameDocument, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { activateForBot, normalizeNotification } from "./notifications.mjs";
@@ -391,7 +391,14 @@ async function loadActiveTarget(win, { joinGrant } = {}) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
-    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`).catch((err) => {
+    const url = `${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`;
+    // Ponowne logowanie do TEGO SAMEGO hosta zmienia w adresie wyłącznie
+    // fragment (`#join=…`). Dla przeglądarki to nawigacja w obrębie tego samego
+    // dokumentu: strona żyje dalej, nikt nie czyta granta, a formularz zostaje
+    // z „Łączenie…" na zawsze — i grant zostaje w pasku adresu. Zerowa strona
+    // po drodze robi z tego prawdziwe wczytanie dokumentu.
+    if (sameDocument(win.webContents.getURL(), url)) await win.loadURL("about:blank").catch(() => {});
+    win.loadURL(url).catch((err) => {
       // Nawigacja potrafi odpaść po fakcie (odrzucony certyfikat, host zniknął)
       // — to nie jest wyjątek dla wołającego, tylko wpis w logu. Logujemy sam
       // kod i origin: w adresie siedzi fragment z grantem albo tokenem.
