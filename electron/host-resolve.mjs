@@ -13,8 +13,16 @@ export function normalizeRemoteUrl(raw) {
   const trimmed = String(raw ?? "")
     .trim()
     .replace(/\/+$/, "");
-  const bare = /^(?:[\w.-]+|\[[0-9a-fA-F:]+\]):(\d{1,5})$/.exec(trimmed);
-  if (bare && Number(bare[1]) >= 1 && Number(bare[1]) <= 65535) return `https://${trimmed}`;
+  const bare = /^(.+):(\d{1,5})$/.exec(trimmed);
+  if (bare && Number(bare[2]) >= 1 && Number(bare[2]) <= 65535 && !/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    const candidate = `https://${trimmed}`;
+    try {
+      new URL(candidate);
+      return candidate;
+    } catch {
+      /* nie adres — leci w błąd niżej */
+    }
+  }
   if (!/^https?:\/\/.+/i.test(trimmed)) {
     throw new Error("Host address must start with http:// or https://");
   }

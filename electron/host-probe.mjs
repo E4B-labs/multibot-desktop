@@ -81,6 +81,9 @@ function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } 
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
           if (raw.length < MAX_BODY) raw += chunk;
+          // Nadmiarowego strumienia nie zbieramy ANI nie przyjmujemy dalej —
+          // inaczej wrogi serwer lałby dane przez cały budżet czasu.
+          else res.destroy();
         });
         res.on("end", () => {
           let json = null;
@@ -113,7 +116,14 @@ export async function probeServer(url, options = {}) {
 
 /** Exchanges the server name + password for a short-lived join grant. Neither
  * the password nor the grant is ever logged. */
+/** Pętla zwrotna to jedyne miejsce, gdzie gołe HTTP nie wynosi hasła poza
+ * urządzenie (lokalny harness w trakcie przejścia na HTTPS). */
+function isCleartextToTheWorld(target) {
+  return target.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]", "::1"].includes(target.hostname);
+}
+
 export async function joinServer(url, { serverName, serverPassword, ...options } = {}) {
+  if (isCleartextToTheWorld(new URL(url))) return { ok: false, error: "insecure_address" };
   try {
     const { status, json, tlsFingerprint } = await requestJson(`${url}/api/auth/join`, {
       ...options,

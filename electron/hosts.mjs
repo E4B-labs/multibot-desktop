@@ -20,8 +20,14 @@ function readRaw() {
 }
 
 function writeRaw(config) {
-  fs.mkdirSync(path.dirname(filePath()), { recursive: true });
-  fs.writeFileSync(filePath(), JSON.stringify(config, null, 2), "utf8");
+  const file = filePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Przez plik tymczasowy i `rename`: przerwany zapis w miejscu zostawiłby
+  // urwany JSON, a `readRaw` czyta go jako „brak hostów" — czyli cicha utrata
+  // wszystkich adresów i przypiętych odcisków.
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf8");
+  fs.renameSync(tmp, file);
 }
 
 // Hard rule: never plaintext. Refuses to save rather than silently falling

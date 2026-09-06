@@ -2,7 +2,7 @@
 // decydują, co zobaczy pole adresu, nazwy albo hasła na ekranie logowania.
 import { describe, expect, it } from "vitest";
 
-import { classifyJoin, classifyProbe, failureCode } from "./host-probe.mjs";
+import { classifyJoin, classifyProbe, failureCode, joinServer } from "./host-probe.mjs";
 import { CERT_CHANGED } from "./tls-pin.mjs";
 
 describe("classifyProbe", () => {
@@ -41,6 +41,16 @@ describe("classifyJoin", () => {
     expect(classifyJoin(404, null)).toEqual({ ok: false, error: "not-multibot" });
     expect(classifyJoin(200, null)).toEqual({ ok: false, error: "not-multibot" });
     expect(classifyJoin(500, null)).toEqual({ ok: false, error: "http_500" });
+  });
+});
+
+describe("joinServer", () => {
+  it("nie wysyła hasła serwera po gołym HTTP poza pętlę zwrotną", async () => {
+    // Bez gniazda: odmowa zapada, zanim powstanie żądanie.
+    expect(await joinServer("http://192.168.1.42:8799", { serverName: "n", serverPassword: "p" })).toEqual({
+      ok: false,
+      error: "insecure_address",
+    });
   });
 });
 

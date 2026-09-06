@@ -382,7 +382,11 @@ async function loadActiveTarget(win, { joinGrant } = {}) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
-    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`);
+    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`).catch((err) => {
+      // Nawigacja potrafi odpaść po fakcie (odrzucony certyfikat, host zniknął)
+      // — to nie jest wyjątek dla wołającego, tylko wpis w logu.
+      console.warn("[multibot] nie udało się wczytać hosta:", err?.message ?? err);
+    });
     return;
   }
   // Wracamy na lokalny harness — port zdalnego originu nie ma po co wisieć.
@@ -761,6 +765,32 @@ app.whenReady().then(async () => {
     return;
   }
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
+  // Przypięcie certyfikatu dla NAWIGACJI okna. `certificate-error` niżej jest
+  // tylko połową roboty: Chromium woła je dopiero wtedy, gdy samo odrzuciło
+  // certyfikat, więc podstawiony certyfikat z ZAUFANEGO urzędu przeszedłby
+  // bokiem, nigdy nie pytając o odcisk. `setCertificateVerifyProc` dostaje
+  // KAŻDY certyfikat, więc dopiero tutaj przypięcie jest przypięciem.
+  // Wszystko, co nie jest aktywnym hostem (aktualizacje, cokolwiek innego),
+  // odsyłamy do zwykłej weryfikacji Chromium przez `-3`.
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    const active = activeRemoteOrigin();
+    const wanted = active ? new URL(active).hostname : null;
+    if (!wanted || request.hostname !== wanted) {
+      callback(-3);
+      return;
+    }
+    try {
+      const { learned } = verifyFingerprint({
+        stored: getHostFingerprint(active),
+        actual: fingerprintOfPem(request.certificate?.data ?? ""),
+      });
+      if (learned) setHostFingerprint(active, learned);
+      callback(0);
+    } catch (err) {
+      console.warn("[multibot] odrzucony certyfikat hosta:", err?.message ?? err);
+      callback(-2);
+    }
+  });
   // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
   // inside the app's own processes — the one capture path macOS reliably
   // attributes to the app (registers it in the Screen Recording pane and

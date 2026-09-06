@@ -221,7 +221,7 @@ function pipeWs(req, socket, head, remote, live, pin) {
   // Host odpowiedział zwykłym HTTP (401 z bramki auth, 404) — oddajemy status
   // klientowi, zamiast zostawiać go w ciszy na wiszącym upgradzie.
   upstream.on("response", (upRes) => bail(socket, upRes.statusCode ?? 502, "Upgrade Failed"));
-  upstream.on("error", () => bail(socket, 502, "Bad Gateway"));
+  upstream.on("error", (err) => bail(socket, 502, err.code === CERT_CHANGED ? "Server Certificate Changed" : "Bad Gateway"));
   if (head?.length) upstream.write(head);
   upstream.end();
 }
