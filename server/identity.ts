@@ -36,6 +36,19 @@ export interface IdentityActor {
   role: IdentityRole;
   email?: string | null;
 }
+/** One row of the admin tab's user table, straight out of SQLite. The counts
+ * the tab also shows (messages, bots owned) live outside identity — see
+ * `server/admin.ts`. */
+export interface AdminUser {
+  id: string;
+  name: string;
+  username: string;
+  email: string | null;
+  role: IdentityRole;
+  createdAt: number;
+  lastSeenAt: number | null;
+  disabled: boolean;
+}
 export interface ServerPublicInfo {
   configured: boolean;
   serverId: string;
@@ -669,6 +682,102 @@ export class IdentityStore {
     this.grants.clear();
     this.audit(actor.userId, "server.password.rotated", this.publicInfo().serverId);
     return serverPassword;
+  }
+
+  /** Read a `meta` row from outside the store. The admin overview needs the
+   * address PR 3 persists here, and a value that has never been written is
+   * simply null — no branch anywhere for "that release is not in yet". */
+  getMeta(key: string): string | null {
+    this.init();
+    return this.meta(key);
+  }
+
+  /** The user table as the admin tab needs it: every profile, disabled ones
+   * included, with the newest still-valid session as "last seen". A profile
+   * that has never signed in anywhere gets null, not 0. */
+  usersWithActivity(): AdminUser[] {
+    this.init();
+    const rows = this.db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.email, u.role, u.created_at, u.disabled_at,
+             MAX(s.last_seen_at) AS last_seen_at
+        FROM users u
+        LEFT JOIN sessions s ON s.user_id = u.id AND s.revoked_at IS NULL
+       GROUP BY u.id
+       ORDER BY u.created_at
+    `).all() as Row[];
+    return rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.display_name),
+      username: String(row.username),
+      email: typeof row.email === "string" ? row.email : null,
+      role: row.role === "owner" ? "owner" : "member",
+      createdAt: Number(row.created_at),
+      lastSeenAt: row.last_seen_at === null ? null : Number(row.last_seen_at),
+      disabled: row.disabled_at !== null,
+    }));
+  }
+
+  recentAudit(limit = 50): Array<{ at: number; action: string; userId: string | null; target: string | null }> {
+    this.init();
+    const rows = this.db.prepare("SELECT at, action, user_id, target FROM audit ORDER BY id DESC LIMIT ?")
+      .all(Math.min(200, Math.max(1, Math.trunc(limit) || 1))) as Row[];
+    return rows.map((row) => ({
+      at: Number(row.at),
+      action: String(row.action),
+      userId: typeof row.user_id === "string" ? row.user_id : null,
+      target: typeof row.target === "string" ? row.target : null,
+    }));
+  }
+
+  private enabledOwners(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'owner' AND disabled_at IS NULL").get() as Row | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  /** Owner administration of a profile: role, and whether it may sign in at
+   * all. The guard is on the server keeping one enabled owner rather than on
+   * "yourself" — demoting the last owner locks every admin surface for good,
+   * and it makes no difference who clicked it. */
+  adminUpdateUser(actor: IdentityActor, userId: string, patch: { role?: unknown; disabled?: unknown }): AdminUser {
+    this.init();
+    if (actor.role !== "owner") throw new IdentityError("owner access required", 403);
+    const row = this.db.prepare("SELECT id, role, disabled_at FROM users WHERE id = ?").get(userId) as Row | undefined;
+    if (!row) throw new IdentityError("no_such_profile", 404);
+    const wasOwner = row.role === "owner";
+    const wasDisabled = row.disabled_at !== null;
+    if (patch.role !== undefined && patch.role !== "owner" && patch.role !== "member") throw new IdentityError("invalid role", 422);
+    if (patch.disabled !== undefined && typeof patch.disabled !== "boolean") throw new IdentityError("invalid disabled flag", 422);
+    const role: IdentityRole = patch.role === undefined ? (wasOwner ? "owner" : "member") : patch.role as IdentityRole;
+    const disabled = patch.disabled === undefined ? wasDisabled : patch.disabled;
+    if (wasOwner && !wasDisabled && (role !== "owner" || disabled) && this.enabledOwners() <= 1) {
+      throw new IdentityError("last_owner", 409);
+    }
+    const now = Date.now();
+    this.db.prepare("UPDATE users SET role = ?, disabled_at = ? WHERE id = ?").run(role, disabled ? (wasDisabled ? Number(row.disabled_at) : now) : null, userId);
+    if (disabled && !wasDisabled) {
+      // A disabled profile must stop being able to act, not just stop being
+      // able to sign in again: its live session cookies and access tokens go.
+      this.db.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, userId);
+      this.db.prepare("UPDATE access_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, userId);
+    }
+    if (role !== row.role) this.audit(actor.userId, `user.role.${role}`, userId);
+    if (disabled !== wasDisabled) this.audit(actor.userId, disabled ? "user.disabled" : "user.enabled", userId);
+    const updated = this.usersWithActivity().find((user) => user.id === userId);
+    if (!updated) throw new IdentityError("no_such_profile", 404);
+    return updated;
+  }
+
+  /** Mint a fresh recovery code for a profile whose owner asked for one, the
+   * same way `register` does. Shown once: only the hash is kept. */
+  resetRecoveryCode(actor: IdentityActor, userId: string): string {
+    this.init();
+    if (actor.role !== "owner") throw new IdentityError("owner access required", 403);
+    const row = this.db.prepare("SELECT id FROM users WHERE id = ?").get(userId) as Row | undefined;
+    if (!row) throw new IdentityError("no_such_profile", 404);
+    const recoveryCode = randomBytes(24).toString("base64url");
+    this.db.prepare("UPDATE users SET recovery_hash = ? WHERE id = ?").run(hash(recoveryCode), userId);
+    this.audit(actor.userId, "user.recovery.reset", userId);
+    return recoveryCode;
   }
 
   members(): Array<{ userId: string; username: string; displayName: string; role: IdentityRole; createdAt: number }> {

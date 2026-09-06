@@ -940,4 +940,60 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", "/api/profile", { displayName: "Index Tester", email: "index@example.test" })).body.user.email).toBe("index@example.test");
     expect((await api("GET", "/api/auth/me")).body.user.email).toBe("index@example.test");
   });
+
+  // Last in the file on purpose: it registers extra profiles and disables one,
+  // so nothing above it can be perturbed by the state it leaves behind.
+  it("keeps the admin overview owner-only and acts on profiles from it", async () => {
+    const enroll = async (username: string) => {
+      const res = await fetch(`${BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username, password: "member-test-profile-pw", serverName, serverPassword, deviceName: "vitest" }),
+      });
+      expect(res.status).toBe(201);
+      return await res.json() as { user: { id: string; role: string }; accessToken: string };
+    };
+    const asMember = (token: string, method: string, path: string, body?: unknown) => fetch(`${BASE}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "x-multibot-protocol": "2", ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const member = await enroll("index-disabled");
+    expect(member.user.role).toBe("member");
+    expect((await asMember(member.accessToken, "GET", "/api/admin/overview")).status).toBe(403);
+    expect((await asMember(member.accessToken, "PATCH", `/api/admin/users/${member.user.id}`, { role: "owner" })).status).toBe(403);
+
+    const overview = await api("GET", "/api/admin/overview");
+    expect(overview.status).toBe(200);
+    const owner = overview.body.users.find((user: any) => user.role === "owner");
+    expect(owner.username).toBe("index-tester");
+    expect(typeof owner.lastSeenAt).toBe("number");
+    expect(typeof owner.messages).toBe("number");
+    expect(overview.body.users.map((user: any) => user.username)).toEqual(expect.arrayContaining(["index-tester", "index-member", "index-disabled"]));
+    expect(overview.body.server.cpuCount).toBeGreaterThan(0);
+    expect(overview.body.server.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(typeof overview.body.server.connectionsActive).toBe("number");
+    expect(Object.keys(overview.body.bots.byVisibility).sort()).toEqual(["private", "public", "team"]);
+    expect(overview.body.performance).toMatchObject({ turns24h: expect.any(Number), errorRate: expect.any(Number) });
+    expect(overview.body.audit.some((row: any) => row.action === "user.registered")).toBe(true);
+
+    // Owner resets a forgotten profile: a code, shown once, never stored plain.
+    const reset = await api("POST", `/api/admin/users/${member.user.id}/reset`);
+    expect(reset.status).toBe(200);
+    expect(reset.body.recoveryCode).toMatch(/^[\w-]{20,}$/);
+
+    // Disabling takes effect on the credential that profile already holds.
+    const disabled = await api("PATCH", `/api/admin/users/${member.user.id}`, { disabled: true });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.user.disabled).toBe(true);
+    expect((await asMember(member.accessToken, "GET", "/api/bots")).status).toBe(401);
+    expect((await asMember(member.accessToken, "GET", "/api/admin/overview")).status).toBe(401);
+
+    // The server must always keep one enabled owner, whoever asks.
+    expect((await api("PATCH", `/api/admin/users/${owner.id}`, { role: "member" })).status).toBe(409);
+    expect((await api("PATCH", `/api/admin/users/${owner.id}`, { disabled: true })).status).toBe(409);
+    expect((await api("GET", "/api/auth/me")).body.user.role).toBe("owner");
+    expect((await api("PATCH", "/api/admin/users/usr_nobody", { disabled: true })).status).toBe(404);
+  });
 });
