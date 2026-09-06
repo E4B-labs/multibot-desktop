@@ -17,6 +17,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 // Real identity v2 credential, minted in beforeAll by actually setting the
 // server up and registering its first (owner) profile.
 let TOKEN = "";
+let serverPassword = "";
 
 let child: ChildProcess;
 let home: string;
@@ -144,7 +145,7 @@ beforeAll(async () => {
     body: JSON.stringify({ name: "Index test server" }),
   });
   if (setup.status !== 201) throw new Error(`server setup failed (${setup.status}): ${await setup.text()}`);
-  const { serverPassword } = await setup.json() as { serverPassword: string };
+  serverPassword = (await setup.json() as { serverPassword: string }).serverPassword;
   const registered = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -802,6 +803,46 @@ describe("harness HTTP API", () => {
     expect(res.body.error).toContain("/api/definitely-not-a-route");
   });
 
+  // cfg.profile jest WSPÓLNY dla całego serwera. Zanim to naprawiliśmy, dowolny
+  // członek nadpisywał nim nazwę i e-mail wszystkim; nazwa konta należy do
+  // konta i idzie przez identity.
+  it("keeps shared config profile owner-only while every member renames themselves", async () => {
+    const joined = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "index-member",
+        password: "index-member-profile-pass",
+        displayName: "Index Member",
+        serverPassword,
+        deviceName: "vitest-member",
+      }),
+    });
+    expect(joined.status).toBe(201);
+    const memberToken = (await joined.json() as { accessToken: string }).accessToken;
+    const asMember = (body: unknown) => fetch(`${BASE}/api/config`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${memberToken}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const ownerBefore = (await api("GET", "/api/config")).body.profile;
+    const renamed = await asMember({ profile: { name: "Member Renamed", email: "member@example.test" } });
+    expect(renamed.status).toBe(200);
+    // Own display name changed…
+    expect((await renamed.json() as { profile: { name: string } }).profile.name).toBe("Member Renamed");
+    // …a wspólny profil serwera został nietknięty dla właściciela.
+    expect((await api("GET", "/api/config")).body.profile).toEqual(ownerBefore);
+
+    // Za długa nazwa to 422, nie 500.
+    expect((await asMember({ profile: { name: "x".repeat(81) } })).status).toBe(422);
+
+    // Owner nadal pisze do wspólnego profilu.
+    const asOwner = await api("PATCH", "/api/config", { profile: { name: "Index Tester", email: "owner@example.test" } });
+    expect(asOwner.status).toBe(200);
+    expect((await api("GET", "/api/config")).body.profile.email).toBe("owner@example.test");
+  });
+
   // The identity access token is the whole credential surface now: the SSE
   // stream opens with it, and every retired rail is simply gone.
   it("streams events with the identity access token and has no legacy auth rails left", async () => {
@@ -814,9 +855,11 @@ describe("harness HTTP API", () => {
     for (const path of ["/api/auth/token", "/api/auth/status", "/api/pair"]) {
       expect((await api("GET", path)).status).toBe(404);
     }
-    for (const path of ["/api/auth/token/rotate", "/api/pair/start", "/api/pair/claim", "/api/auth/firebase/session", "/api/provision", "/api/workspace/invites"]) {
+    for (const path of ["/api/auth/token/rotate", "/api/pair/start", "/api/pair/claim", "/api/auth/firebase/session", "/api/workspace/invites"]) {
       expect((await api("POST", path, {})).status).toBe(404);
     }
+    // …ale `/api/provision` zostaje do PR 7 — onboarding świeżej instalacji je woła.
+    expect((await api("POST", "/api/provision", { server: false })).status).toBe(202);
     // An old client with the retired bearer is just anonymous: 401, never 426.
     for (const path of ["/api/auth/token", "/api/pair", "/api/auth/status", "/api/bots"]) {
       expect((await fetch(`${BASE}${path}`, { headers: { authorization: "Bearer index-test-legacy-token" } })).status).toBe(401);

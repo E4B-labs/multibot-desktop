@@ -32,11 +32,20 @@ export function isPublicRoute(method: string, pathname: string): boolean {
   );
 }
 
+/** Where the gate leaves the actor it already resolved. Handlers read it back
+ * with `requestActor` instead of parsing the credential again — one lookup per
+ * request/upgrade, not one per frame. */
+const ACTOR_KEY = "multibotActor";
+
+export function requestActor<T>(req: IncomingMessage): T | null {
+  return (req as unknown as Record<string, T | undefined>)[ACTOR_KEY] ?? null;
+}
+
 /** Mount last: wraps both the app request handler and every upgrade handler,
- * including the events and per-bot computer sockets. `authenticated` is the
- * identity check — it already reads the cookie, the bearer, the `multibot-v2`
- * subprotocol and the screen's `?token=`. */
-export function mountAuth(server: Server, authenticated: (req: IncomingMessage) => boolean) {
+ * including the events and per-bot computer sockets. `authenticate` is the
+ * identity lookup — it already reads the cookie, the bearer, the `multibot-v2`
+ * subprotocol and the screen's `?token=` — and returns the actor or null. */
+export function mountAuth<T>(server: Server, authenticate: (req: IncomingMessage) => T | null) {
   const sessions = new Set<Duplex>();
   const tracked = new WeakSet<Duplex>();
   const track = (socket: Duplex) => {
@@ -44,6 +53,9 @@ export function mountAuth(server: Server, authenticated: (req: IncomingMessage) 
     if (tracked.has(socket)) return;
     tracked.add(socket);
     socket.once("close", () => sessions.delete(socket));
+  };
+  const stash = (req: IncomingMessage, actor: T) => {
+    (req as unknown as Record<string, T>)[ACTOR_KEY] = actor;
   };
   const requests = server.listeners("request") as Array<(req: IncomingMessage, res: ServerResponse) => void>;
   server.removeAllListeners("request");
@@ -56,8 +68,9 @@ export function mountAuth(server: Server, authenticated: (req: IncomingMessage) 
       for (const handler of requests) handler(req, res);
       return;
     }
-    if (!authenticated(req)) return unauthorized(res);
-    req.headers["x-multibot-auth"] = "session";
+    const actor = authenticate(req);
+    if (!actor) return unauthorized(res);
+    stash(req, actor);
     track(req.socket);
     for (const handler of requests) handler(req, res);
   });
@@ -67,24 +80,32 @@ export function mountAuth(server: Server, authenticated: (req: IncomingMessage) 
   >;
   server.removeAllListeners("upgrade");
   server.on("upgrade", (req, socket: Duplex, head: Buffer) => {
-    if (!authenticated(req)) {
+    const actor = authenticate(req);
+    if (!actor) {
       // Odrzucony upgrade jest niewidoczny dla klienta poza zerwanym gniazdem —
       // przeglądarka pokazuje pusty ekran i tyle. Ścieżka bez query, żeby
       // poświadczenie nie trafiło do logu.
       console.log(`[auth] upgrade odrzucony: ${new URL(req.url ?? "/", "http://127.0.0.1").pathname}`);
       return rejectUpgrade(socket);
     }
-    req.headers["x-multibot-auth"] = "session";
+    stash(req, actor);
     track(socket);
-    // Nagłówka NIE przepisujemy: siedzi w nim token dostępu, a `/api/events`
-    // rozwiązuje aktora leniwie, przy KAŻDEJ ramce (filtr ACL). Skrócenie go do
-    // samego znacznika kasowało poświadczenie i socket przestawał widzieć boty.
-    // `server/events-ws.ts` odsyła i tak tylko pierwszy element listy.
+    // Token dostępu jedzie drugim elementem subprotokołu, a przelotka ekranu
+    // (`server/computer-vnc-proxy.ts`) przepisuje CAŁE nagłówki do websockify
+    // w kontenerze bota. Aktor jest już rozwiązany, więc skracamy listę do
+    // samego znacznika: dalej nie leci nic, czym można się zalogować.
+    const protocols = String(req.headers["sec-websocket-protocol"] ?? "")
+      .split(",")
+      .map((value) => value.trim());
+    if (protocols.includes("multibot-v2")) req.headers["sec-websocket-protocol"] = "multibot-v2";
     for (const handler of upgrades) handler(req, socket, head);
   });
   return {
     /** Revoking a credential closes SSE/WS and idle authenticated keep-alives.
-     * Keep the revoking request's own socket alive to return its response. */
+     * Keep the revoking request's own socket alive to return its response.
+     * ponytail: kills every tracked socket, not just the revoked user's —
+     * everyone else reconnects on a credential that is still valid. Per-user
+     * buckets when a busy server makes the reconnect storm visible. */
     revokeSessions(except?: Duplex) {
       for (const socket of sessions) if (socket !== except) socket.destroy();
     },

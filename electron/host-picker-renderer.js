@@ -74,14 +74,5 @@ document.getElementById("add").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("browserLogin").addEventListener("click", async () => {
-  const err = document.getElementById("err");
-  err.textContent = "";
-  try {
-    await window.hostPicker.beginBrowserLogin(document.getElementById("url").value);
-  } catch (e) {
-    err.textContent = e?.message || "Browser sign-in isn't available yet — paste the access token instead.";
-  }
-});
 
 void refresh();

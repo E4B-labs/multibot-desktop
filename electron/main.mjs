@@ -603,11 +603,6 @@ ipcMain.handle("hosts:use-host", async (_event, id) => {
   setActiveHost(id);
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
-// Seam: PR 6 replaces this with a native `POST /api/auth/join` probe.
-ipcMain.handle("hosts:begin-browser-login", () => {
-  throw new Error("Browser sign-in isn't available yet — sign in to the server inside the window instead.");
-});
-
 ipcMain.handle("desktop:export-diagnostics", async (event) => {
   if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   const picked = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {

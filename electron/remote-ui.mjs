@@ -169,7 +169,7 @@ function bail(socket, status, reason) {
 /**
  * WebSocket bez biblioteki, ręcznie: powtarzamy handshake w stronę hosta,
  * 101 przepisujemy z powrotem i od tej chwili spinamy gniazda bajt w bajt. Subprotokół zostaje NIETKNIĘTY, bo to
- * w nim jedzie token (`["multibot-auth", <token>]`).
+ * w nim jedzie token (`["multibot-v2", <token>]`).
  */
 function pipeWs(req, socket, head, remote, live) {
   const { target, options } = upstreamOptions(req, remote, { keepHandshake: true });

@@ -20,7 +20,7 @@ import {
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
 import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.ts";
-import { mountAuth } from "./auth.ts";
+import { mountAuth, requestActor } from "./auth.ts";
 import {
   IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
   isLoopbackRequest, isSecureRequest,
@@ -80,6 +80,7 @@ import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): w
 import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
+import { registerWindowsServerAutostart } from "./windows-autostart.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { canUseIntegration, clearTurnPolicy, rememberApprovalRule, setTurnPolicy, toolsetAllowed, turnPolicy } from "./turn-policy.ts";
 import { webMcpIntegration } from "./drivers/web-proxy.ts";
@@ -133,6 +134,9 @@ const cfg = loadConfig();
 const identity = new IdentityStore();
 identity.init();
 const identityAttempts = new Map<string, { startedAt: number; count: number }>();
+// Ustawiane przy montażu bramki (na końcu pliku); unieważnienie sesji musi
+// zerwać jej SSE/WS, inaczej wylogowany socket dalej dostaje zdarzenia.
+let revokeAuthSessions = (_except?: import("node:stream").Duplex) => {};
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
 const groupStore = new GroupStore();
@@ -2603,6 +2607,11 @@ function configStatusFor(actor: IdentityActor | null) {
 }
 
 function identityActorForRequest(req: IncomingMessage): IdentityActor | null {
+  // `mountAuth` rozwiązało aktora raz, na bramce — bez tego każdy odczyt to
+  // kolejny UPDATE w SQLite, a filtr `/api/events` robił go PRZY KAŻDEJ RAMCE
+  // (i po wygaśnięciu tokenu cicho przestawał cokolwiek dowozić).
+  const stashed = requestActor<IdentityActor>(req);
+  if (stashed) return stashed;
   const identityActor = identity.actorForRequest(req);
   if (identityActor) return identityActor;
   if (new URL(req.url ?? "/", "http://localhost").pathname === "/api/auth/access-token") {
@@ -3037,6 +3046,8 @@ async function handleIdentityRoute(
       const session = await identity.recover(body.username, body.recoveryCode, body.newPassword, body.deviceName);
       res.setHeader("set-cookie", identityCookie(session.sessionToken, isSecureRequest(req)));
       res.setHeader("cache-control", "no-store");
+      // `recover` unieważnił WSZYSTKIE sesje tego konta — ich gniazda muszą pójść.
+      revokeAuthSessions(req.socket);
       return identityHandled(res, 200, identitySessionBody(session, req.headers["x-multibot-client"] === "native"));
     } catch (error) {
       const status = error instanceof IdentityError ? error.status : 400;
@@ -3063,6 +3074,7 @@ async function handleIdentityRoute(
       if (method === "POST" && (path === "/api/auth/logout" || path === "/api/auth/logout-all")) {
         identity.logout(req, path.endsWith("logout-all"));
         res.setHeader("set-cookie", identityCookie("", isSecureRequest(req), true));
+        revokeAuthSessions(req.socket);
         return identityHandled(res, 200, { ok: true });
       }
       if (method === "GET" && path === "/api/auth/sessions") {
@@ -3102,6 +3114,7 @@ const server = createServer(async (req, res) => {
   const method = req.method ?? "GET";
   let actor = actorForRequest(req);
   const adminMutation = method !== "GET" && (
+    path === "/api/provision" ||
     path.startsWith("/api/models/custom/") ||
     path.startsWith("/api/cli-tools/") ||
     path.startsWith("/api/progress/") ||
@@ -4680,6 +4693,20 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/device/resources") {
       return json(res, 200, deviceResources());
     }
+    // ponytail: zostaje do PR 7, który kasuje ją razem z jedynym wołającym
+    // (`src/components/Onboarding.tsx`). Bez niej świeża instalacja dostaje 404.
+    if (method === "POST" && path === "/api/provision") {
+      const body = await readBody(req);
+      // Packaged Electron passes its trusted absolute executable path. Only an
+      // explicit onboarding 24/7 choice installs per-user autostart.
+      if (body?.server === true && process.env.OMB_PACKAGED_EXE) {
+        await registerWindowsServerAutostart(process.env.OMB_PACKAGED_EXE);
+      }
+      // Silnik Hermesa był jedyną rzeczą, którą ta trasa dociągała; po jego
+      // usunięciu zostaje sama rejestracja autostartu serwera 24/7, która nic
+      // nie pobiera — więc nie ma czego śledzić przez /api/progress.
+      return json(res, 202, { ok: true });
+    }
     m = path.match(/^\/api\/progress\/([\w-]+)$/);
     if (m && method === "GET") {
       const job = setupJobs.get(m[1]);
@@ -4872,15 +4899,22 @@ const server = createServer(async (req, res) => {
       // `autoVerify` scalamy z zapisanym stanem, więc UI może przysłać samo
       // `{enabled}` albo samą listę `rules` i nie wyzeruje tym drugiego.
       const settings: Partial<AppConfig> = {};
-      // Profil to ustawienie użytkownika, nie poświadczenie serwera — poza
-      // bramką "owner only" i poza przeładowaniem floty. Nazwa idzie DODATKOWO
-      // do identity (to ona pokazuje się w interfejsie); e-mail zostaje w
+      // Nazwa wyświetlana należy do KONTA — każdy zmienia swoją, przez identity.
+      // `cfg.profile` jest natomiast wspólny dla całego serwera (fallback, gdy
+      // konta nie ma), więc pisze do niego wyłącznie owner; inaczej dowolny
+      // członek nadpisywał nazwę i e-mail wszystkim. E-mail zostaje w
       // config.json do czasu, aż PR 2 doda `users.email`.
+      let profileSaved = false;
       if (body.profile && typeof body.profile === "object") {
-        settings.profile = body.profile;
-        if (actor && typeof body.profile.name === "string" && body.profile.name.trim()) {
-          actor = identity.updateProfile(actor, body.profile.name);
+        const displayName = (body.profile as { name?: unknown }).name;
+        if (typeof displayName === "string" && displayName.trim()) {
+          if (displayName.length > 80) return json(res, 422, { error: "display name must be 1-80 characters" });
+          if (actor) {
+            actor = identity.updateProfile(actor, displayName);
+            profileSaved = true;
+          }
         }
+        if (actor?.role === "owner") settings.profile = body.profile;
       }
       if (typeof body.timeZone === "string") settings.timeZone = body.timeZone.trim();
       if (body.autoVerify && typeof body.autoVerify === "object") {
@@ -4900,10 +4934,12 @@ const server = createServer(async (req, res) => {
         )].slice(0, 200);
       }
       if (Object.keys(patch).length && actor?.role !== "owner") return json(res, 403, { error: "owner access required for server credentials" });
-      if (!Object.keys(patch).length && !Object.keys(settings).length) {
+      if (!Object.keys(patch).length && !Object.keys(settings).length && !profileSaved) {
         return json(res, 400, { error: "nothing to save" });
       }
-      saveConfig({ ...(patch as Partial<AppConfig>), ...settings });
+      if (Object.keys(patch).length || Object.keys(settings).length) {
+        saveConfig({ ...(patch as Partial<AppConfig>), ...settings });
+      }
       Object.assign(cfg, loadConfig());
       // provider keys change the fleet; a profile edit must not kill
       // in-flight turns with a pointless reload
@@ -5132,15 +5168,19 @@ mountVncUpgrade(server, (req, botId) => canReadBot(store.bot(botId), actorForReq
 mountEventsWs(server, (url, send, req) => {
   const lang = url.searchParams.get("lang");
   if (lang === "pl" || lang === "en") uiLang = lang;
+  // Aktor raz na gniazdo, jak w SSE (`EventClient`): filtr ACL chodzi po każdej
+  // ramce, a poświadczenie i tak nie zmienia się w trakcie życia socketa.
+  // Unieważnienie sesji zrywa gniazdo przez `revokeAuthSessions`.
+  const actor = actorForRequest(req);
   send(JSON.stringify({ kind: "hello" }));
   send(JSON.stringify({
     kind: "environment.snapshot",
-    environment: fleetEnvironmentForActor(actorForRequest(req)),
+    environment: fleetEnvironmentForActor(actor),
     sequence: ++eventSequence,
   }));
   return (text) => {
     try {
-      return eventVisible(JSON.parse(text), actorForRequest(req));
+      return eventVisible(JSON.parse(text), actor);
     } catch {
       return false;
     }
@@ -5150,7 +5190,7 @@ mountEventsWs(server, (url, send, req) => {
 // Auth mounts after the WS upgrades so one wrapper covers harness HTTP and
 // every WS upgrade path. Jedno poświadczenie: identity v2 (cookie sesji, token
 // dostępu w nagłówku/subprotokole, `?token=` na ekranie komputera).
-mountAuth(server, (req) => Boolean(identityActorForRequest(req)));
+revokeAuthSessions = mountAuth(server, identityActorForRequest).revokeSessions;
 
 // multibot (H1): every bot has a computer, so boot makes that true again.
 // Containers survive a harness restart on their own restart policy; this only
