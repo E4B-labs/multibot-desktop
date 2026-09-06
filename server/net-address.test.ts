@@ -44,6 +44,28 @@ describe("candidatesFrom", () => {
     ]);
   });
 
+  // The whole point of the relay rung: on this fixture every other candidate is
+  // a LAN address or an IPv6 the owner's router does not route, and the relay is
+  // the one a stranger can actually reach.
+  it("puts a configured relay first, ahead of every discovered address", () => {
+    const withRelay = candidatesFrom(FIXTURE, 8799, "https", "203.0.113.9");
+    expect(withRelay[0]).toEqual({ address: "https://203.0.113.9:8799", kind: "relay", verified: false });
+    expect(withRelay.slice(1).map((candidate) => candidate.kind)).toEqual(candidates.map((candidate) => candidate.kind));
+  });
+
+  it("brackets an IPv6 relay and accepts a DNS name", () => {
+    expect(candidatesFrom({}, 8799, "https", "2a05:d016::7")[0].address).toBe("https://[2a05:d016::7]:8799");
+    expect(candidatesFrom({}, 8799, "https", " relay.example.net ")[0].address).toBe("https://relay.example.net:8799");
+  });
+
+  // `relay.env` is a file on disk, so it gets the same shape check as any other
+  // stored address: a host, nothing that could smuggle a path or credentials in.
+  it("ignores a relay host that is not a bare host", () => {
+    for (const bad of ["", "  ", "evil.example/admin", "user:pass@evil.example"]) {
+      expect(candidatesFrom({}, 8799, "https", bad).some((candidate) => candidate.kind === "relay")).toBe(false);
+    }
+  });
+
   it("falls back to http only when told to (OMB_TLS=off behind a proxy)", () => {
     expect(candidatesFrom({ eth0: [iface("1.1.1.1", "IPv4")] }, 8799, "http")[0].address)
       .toBe("http://1.1.1.1:8799");

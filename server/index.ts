@@ -111,10 +111,28 @@ function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
   const loopback = `${SCHEME}://127.0.0.1:${port}`;
   const report = currentReport(port);
+  // A relay reaches us whatever we bound to: `ssh -R` dials 127.0.0.1 from this
+  // very machine, so a loopback-only server is published there too.
+  const relay = report.candidates.find((candidate) => candidate.kind === "relay");
+  if (relay) return relay.address;
   if (HOST === "0.0.0.0" || HOST === "::") return report.current ?? loopback;
   const bound = new Set([`${SCHEME}://${HOST}:${port}`, `${SCHEME}://[${HOST}]:${port}`]);
   return report.candidates.find((candidate) => bound.has(candidate.address))?.address ?? loopback;
 }
+
+/** `scripts/relay-connect.sh` writes `DATA_DIR/relay.env` when the owner puts a
+ * relay box of their own in front (docs/REMOTE-ACCESS.md). Read on every scan,
+ * never cached: the script may land the file while the server is already up.
+ * Only the value is taken — this is not a shell, so nothing here is executed. */
+function relayHost(): string | null {
+  try {
+    const raw = readFileSync(join(DATA_DIR, "relay.env"), "utf8");
+    return /^RELAY_HOST=["']?([A-Za-z0-9._:[\]-]+)/m.exec(raw)?.[1] ?? null;
+  } catch {
+    return null; // no relay configured, or the file is unreadable
+  }
+}
+
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
 const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE ? join(ROOT, "dist") : null);
@@ -173,6 +191,7 @@ identity.init();
 initNetAddress({
   scheme: SCHEME,
   mapPorts: !LOOPBACK_HOST,
+  relayHost,
   getMeta: (key) => identity.getMeta(key),
   setMeta: (key, value) => identity.putMeta(key, value),
   onChange: (report) => {

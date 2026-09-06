@@ -913,7 +913,7 @@ describe("harness HTTP API", () => {
     expect(["mapped", "unsupported", "cgnat", "error"]).toContain(report.portMapping.state);
     for (const candidate of report.candidates) {
       expect(candidate.address).toMatch(/^https?:\/\/.+:\d+$/);
-      expect(["ipv6", "ipv4-upnp", "ipv4-lan"]).toContain(candidate.kind);
+      expect(["relay", "ipv6", "ipv4-upnp", "ipv4-lan"]).toContain(candidate.kind);
     }
 
     expect((await api("POST", "/api/server/address", { address: "not a url" })).status).toBe(422);
