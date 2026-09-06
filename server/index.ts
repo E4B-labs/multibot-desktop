@@ -25,7 +25,7 @@ import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
   IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
-  isLoopbackAddress, isLoopbackRequest, isSecureRequest,
+  isLoopbackRequest, isSecureRequest,
   type IdentityActor, type CreatedSession,
 } from "./identity.ts";
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
@@ -91,6 +91,7 @@ import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
+import { rateLimitAddress, startTor, torBinary, torEnabled, type Tor } from "./tor.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
@@ -117,7 +118,10 @@ function primaryAddress(port: number): string {
   // -R` dials 127.0.0.1 from this very machine, so it reaches a loopback-only
   // server too. Everything else defers to `report.current`, so this and
   // `/api/server/address` can never disagree about which address we publish.
-  if (report.candidates.some((candidate) => candidate.kind === "relay" && candidate.address === report.current)) {
+  // The onion joins the relay in that exemption for the same reason: it is not
+  // another NIC either. Tor lands on 127.0.0.1:8798 from this very machine, so
+  // a loopback-only bind answers on it too.
+  if (report.candidates.some((candidate) => (candidate.kind === "relay" || candidate.kind === "onion") && candidate.address === report.current)) {
     return report.current as string;
   }
   const bound = new Set([`${SCHEME}://${HOST}:${port}`, `${SCHEME}://[${HOST}]:${port}`]);
@@ -148,7 +152,10 @@ function relayHost(): string | null {
 // remote mode serves the built app automatically unless explicitly overridden.
 // With a relay in front, a loopback bind is still serving the whole internet —
 // without this the tunnel would publish an API with no UI behind it.
-const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() ? join(ROOT, "dist") : null);
+// An onion is a public address like any other, so a server that is about to
+// publish one is serving the whole internet even on a loopback bind.
+const TOR_POSSIBLE = torEnabled() && torBinary() !== null;
+const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -201,15 +208,24 @@ identity.init();
 // Address discovery keeps its findings in the identity `meta` row and tells
 // everyone when the answer changes: a live client refreshes its badge, the
 // owner's phone gets one push so a new address never goes unnoticed.
+/** Filled in once the server object exists (the onion ingress needs it). Every
+ * reader goes through a function, so "not started yet" is simply null. */
+let tor: Tor | null = null;
 initNetAddress({
   scheme: SCHEME,
   mapPorts: !LOOPBACK_HOST,
   relayHost,
+  onionHost: () => tor?.onionHost() ?? null,
+  socksPort: () => tor?.socksPort() ?? null,
   tlsFingerprint: TLS_FINGERPRINT,
   getMeta: (key) => identity.getMeta(key),
   setMeta: (key, value) => identity.putMeta(key, value),
   onChange: (report) => {
     broadcast({ kind: "server.address", address: report.current, verified: report.verified });
+    // The three values on a fresh install are read out of setup.json, and the
+    // address in it was true for the second it was written. Keep that one field
+    // honest; nothing else in the file ever changes.
+    if (report.current) identity.updateSetupAddress(report.current);
     const owner = identity.members().find((member) => member.role === "owner");
     if (owner && report.current) {
       void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId]).catch(() => {});
@@ -3064,9 +3080,7 @@ function identityRateLimited(req: IncomingMessage, operation: string): boolean {
   // when the socket peer really is loopback, i.e. there IS a proxy in front. A
   // remote peer that sets its own `x-forwarded-for` would otherwise pick its own
   // bucket every request: an unlimited supply of scrypt guesses at the password.
-  const peer = req.socket.remoteAddress ?? "unknown";
-  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
-  const address = (isLoopbackAddress(req.socket.remoteAddress) && forwarded) || peer;
+  const address = rateLimitAddress(req.socket, req.headers["x-forwarded-for"]);
   const key = `${operation}:${address}`;
   const current = identityAttempts.get(key);
   if (!current) {
@@ -5392,6 +5406,18 @@ mountEventsWs(server, (url, send, req) => {
 // dostępu w nagłówku/subprotokole, `?token=` na ekranie komputera).
 revokeAuthSessions = mountAuth(server, identityActorForRequest).revokeSessions;
 
+// Tor last, so the onion ingress hands connections to a server that already has
+// every wrapper on it. Started before `listen`: bootstrapping takes 10-30 s and
+// nothing about the boot waits for it.
+tor = startTor({
+  dataDir: DATA_DIR,
+  server,
+  onionPort: PORT,
+  // The hostname appears seconds after boot; without this nudge the badge would
+  // wait out the ten-minute rescan tick before showing the address that works.
+  onReady: () => void refreshAddress(PORT).catch(() => {}),
+});
+
 // multibot (H1): every bot has a computer, so boot makes that true again.
 // Containers survive a harness restart on their own restart policy; this only
 // heals what drifted (a bot created while docker was down, a container removed
@@ -5459,6 +5485,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     // Give the router its port back. Best effort by design: the exit below does
     // not wait for it, and a router that has gone away costs us nothing.
     void unmapPort().catch(() => {});
+    // Our child, our job: a tor left behind keeps the data directory locked and
+    // the NEXT harness would never get its onion back.
+    tor?.stop();
     // taskkill /T is asynchronous on Windows. Exiting immediately abandoned
     // CLI children (and kept their profile files locked), so give it one
     // short reap window after all adapters requested disposal.

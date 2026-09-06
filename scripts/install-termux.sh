@@ -19,7 +19,10 @@ say "install Termux packages (no root)"
 run pkg update -y
 # python zostaje: `python3 -m websockify` w scripts/computer-native.sh to most
 # noVNC komputera bota — jedyny ekran, jaki Android daje bez Dockera.
-run pkg install -y nodejs-lts python git termux-services
+# tor: the onion address (server/tor.ts) is the only rung that works behind a
+# phone carrier's NAT without a box of your own. Package, not a bundled binary —
+# Termux keeps it patched and the harness only ever spawns `tor` off PATH.
+run pkg install -y nodejs-lts python git termux-services tor
 if ! command -v pnpm >/dev/null; then
   if (( DRY_RUN )); then say "install pnpm@10.33.0 globally"; else npm install -g pnpm@10.33.0; fi
 fi
@@ -85,5 +88,5 @@ say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
 if (( DRY_RUN )); then
   say "print the three values from \$HOME/.openmausbot/setup.json"
 else
-  bash "$ROOT/scripts/print-setup-values.sh" 30 || true
+  bash "$ROOT/scripts/print-setup-values.sh" 90 || true
 fi

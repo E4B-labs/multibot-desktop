@@ -34,6 +34,10 @@ fi
 
 [[ "$(uname -s)" == Linux ]] || { say "systemd mode requires Linux" >&2; exit 1; }
 for tool in node pnpm git systemctl; do command -v "$tool" >/dev/null || { say "missing $tool" >&2; exit 1; }; done
+# Optional, not required: without tor the address ladder simply has one rung
+# fewer. We do not install it ourselves — that needs root, and this installer
+# deliberately never elevates.
+command -v tor >/dev/null || say "no 'tor' on PATH — install it (Debian/Ubuntu: sudo apt install tor, Fedora: sudo dnf install tor) for an onion address that works from any network"
 
 say "build harness and PWA"
 run pnpm --dir "$ROOT" install --frozen-lockfile
@@ -82,5 +86,5 @@ say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_
 if (( DRY_RUN )); then
   say "print the three values from \$HOME/.openmausbot/setup.json"
 else
-  bash "$ROOT/scripts/print-setup-values.sh" 30 || true
+  bash "$ROOT/scripts/print-setup-values.sh" 90 || true
 fi

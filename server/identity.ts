@@ -383,6 +383,30 @@ export class IdentityStore {
     return values;
   }
 
+  /** `setup.json` is written once, on the first boot, with the address the
+   * ladder knew at that second — which on a fresh Termux install is the LAN
+   * one, because tor has not published the onion yet and the router has not
+   * been asked. Ten seconds later the answer is a different, better address,
+   * and the person reading the file would type the wrong one.
+   *
+   * So the ADDRESS, and only the address, is rewritten whenever the ladder
+   * changes its mind. Never the password, the name or the token: those are
+   * minted once and a restart must not invalidate what is already on somebody's
+   * screen. And only while the file still exists — it disappears once the first
+   * profile claims the server, and recreating it there would put a live
+   * password back on disk. */
+  updateSetupAddress(address: string): void {
+    let raw: Record<string, unknown>;
+    try {
+      raw = JSON.parse(readFileSync(this.setupFile, "utf8")) as Record<string, unknown>;
+    } catch {
+      return; // no pending setup, or a file we did not write — leave it alone
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.address === address) return;
+    writeFileSync(this.setupFile, JSON.stringify({ ...raw, address }, null, 2), { mode: 0o600 });
+    if (process.platform !== "win32") chmodSync(this.setupFile, 0o600);
+  }
+
   /** Where the pending setup values live. A PATH, never the values: a browser
    * tab cannot read a file and cannot call `/api/setup/values` either (that one
    * is gated on the token inside the file), so the only useful thing to hand it

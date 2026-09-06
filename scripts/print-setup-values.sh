@@ -7,7 +7,12 @@
 # svlogger/journald/`docker logs` keep stdout forever. An installer IS that
 # terminal, so it reads the file instead of scraping the service log.
 #
-# Usage: print-setup-values.sh [seconds-to-wait]   (default 30)
+# Usage: print-setup-values.sh [seconds-to-wait]   (default 90)
+#
+# 90 and not 30 because of the onion: tor bootstraps in 10-30 s and publishes
+# hs/hostname after that, and the address in setup.json is rewritten when the
+# ladder settles on it (identity.updateSetupAddress). Printing at 30 s would
+# reliably hand the installer the LAN address the file was born with.
 # Never fails: an installer that finished must not report failure because the
 # server was slow to write one file.
 set -uo pipefail
@@ -15,7 +20,7 @@ set -uo pipefail
 DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}"
 FILE="$DATA_DIR/setup.json"
 PORT="${OMB_PORT:-8799}"
-DEADLINE=$(( SECONDS + ${1:-30} ))
+DEADLINE=$(( SECONDS + ${1:-90} ))
 
 # node is installed by every path that calls this (Termux pkg, the Linux
 # prerequisites check, the container image), so no jq/python dependency.
@@ -38,9 +43,31 @@ console.log(`  They stay in ${file} until the first profile is created.\n`);
 ' "$FILE" 2>/dev/null
 }
 
+# The address in the file is the one the ladder knew on the first boot, i.e. the
+# LAN one. Tor publishes the onion 10-30 s later and the harness rewrites just
+# that field (identity.updateSetupAddress), so on a box that HAS tor it is worth
+# holding for it — printing at 2 s would hand the installer an address that only
+# works on this Wi-Fi. On a box without tor nothing is coming and we print at
+# once; the deadline caps the wait either way.
+WANT_ONION=0
+if command -v tor >/dev/null 2>&1 && [[ ! "${OMB_TOR:-1}" =~ ^(0|off|false|no)$ ]]; then WANT_ONION=1; fi
+has_onion() { grep -qE '"address": *"https?://[a-z2-7]{56}\.onion:' "$FILE" 2>/dev/null; }
+
+ANNOUNCED=0
 while :; do
-  if [[ -f "$FILE" ]] && show; then exit 0; fi
-  (( SECONDS < DEADLINE )) || break
+  if [[ -f "$FILE" ]] && show >/dev/null 2>&1; then
+    if (( WANT_ONION )) && ! has_onion && (( SECONDS < DEADLINE )); then
+      if (( ! ANNOUNCED )); then
+        ANNOUNCED=1
+        echo "[multibot] server is up — waiting for its onion address (tor bootstraps in 10-30 s)"
+      fi
+    else
+      show
+      exit 0
+    fi
+  elif (( SECONDS >= DEADLINE )); then
+    break
+  fi
   sleep 1
 done
 

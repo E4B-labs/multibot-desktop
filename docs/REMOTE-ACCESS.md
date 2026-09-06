@@ -30,7 +30,7 @@ Serwer, do którego nikt jeszcze nie dołączył, sam sobie nadaje nazwę (slug 
 
 Dlatego wartości pokazują instalatory, po starcie usługi:
 
-- `install-termux.sh` i `install-linux.sh` czekają na `setup.json` (do 30 s) i drukują blok `Address / Name / Password / Fingerprint` przez `scripts/print-setup-values.sh`;
+- `install-termux.sh` i `install-linux.sh` czekają na `setup.json` (do 90 s) i drukują blok `Address / Name / Password / Fingerprint` przez `scripts/print-setup-values.sh`. Na maszynie, która ma `tor`, skrypt przytrzymuje wypis, dopóki w pliku nie pojawi się adres `.onion` (tor wstaje 10–30 s) — bez tego instalator podałby adres LAN-owy, który działa tylko po tym Wi-Fi;
 - kontener NIE dostaje ich do logu (ten zostaje na zawsze): `scripts/docker-entrypoint.sh` wypisuje tylko ścieżkę i komendę `docker compose -f docker-compose.selfhost.yml exec app cat /data/.openmausbot/setup.json`;
 - `install-server-windows.mjs` czyta ten sam plik po `waitForServer`; ta usługa stoi na pętli zwrotnej, więc jej adres to `https://127.0.0.1:8799` (do sieci wypuszcza ją dopiero `OMB_HOST=0.0.0.0` albo reverse proxy).
 
@@ -85,7 +85,7 @@ Trzy kroki:
 
 **Adres serwera to od tej chwili `https://<IP-relaya>:8799`.** Harness stawia go na szczycie drabiny jako rodzaj `relay` i podaje w `GET /api/server/address` (`current`) oraz `GET /api/server` (`publicAddress`). `OMB_PUBLIC_URL` nadal wygrywa, jeśli ktoś je ustawił.
 
-`setup.json` **nie jest przepisywany**: powstaje raz, na pierwszym boocie serwera, i zostaje z adresem z tamtej chwili. Jeśli relay stanął później, plik nadal pokazuje stary adres — aktualny bierz z panelu albo z `GET /api/server`. Nazwa, hasło i odcisk certyfikatu są w obu miejscach te same i **nie zmieniają się**: certyfikat nie jest wymieniany, więc kto już zaufał serwerowi po LAN-ie, nie musi robić nic ponownie.
+`setup.json` powstaje raz, na pierwszym boocie serwera. Od 0.5.0 przepisywane jest w nim **wyłącznie pole `address`** — i tylko dopóki plik istnieje, czyli zanim pierwszy profil przejmie serwer (`identity.updateSetupAddress`). Powód: plik rodzi się z adresem, który drabina znała w tamtej sekundzie (zwykle LAN-owym), a relay albo onion pojawia się kilkanaście sekund później. Nazwa, hasło i odcisk certyfikatu **nie zmieniają się nigdy**: certyfikat nie jest wymieniany, więc kto już zaufał serwerowi po LAN-ie, nie musi robić nic ponownie.
 
 Adres relaya jako jedyny nie może zostać potwierdzony przez `noteReachedHost` — ruch wychodzi z tunelu jako połączenie z `127.0.0.1`, więc nie ma publicznego rozmówcy, od którego dałoby się czegokolwiek dowiedzieć. Zamiast tego serwer sprawdza się sam przy każdym skanie: łączy się po TLS na publiczny port relaya i patrzy, czy wraca **jego własny certyfikat** (`probeRelay`, 2 s). To rozstrzyga trzy rzeczy naraz — tunel stoi, wychodzi na ten proces i nikt inny nie zajął tego portu — i jest mocniejsze niż porównanie `serverId`, bo tego uścisku dłoni nie dokończy nikt bez naszego klucza prywatnego. Panel pokazuje po tym prawdziwe UP/DOWN, a nie „nie sprawdziliśmy".
 
@@ -96,6 +96,40 @@ Pułapki:
 - **Chmura ma drugi firewall.** Na Oracle Cloud (i na AWS, i na GCP) `ufw` to połowa roboty: trzeba jeszcze dopisać regułę wejściową 0.0.0.0/0 TCP 8799 w Security List / Network Security Group VCN-u, inaczej pakiet nie dojdzie do maszyny.
 - Nazwa DNS zamiast IP jest opcjonalna i działa tak samo: wskaż rekord A na relay i podaj nazwę zamiast adresu.
 - Tunel podnosi się sam z backoffem 5→60 s. Restart: `sv restart mb-relay` (Termux) albo `systemctl --user restart mb-relay` (Linux) — **nigdy `pkill` po nazwie**, na telefonie to zabija serwer tmuksa razem z resztą.
+
+### Adres `.onion` (Tor)
+
+Relay wymaga maszyny z publicznym IP. Onion nie wymaga niczego: żadnego portu na routerze, żadnego IPv6, żadnego konta i żadnej firmy pośrodku. Dlatego od 0.5.0 **jest włączony zawsze**, gdy na maszynie jest `tor`, i jest tym szczeblem drabiny, który działa z każdej sieci — także zza CGNAT operatora komórkowego, czyli dokładnie tam, gdzie stoi S10e.
+
+Instalacja to jeden pakiet systemowy; harness nie dowozi własnego binarium (na Windowsie w wersji spakowanej dokłada je instalator — patrz PR pakowania):
+
+```sh
+pkg install tor        # Termux
+sudo apt install tor   # Debian/Ubuntu
+brew install tor       # macOS
+```
+
+Harness sam pilnuje procesu (`server/tor.ts`) — nie ma osobnej usługi w runicie ani w systemd. Zapisuje `DATA_DIR/tor/torrc`, startuje `tor -f torrc`, czyta z jego stdoutu port SOCKS i postęp bootstrapu, a gdy tor się wywróci, podnosi go z backoffem 5→60 s. Wyłączenie serwera zabija tora razem z nim: onion, za którym nie stoi harness, to opublikowany martwy adres.
+
+Adres bierze się z `DATA_DIR/tor/hs/hostname` (katalog `hs` ma 0700, inaczej tor odmawia startu) i wygląda tak: `https://<56 znaków base32>.onion:8799`. `OMB_TOR=0` wyłącza całość, `OMB_TOR_BIN` wskazuje binarium spoza `PATH`. Brak tora nie jest błędem — jest jedna linia w logu i drabina ma o szczebel mniej.
+
+Trzy rzeczy, które warto wiedzieć:
+
+- **TLS zostaje.** Onion sam w sobie jest uwierzytelniony i szyfrowany, ale klient trzyma jedną ścieżkę i jeden przypięty odcisk certyfikatu — podwójne szyfrowanie jest tanie, a drugi tor kodu byłby drogi. Odcisk się nie zmienia, więc kto zaufał serwerowi po LAN-ie, po `.onion` niczego nie zatwierdza ponownie.
+- **Osobny port wejściowy.** Hidden service celuje w `127.0.0.1:8798`, nie w `8799`. Każdy klient Tora przychodzi z pętli zwrotnej, a limit prób logowania ufa nagłówkowi `x-forwarded-for` od klienta z pętli zwrotnej (tak działa reverse proxy) — bez własnego portu klient onionowy sam wybierałby sobie kubełek i miałby nieograniczoną liczbę prób hasła. Na porcie 8798 nagłówek nie jest w ogóle czytany, a wszyscy klienci Tora dzielą jeden limit 10 prób/min. To świadomy kompromis: ukrycie adresu klienta jest sensem oniona, więc jeden wspólny limit jest jedynym uczciwym.
+- **Potwierdzenie adresu robi serwer sam.** Tak jak przy relayu ruch przychodzi z `127.0.0.1`, więc nie ma publicznego rozmówcy, od którego można się czegoś dowiedzieć. Harness łączy się więc po SOCKS5 przez własnego tora na własny `.onion:8799` i sprawdza, czy wraca jego własny certyfikat (`probeOnion`, 30 s). Nazwa `.onion` idzie do tora jako **nazwa** (SOCKS5 ATYP 0x03), więc nigdy nie trafia do żadnego resolwera DNS.
+
+W drabinie onion stoi **pod** potwierdzonym adresem publicznym (bezpośredni skok jest szybszy niż sześć) i **nad** wszystkim, czego nikt nie potwierdził — w szczególności nad adresem LAN-owym. Pierwsze połączenie trwa ~10–20 s, kolejne są zwykłe.
+
+Sprawdzenie z zewnątrz (dowolna maszyna z torem):
+
+```bash
+curl -k --socks5-hostname 127.0.0.1:9050 https://<adres>.onion:8799/api/public/server
+```
+
+`--socks5-hostname`, nie `--socks5`: to drugie próbowałoby rozwiązać nazwę lokalnie.
+
+Tor to osobny projekt (The Tor Project, licencja BSD 3-Clause) — MultiBot go tylko uruchamia, nie zawiera i nie modyfikuje. Nazwa i znak towarowy należą do The Tor Project, Inc.; ta funkcja nie jest przez nich firmowana ani sprawdzana.
 
 ### Reverse proxy przed harnessem
 
@@ -154,6 +188,7 @@ Instalatory:
 - `scripts/install-server-windows.mjs` — przygotowanie serwera na Windows;
 - `scripts/print-setup-values.sh` — wspólny wypis trzech wartości z `setup.json`;
 - `scripts/relay-connect.sh` — tunel `ssh -R` do własnego relaya; zakłada klucz, `relay.env` i usługę `mb-relay`;
+- tor (adres `.onion`) nie ma swojego skryptu: instaluje się pakietem (`pkg install tor` / `apt install tor`), a proces prowadzi sam harness (`server/tor.ts`);
 - `scripts/relay-setup.sh` — jednorazowe przygotowanie relaya (użytkownik bez powłoki, `GatewayPorts`, firewall);
 - `scripts/relay-check.sh` — czy tunel naprawdę niesie ruch (porównanie `serverId` przez relay i po pętli zwrotnej);
 - `scripts/selfhost-check.mjs` — sprawdzenie instrukcji i konfiguracji self-hostingu.
