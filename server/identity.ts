@@ -321,6 +321,19 @@ export class IdentityStore {
     this.db.prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value);
   }
 
+  /** The `meta` row is the server's own scratchpad; address discovery
+   * (`server/net-address.ts`) keeps its findings there, so a restart does not
+   * forget which address already proved reachable. */
+  getMeta(key: string): string | null {
+    this.init();
+    return this.meta(key);
+  }
+
+  putMeta(key: string, value: string): void {
+    this.init();
+    this.setMeta(key, value);
+  }
+
   publicInfo(): ServerPublicInfo {
     this.init();
     return {

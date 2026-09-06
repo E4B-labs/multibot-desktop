@@ -6,7 +6,6 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
-import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -92,6 +91,7 @@ import { webMcpIntegration } from "./drivers/web-proxy.ts";
 import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts";
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
+import { currentReport, initNetAddress, noteReachedHost, pinAddress, refreshAddress } from "./net-address.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
@@ -104,32 +104,17 @@ const PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "");
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE = !LOOPBACK_HOST;
 
-// ponytail: a plain interface scan — no UPnP, no probe, no verification. PR 3
-// replaces both helpers with server/net-address.ts.
-function localAddresses(port: number): string[] {
-  const found: string[] = [];
-  for (const list of Object.values(networkInterfaces())) {
-    for (const entry of list ?? []) {
-      const v6 = entry.family === "IPv6" || (entry.family as unknown as number) === 6;
-      // Link-local (fe80::/10) needs a scope id to dial and unique-local
-      // (fc00::/7) is not routable off the site — neither is an address anyone
-      // can type into another device.
-      if (entry.internal || (v6 && /^(?:fe80|f[cd])/i.test(entry.address))) continue;
-      found.push(v6 ? `${SCHEME}://[${entry.address}]:${port}` : `${SCHEME}://${entry.address}:${port}`);
-    }
-  }
-  return found;
-}
-
 /** What to print as "the address". A server bound to one interface is only
  * reachable there, so advertising some other NIC would be a lie; only a
- * wildcard bind gets to pick. */
+ * wildcard bind gets to pick. `OMB_PUBLIC_URL` still wins — someone who put a
+ * real domain in front knows better than any discovery. */
 function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
   const loopback = `${SCHEME}://127.0.0.1:${port}`;
-  const found = localAddresses(port);
-  if (HOST === "0.0.0.0" || HOST === "::") return found.find((address) => !address.includes("[")) ?? found[0] ?? loopback;
-  return found.find((address) => address === `${SCHEME}://${HOST}:${port}` || address === `${SCHEME}://[${HOST}]:${port}`) ?? loopback;
+  const report = currentReport(port);
+  if (HOST === "0.0.0.0" || HOST === "::") return report.current ?? loopback;
+  const bound = new Set([`${SCHEME}://${HOST}:${port}`, `${SCHEME}://[${HOST}]:${port}`]);
+  return report.candidates.find((candidate) => bound.has(candidate.address))?.address ?? loopback;
 }
 // multibot (G2): a remote server owns one origin. Dev keeps Vite separate;
 // remote mode serves the built app automatically unless explicitly overridden.
@@ -183,6 +168,20 @@ startOpenCodeModelRefresh();
 const cfg = loadConfig();
 const identity = new IdentityStore();
 identity.init();
+// Address discovery keeps its findings in the identity `meta` row and tells
+// everyone when the answer changes: a live client refreshes its badge, the
+// owner's phone gets one push so a new address never goes unnoticed.
+initNetAddress({
+  getMeta: (key) => identity.getMeta(key),
+  setMeta: (key, value) => identity.putMeta(key, value),
+  onChange: (report) => {
+    broadcast({ kind: "server.address", address: report.current, verified: report.verified });
+    const owner = identity.members().find((member) => member.role === "owner");
+    if (owner && report.current) {
+      void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId]).catch(() => {});
+    }
+  },
+});
 // 0.4.0 dropped the installation-wide bearer token. The file keeps it (nothing
 // rewrites config.json), but every client holding one is about to get a single
 // 401 — say so loudly once, or the first restart looks like a crash.
@@ -3072,7 +3071,7 @@ async function handleIdentityRoute(
     return identityHandled(res, 200, {
       ...values,
       address: primaryAddress(PORT),
-      addresses: localAddresses(PORT),
+      addresses: currentReport(PORT).candidates.map((candidate) => candidate.address),
       // Trzecia wartość obok adresu i hasła: pod nią urządzenie dołączające
       // sprawdza, czy rozmawia z TYM serwerem, a nie z kimś po drodze.
       tlsFingerprint: TLS_FINGERPRINT,
@@ -3172,6 +3171,7 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { ok: true });
       }
       if (method === "GET" && path === "/api/auth/me") {
+        noteReachedHost(req, PORT);
         return identityHandled(res, 200, { user: identityUser(actor), server: identity.publicInfo() });
       }
       if (method === "POST" && (path === "/api/auth/logout" || path === "/api/auth/logout-all")) {
@@ -3193,7 +3193,8 @@ async function handleIdentityRoute(
         return identityHandled(res, 200, { user: identityUser(identity.updateProfile(actor, body.displayName, body.email)) });
       }
       if (method === "GET" && path === "/api/server") {
-        return identityHandled(res, 200, { ...identity.publicInfo(), publicAddress: identity.publicAddress(), tlsFingerprint: TLS_FINGERPRINT });
+        const report = currentReport(PORT);
+        return identityHandled(res, 200, { ...identity.publicInfo(), publicAddress: report.current ?? identity.publicAddress(), addressVerified: report.verified, tlsFingerprint: TLS_FINGERPRINT });
       }
       if (method === "PATCH" && path === "/api/server") {
         const body = await readBody(req);
@@ -3202,6 +3203,14 @@ async function handleIdentityRoute(
       if (method === "POST" && path === "/api/server/password") {
         res.setHeader("cache-control", "no-store");
         return identityHandled(res, 200, { serverPassword: await identity.rotateServerPassword(actor) });
+      }
+      if (path === "/api/server/address" && (method === "GET" || method === "POST")) {
+        if (actor.role !== "owner") return identityHandled(res, 403, { error: "owner access required" });
+        if (method === "GET") return identityHandled(res, 200, currentReport(PORT));
+        const body = await readBody(req);
+        if (body?.refresh === true) return identityHandled(res, 200, await refreshAddress(PORT));
+        const pinned = pinAddress(PORT, body?.address);
+        return pinned ? identityHandled(res, 200, pinned) : identityHandled(res, 422, { error: "invalid address" });
       }
       if (method === "GET" && path === "/api/server/members") return identityHandled(res, 200, { members: identity.members() });
       // ── owner-only admin surface ──────────────────────────────────────
@@ -4712,11 +4721,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
+      // A request that got here from a public address just proved the address
+      // works — cheaper and more honest than any self-probe.
+      noteReachedHost(req, PORT);
+      const nonce = url.searchParams.get("probe");
       return json(res, 200, {
         app: "multibot",
         pid: process.pid,
         static: Boolean(STATIC_DIR),
         service: process.env.OMB_SERVER_SERVICE === "1",
+        ...(nonce === null ? {} : { probe: nonce }),
       });
     }
 
@@ -5396,6 +5410,10 @@ server.listen(PORT, HOST, () => {
   // wcale — tam bezczynny worker MA prawo zejść i wskrzeszanie go co minutę
   // wywróciłoby WORKER_IDLE_MS na każdej domyślnej instalacji.
   if (warmWorkerLimit() <= 0) setInterval(() => void warmBots().catch(() => {}), 60_000).unref?.();
+  // Never before `listen`: SSDP waits on a router that may never answer, and
+  // the first scan also needs the port open to probe itself.
+  void refreshAddress(PORT).catch(() => {});
+  setInterval(() => void refreshAddress(PORT).catch(() => {}), 10 * 60_000).unref?.();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

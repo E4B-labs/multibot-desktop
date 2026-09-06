@@ -892,9 +892,38 @@ describe("harness HTTP API", () => {
       expect(info.name).toBe(serverName);
       expect(JSON.stringify(info)).not.toContain(serverPassword);
     }
+    // The address discovery found, flagged unverified until something outside
+    // reaches us on it.
     const own = (await api("GET", "/api/server")).body;
     expect(own.name).toBe(serverName);
-    expect(own.publicAddress).toBeNull();
+    expect(own.addressVerified).toBe(false);
+    if (own.publicAddress !== null) expect(String(own.publicAddress)).toMatch(/^https?:\/\/.+:\d+$/);
+  });
+
+  // Where the server tells people to connect is the owner's business: members
+  // read the chosen address off /api/server, nothing more.
+  it("serves the address report to the owner and refuses a member", async () => {
+    const report = (await api("GET", "/api/server/address")).body;
+    expect(["mapped", "unsupported", "cgnat", "error"]).toContain(report.portMapping.state);
+    for (const candidate of report.candidates) {
+      expect(candidate.address).toMatch(/^https?:\/\/.+:\d+$/);
+      expect(["ipv6", "ipv4-upnp", "ipv4-lan"]).toContain(candidate.kind);
+    }
+
+    expect((await api("POST", "/api/server/address", { address: "not a url" })).status).toBe(422);
+    const pin = `http://198.51.100.7:${PORT}`;
+    expect((await api("POST", "/api/server/address", { address: pin })).body).toMatchObject({ current: pin, verified: false });
+    expect((await api("GET", "/api/server")).body.publicAddress).toBe(pin);
+
+    const joined = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "index-address-member", password: "index-address-member-pass", displayName: "Address Member", serverPassword }),
+    });
+    expect(joined.status).toBe(201);
+    const memberToken = (await joined.json() as { accessToken: string }).accessToken;
+    const asMember = await fetch(`${BASE}/api/server/address`, { headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2" } });
+    expect(asMember.status).toBe(403);
   });
 
   it("hands the setup values to loopback only, and only until a profile exists", async () => {
