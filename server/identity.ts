@@ -7,6 +7,9 @@ import { createHash, generateKeyPairSync, randomBytes, randomInt, scrypt, timing
 import { dirname, join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
+// One-way: `server/tor.ts` does not import this file. The port is what tells
+// "a person at this keyboard" apart from "anyone on the internet, via Tor".
+import { TOR_BUCKET, TOR_INGRESS_PORT } from "./tor.ts";
 
 const scryptAsync = (password: string, salt: Buffer, keylen: number, options: ScryptOptions): Promise<Buffer> =>
   new Promise((resolve, reject) => scrypt(password, salt, keylen, options, (error, derivedKey) => error ? reject(error) : resolve(derivedKey)));
@@ -915,9 +918,37 @@ export function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
-export function isLoopbackRequest(req: { socket: { remoteAddress?: string | undefined }; headers: Record<string, string | string[] | undefined> }): boolean {
+export function isLoopbackRequest(
+  req: { socket: { remoteAddress?: string | undefined; localPort?: number | undefined }; headers: Record<string, string | string[] | undefined> },
+): boolean {
+  // A request off the Tor ingress arrives from 127.0.0.1 like every other
+  // onion client, and is the exact opposite of local: the sender could be
+  // anywhere on earth. Every route behind this gate means "physically at this
+  // device" by it — `/api/internal/*`, the setup values, the setup path — so
+  // the ingress port is checked FIRST and no header can talk it out of this.
+  if (req.socket.localPort === TOR_INGRESS_PORT) return false;
   if (FORWARDING_HEADERS.some((header) => req.headers[header])) return false;
   return isLoopbackAddress(req.socket.remoteAddress);
+}
+
+/**
+ * Which rate-limit bucket a request counts against.
+ *
+ * Over the Tor ingress the answer is the literal `"tor"` and `x-forwarded-for`
+ * is not even read: every onion client arrives from 127.0.0.1, so honouring the
+ * header there would let a client name its own bucket and buy an unlimited
+ * supply of scrypt guesses at the server password. Everywhere else the old rule
+ * stands — the first forwarded hop, but ONLY when the socket peer really is
+ * loopback, i.e. there is a reverse proxy in front.
+ */
+export function rateLimitAddress(
+  socket: { localPort?: number | undefined; remoteAddress?: string | undefined },
+  forwardedFor: string | string[] | undefined,
+): string {
+  if (socket.localPort === TOR_INGRESS_PORT) return TOR_BUCKET;
+  const peer = socket.remoteAddress ?? "unknown";
+  const forwarded = String(forwardedFor ?? "").split(",")[0].trim();
+  return (isLoopbackAddress(socket.remoteAddress) && forwarded) || peer;
 }
 
 /** A self-hosted install often runs on plain-http loopback (no TLS terminator

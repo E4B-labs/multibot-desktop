@@ -30,8 +30,9 @@ import { socksConnect } from "./socks5.ts";
  * it is the only rung that works behind a router with no UPnP and no IPv6, and
  * because the owner had to set it up by hand — that is a stronger statement of
  * "reach me here" than anything discovery can guess. TLS stays end to end: the
- * relay forwards TCP, so the pinned fingerprint is unchanged. */
-/** `onion`: a v3 hidden service published by the tor this harness supervises
+ * relay forwards TCP, so the pinned fingerprint is unchanged.
+ *
+ * `onion`: a v3 hidden service published by the tor this harness supervises
  * (`server/tor.ts`). It is the one rung that needs nothing from the network in
  * front of the server — no port, no IPv6, no box of the owner's own — which is
  * why it is always on. It sits BELOW a verified public address because a direct
@@ -581,7 +582,13 @@ export function noteReachedHost(
   const address = `${scheme}://${host.hostname}:${port}`;
   const previous = storedReport();
   const candidates = carryVerified(trusted(port), previous);
-  if (!candidates.some((candidate) => candidate.address === address)) return null;
+  // An onion is on that list too, and it is the one candidate an inbound
+  // request can NEVER be evidence for: onion traffic arrives from 127.0.0.1, so
+  // a `Host: <our-onion>` from a public peer is just a string it typed. Letting
+  // it through would hand a stranger a way to mark the onion verified and
+  // demote a public address we had really confirmed. `probeOnion` is the only
+  // thing that gets to say the onion works.
+  if (!candidates.some((candidate) => candidate.address === address && candidate.kind !== "onion")) return null;
 
   notedAt = Date.now();
   const marked = candidates.map((candidate) => (candidate.address === address ? { ...candidate, verified: true } : candidate));

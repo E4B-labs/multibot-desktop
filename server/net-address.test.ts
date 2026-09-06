@@ -423,3 +423,12 @@ describe("chooseAddress with an onion", () => {
     expect(chooseAddress([], null)).toBeNull();
   });
 });
+
+// The onion is a candidate like any other, so `Host: <our-onion>` from a peer
+// that CAN reach us directly would otherwise mark it verified and demote a
+// public address we had really confirmed.
+describe("noteReachedHost and the onion", () => {
+  it("refuses to take an inbound request as proof of the onion", () => {
+    expect(noteReachedHost(fakeRequest("8.8.8.8", `${ONION}:8799`), 8799)).toBeNull();
+  });
+});

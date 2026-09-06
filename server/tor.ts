@@ -14,13 +14,10 @@
 // error either: one line in the log and the address ladder simply has one rung
 // fewer.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer, type Server as NetServer } from "node:net";
-import type { Server as HttpServer } from "node:http";
-import type { Server as HttpsServer } from "node:https";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { delimiter, join } from "node:path";
 
-import { isLoopbackAddress } from "./identity.ts";
 import { isOnionHost } from "./net-address.ts";
 
 /** The onion's own ingress. It exists so Tor clients do NOT share a socket with
@@ -89,26 +86,6 @@ export function parseBootstrap(line: string): number | null {
   return Number.isInteger(percent) && percent >= 0 && percent <= 100 ? percent : null;
 }
 
-/**
- * Which rate-limit bucket a request counts against.
- *
- * Over the Tor ingress the answer is the literal `"tor"` and `x-forwarded-for`
- * is not even read: every onion client arrives from 127.0.0.1, so honouring the
- * header there would let a client name its own bucket. Everywhere else the old
- * rule stands — the first forwarded hop, but ONLY when the socket peer really
- * is loopback, i.e. there is a reverse proxy in front.
- */
-export function rateLimitAddress(
-  socket: { localPort?: number | undefined; remoteAddress?: string | undefined },
-  forwardedFor: string | string[] | undefined,
-  ingressPort = TOR_INGRESS_PORT,
-): string {
-  if (socket.localPort === ingressPort) return TOR_BUCKET;
-  const peer = socket.remoteAddress ?? "unknown";
-  const forwarded = String(forwardedFor ?? "").split(",")[0].trim();
-  return (isLoopbackAddress(socket.remoteAddress) && forwarded) || peer;
-}
-
 /** `OMB_TOR=0|off|false|no` — the same spelling `OMB_TLS` accepts. */
 export function torEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !/^(0|off|false|no)$/i.test(env.OMB_TOR?.trim() ?? "");
@@ -165,8 +142,13 @@ export function torBinary(): string | null {
  * reads 8798, which is how everything downstream knows the request came in over
  * Tor.
  */
+/** Structural on purpose: `http.Server`, `https.Server` and `tls.Server` all
+ * take an externally emitted connection, and none of them is assignable to the
+ * others in the type system. */
+export type ConnectionSink = { emit(event: "connection", socket: Socket): boolean };
+
 export function mountTorIngress(
-  server: HttpServer | HttpsServer,
+  server: ConnectionSink,
   port = TOR_INGRESS_PORT,
   host = "127.0.0.1",
 ): NetServer {
@@ -188,7 +170,7 @@ export type Tor = {
 
 export type TorOptions = {
   dataDir: string;
-  server: HttpServer | HttpsServer;
+  server: ConnectionSink;
   onionPort?: number;
   ingressPort?: number;
   /** Fired once, when the hostname first appears — the cue to rescan the
@@ -213,16 +195,32 @@ export function startTor(options: TorOptions): Tor | null {
   const ingressPort = options.ingressPort ?? TOR_INGRESS_PORT;
   try {
     // 0700 on both, or tor refuses to touch the hidden-service directory at
-    // all — the private key that IS the onion address lives in it.
+    // all — the private key that IS the onion address lives in it. `mode:` on
+    // mkdir/writeFile applies only when the thing is CREATED, and is cut by the
+    // umask even then, so an explicit chmod follows: a data directory carried
+    // over from an older version must end up private too.
     mkdirSync(torDir, { recursive: true, mode: 0o700 });
     mkdirSync(hsDir, { recursive: true, mode: 0o700 });
     writeFileSync(torrcFile, torrcText(torDir, ingressPort, options.onionPort ?? ONION_PORT), { mode: 0o600 });
+    if (process.platform !== "win32") {
+      chmodSync(torDir, 0o700);
+      chmodSync(hsDir, 0o700);
+      chmodSync(torrcFile, 0o600);
+    }
   } catch (error) {
     console.warn("[multibot] could not prepare the tor directory — no onion address:", error instanceof Error ? error.message : error);
     return null;
   }
 
   const ingress = mountTorIngress(options.server, ingressPort);
+  // A busy ingress port means another process owns 8798 — and an onion whose
+  // HiddenServicePort lands on somebody else's socket is worse than no onion:
+  // it publishes an address that answers as a server we are not. Refuse.
+  ingress.on("error", (error) => {
+    if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") return;
+    console.error(`[multibot] tor ingress port ${ingressPort} is already taken — no onion address (another harness on this machine?)`);
+    stop();
+  });
   const hostnameFile = join(hsDir, "hostname");
   let onion: string | null = null;
   let socks: number | null = null;
@@ -232,6 +230,10 @@ export function startTor(options: TorOptions): Tor | null {
   let restartTimer: NodeJS.Timeout | null = null;
 
   const readOnion = (): string | null => {
+    // `hs/hostname` outlives the process that made it, so after a stop it would
+    // still read back an address nothing serves. Once we are done, the honest
+    // answer is "no onion".
+    if (stopped) return null;
     if (onion) return onion;
     try {
       const value = readFileSync(hostnameFile, "utf8").trim().toLowerCase();
@@ -324,5 +326,5 @@ export function startTor(options: TorOptions): Tor | null {
   };
   process.once("exit", stop);
 
-  return { onionHost: readOnion, socksPort: () => socks, stop };
+  return { onionHost: readOnion, socksPort: () => (stopped ? null : socks), stop };
 }

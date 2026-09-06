@@ -25,7 +25,7 @@ import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
   IdentityError, IdentityStore, identityCookie, isIdentityPublicRoute,
-  isLoopbackRequest, isSecureRequest,
+  isLoopbackRequest, isSecureRequest, rateLimitAddress,
   type IdentityActor, type CreatedSession,
 } from "./identity.ts";
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
@@ -91,7 +91,7 @@ import { detectOneShotModelRequest, stripModelRequest } from "./model-request.ts
 import { combineQueuedMessages, QueuedUserMessages } from "./queued-turns.ts";
 import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
-import { rateLimitAddress, startTor, torBinary, torEnabled, type Tor } from "./tor.ts";
+import { startTor, torBinary, torEnabled, type Tor } from "./tor.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";

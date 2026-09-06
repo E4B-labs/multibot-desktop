@@ -3,15 +3,20 @@
 // the rest of the harness concludes from a connection that arrived over the
 // onion (the ingress port and the rate-limit bucket).
 import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { connect as tlsConnect, createServer as createTlsServer } from "node:tls";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { rateLimitAddress } from "./identity.ts";
+import { ensureTlsMaterial } from "./tls-cert.ts";
 import {
   findTorBinary,
   mountTorIngress,
   parseBootstrap,
   parseSocksPort,
-  rateLimitAddress,
   torEnabled,
   torPath,
   torrcText,
@@ -144,6 +149,31 @@ describe("mountTorIngress", () => {
     });
     ingress.close();
     expect(body).toContain("200");
+    expect(seen).toBe(port);
+  });
+
+  // The real harness is an `https.Server`, so `req.socket` is a TLSSocket that
+  // merely wraps the accepted one. Every gate in this PR — the rate-limit
+  // bucket, `isLoopbackRequest` — reads `localPort` off THAT object, so if it
+  // did not carry the ingress port the whole design would fail open.
+  it("carries the ingress port through TLS, where every gate reads it", async () => {
+    const material = ensureTlsMaterial(mkdtempSync(join(tmpdir(), "mb-tor-tls-")));
+    let seen: number | undefined;
+    const harness = createTlsServer({ key: material.keyPem, cert: material.certPem }, (socket) => {
+      seen = socket.localPort;
+      socket.end();
+    });
+    const ingress = mountTorIngress(harness, 0);
+    await new Promise((resolve) => ingress.once("listening", resolve));
+    const port = (ingress.address() as { port: number }).port;
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = tlsConnect({ port, host: "127.0.0.1", rejectUnauthorized: false }, () => socket.end());
+      socket.on("close", () => resolve());
+      socket.on("error", reject);
+    });
+    ingress.close();
+    harness.close();
     expect(seen).toBe(port);
   });
 });
