@@ -5,8 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
-import { addRemoteHost, getActiveId, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost } from "./hosts.mjs";
-import { shouldStartLocalHarness } from "./host-resolve.mjs";
+import { addRemoteHost, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
+import { joinServer, probeServer } from "./host-probe.mjs";
+import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
+import { normalizeRemoteUrl, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { activateForBot, normalizeNotification } from "./notifications.mjs";
@@ -307,8 +309,28 @@ const ERROR_PAGE =
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
 // window.location.hash client-side, stores it, and erases it before first
 // paint.
-function remoteFragment(token) {
-  return token ? `#access_token=${encodeURIComponent(token)}` : "";
+function remoteFragment(token, joinGrant) {
+  const parts = [];
+  if (token) parts.push(`access_token=${encodeURIComponent(token)}`);
+  // Krótkotrwały bilet z `POST /api/auth/join`, wymieniany przez webui na
+  // rejestrację albo logowanie profilu. Nigdy nie trafia do logów ani na dysk.
+  if (joinGrant) parts.push(`join=${encodeURIComponent(joinGrant)}`);
+  return parts.length ? `#${parts.join("&")}` : "";
+}
+
+/** Odcisk certyfikatu tego hosta: skąd go brać i gdzie zapisać przy pierwszym
+ * kontakcie. Jeden magazyn dla proxy i dla nawigacji okna, żeby TOFU znaczyło
+ * wszędzie to samo. */
+function hostPin(url) {
+  return { get: () => getHostFingerprint(url), set: (fingerprint) => setHostFingerprint(url, fingerprint) };
+}
+
+/** Przypięcie tylko do SPRAWDZENIA, bez zapamiętywania. Dla sondy i logowania:
+ * nieudana próba na podstawionym serwerze nie ma prawa przypiąć napastnika —
+ * odcisk zapisujemy dopiero po tym, jak serwer dowiódł znajomości hasła
+ * (`addRemoteHost` przy udanym join). */
+function verifyOnlyPin(url) {
+  return { get: () => getHostFingerprint(url), set: () => {} };
 }
 
 // multibot: katalog z ZAPAKOWANYM interfejsem — tym, który przychodzi razem z
@@ -336,7 +358,7 @@ async function remoteUiOriginFor(remoteUrl) {
   if (remoteUi && remoteUi.remoteUrl === remoteUrl) return remoteUi.url;
   await closeRemoteUi();
   try {
-    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl });
+    remoteUi = await startRemoteUiServer({ staticDir: BUNDLED_UI_DIR, remoteUrl, pin: hostPin(remoteUrl) });
   } catch (err) {
     console.warn("[multibot] lokalny origin nie wstał:", err?.message ?? err);
     remoteUi = null;
@@ -359,7 +381,7 @@ function startupTargetMode() {
 /** Decides what `win` should load: a saved remote host, or the existing
  * local flow (packaged server / dev vite), completely unchanged when no
  * remote host is active. */
-async function loadActiveTarget(win) {
+async function loadActiveTarget(win, { joinGrant } = {}) {
   const target = resolveLoadTarget();
   if (target.mode === "remote") {
     // multibot: interfejs bierzemy z PACZKI, a z hosta wyłącznie dane. Wcześniej
@@ -368,7 +390,12 @@ async function loadActiveTarget(win) {
     // instalator wiózł interfejs, którego apka w tym trybie nigdy nie otwierała.
     // Jak to działa i dlaczego bez CORS: electron/remote-ui.mjs.
     const origin = await remoteUiOriginFor(target.url);
-    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token)}`);
+    win.loadURL(`${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`).catch((err) => {
+      // Nawigacja potrafi odpaść po fakcie (odrzucony certyfikat, host zniknął)
+      // — to nie jest wyjątek dla wołającego, tylko wpis w logu. Logujemy sam
+      // kod i origin: w adresie siedzi fragment z grantem albo tokenem.
+      console.warn("[multibot] nie udało się wczytać hosta:", err?.code ?? "load failed", target.url);
+    });
     return;
   }
   // Wracamy na lokalny harness — port zdalnego originu nie ma po co wisieć.
@@ -587,7 +614,10 @@ ipcMain.handle("speech:stop", () => stopSpeech());
 // multibot (C2): host switching for the picker window (electron/hosts.mjs
 // owns persistence + safeStorage encryption).
 ipcMain.handle("hosts:list", () => ({ activeId: getActiveId(), hosts: listRemoteHosts() }));
-ipcMain.handle("hosts:add-remote", (_event, host) => addRemoteHost(host ?? {}));
+ipcMain.handle("hosts:add-remote", (event, host) => {
+  if (!isLocalSender(event)) throw new Error("forbidden");
+  return addRemoteHost(host ?? {});
+});
 ipcMain.handle("hosts:remove", (_event, id) => removeHost(id));
 // multibot: „← Wstecz" z ekranu logowania. Otwiera wyłącznie natywny wybór
 // hosta — NIE przestawia activeId. Wcześniej ten przycisk wołał
@@ -599,10 +629,106 @@ ipcMain.handle("hosts:use-local", async () => {
   setActiveHost("local");
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
-ipcMain.handle("hosts:use-host", async (_event, id) => {
+ipcMain.handle("hosts:use-host", async (event, id) => {
+  if (!isLocalSender(event)) throw new Error("forbidden");
   setActiveHost(id);
   if (mainWindow) await loadActiveTarget(mainWindow);
 });
+// multibot (0.4.0): adres hosta rozwiązuje POWŁOKA, natywnie. Renderer nie ma
+// jak tego zrobić — webui żyje dopiero w originie serwera, a serwer nie wysyła
+// żadnych nagłówków CORS, więc poświadczenia trzeba wymienić, ZANIM okno tam
+// pojedzie. Odpowiedzi są wąskie z rozmysłem: kod błędu, nic więcej.
+//
+// Tylko z NASZEGO ekranu (`isLocalSender`): w trybie zdalnym w oknie stoi
+// strona z cudzego serwera, a bez tej bramki mogłaby po cichu przestawić
+// powłokę na serwer napastnika albo skanować tym LAN użytkownika. Ekran
+// logowania podany prosto z hosta (droga awaryjna, bez lokalnego originu) nic
+// przez to nie traci — jest w originie serwera, więc `POST /api/auth/join`
+// robi zwykłym `fetch`, same-origin.
+ipcMain.handle("hosts:probe", async (event, url) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
+  let normalized;
+  try {
+    normalized = normalizeRemoteUrl(url, { assumeHttps: true });
+  } catch {
+    return { ok: false, error: "invalid_address" };
+  }
+  return probeServer(normalized, { pin: verifyOnlyPin(normalized) });
+});
+
+// Hasło serwera i grant nie idą NIGDZIE poza to wywołanie: nie do logów, nie na
+// dysk. W rekordzie hosta lądują wyłącznie adres i odcisk certyfikatu, który
+// właśnie zobaczyliśmy w uścisku dłoni (TOFU — dalsze połączenia go pilnują).
+ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
+  let normalized;
+  try {
+    normalized = normalizeRemoteUrl(url, { assumeHttps: true });
+  } catch {
+    return { ok: false, error: "invalid_address" };
+  }
+  const result = await joinServer(normalized, { serverName, serverPassword, pin: verifyOnlyPin(normalized) });
+  if (!result.ok) return result;
+  const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });
+  setActiveHost(host.id);
+  // Host jest już zapisany i aktywny, więc nieudane przeładowanie okna nie
+  // czyni z udanego logowania błędu — najwyżej trzeba je powtórzyć albo
+  // uruchomić apkę ponownie. Rzucenie tutaj wywróciłoby onboarding po tym,
+  // jak grant został wydany i przepadłby razem z wyjątkiem.
+  if (mainWindow) {
+    try {
+      await loadActiveTarget(mainWindow, { joinGrant: result.joinGrant });
+    } catch (err) {
+      console.warn("[multibot] host zapisany, ale okno się nie przeładowało:", err?.message ?? err);
+    }
+  }
+  // Grant jedzie do webui fragmentem URL-a i tylko tam; drugie wydanie go
+  // rendererowi nic nie daje, a rozsiewa poświadczenie po logach konsoli.
+  return { ok: true, hasUsers: result.hasUsers };
+});
+
+// Serwer wystawił sobie nowy certyfikat (przeniesiony host, nowy adres w SAN) —
+// wtedy „server certificate changed" jest prawdą i nie wolno go obchodzić po
+// cichu. To jest ta jawna decyzja: zapomnij odcisk, następne połączenie zaufa
+// od nowa i przypnie to, co zobaczy.
+ipcMain.handle("hosts:forget-certificate", (event, url) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
+  try {
+    return { ok: true, forgotten: forgetHostFingerprint(normalizeRemoteUrl(url, { assumeHttps: true })) };
+  } catch {
+    return { ok: false, error: "invalid_address" };
+  }
+});
+
+/** Chromium podaje nazwę hosta bez nawiasów, `URL.hostname` dla IPv6 zwraca ją
+ * w nawiasach. Bez tego IPv6 nigdy by się nie zgodziło i przypięcie ciche by
+ * przepuszczało każdy certyfikat takiego hosta. */
+function bareHost(hostname) {
+  return String(hostname ?? "")
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase();
+}
+
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Origin aktywnego hosta zdalnego albo `null`. Wąsko z rozmysłem: zgoda na
+ * certyfikat z własnego podpisu należy się temu jednemu serwerowi, na który
+ * apka właśnie patrzy, a nie każdemu adresowi kiedykolwiek zapisanemu. */
+function activeRemoteOrigin() {
+  try {
+    const target = resolveLoadTarget();
+    return target.mode === "remote" ? originOf(target.url) : null;
+  } catch {
+    return null;
+  }
+}
+
 ipcMain.handle("desktop:export-diagnostics", async (event) => {
   if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   const picked = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
@@ -653,6 +779,42 @@ app.whenReady().then(async () => {
     return;
   }
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
+  // Przypięcie certyfikatu dla NAWIGACJI okna. `certificate-error` niżej jest
+  // tylko połową roboty: Chromium woła je dopiero wtedy, gdy samo odrzuciło
+  // certyfikat, więc podstawiony certyfikat z ZAUFANEGO urzędu przeszedłby
+  // bokiem, nigdy nie pytając o odcisk. `setCertificateVerifyProc` dostaje
+  // KAŻDY certyfikat, więc dopiero tutaj przypięcie jest przypięciem.
+  // Wszystko, co nie jest aktywnym hostem (aktualizacje, cokolwiek innego),
+  // odsyłamy do zwykłej weryfikacji Chromium przez `-3`.
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    const seen = bareHost(request.hostname);
+    // Lokalny harness na tej samej maszynie (po PR 3b też po HTTPS): jego
+    // certyfikat nie ma gdzie mieszkać w rekordach hostów, a pętla zwrotna i
+    // tak nie przechodzi przez sieć — zgoda bez przypięcia.
+    if (["127.0.0.1", "::1", "localhost"].includes(seen)) {
+      callback(0);
+      return;
+    }
+    const active = activeRemoteOrigin();
+    // ponytail: Electron podaje tu sam host, BEZ portu, więc przypięcie działa
+    // per nazwa hosta, nie per origin. Dla adresu serwera (IP albo nazwa w LAN)
+    // to bez różnicy; gdyby kiedyś było — trzeba by własnego `net` klienta.
+    if (!active || seen !== bareHost(new URL(active).hostname)) {
+      callback(-3);
+      return;
+    }
+    try {
+      const { learned } = verifyFingerprint({
+        stored: getHostFingerprint(active),
+        actual: fingerprintOfPem(request.certificate?.data ?? ""),
+      });
+      if (learned) setHostFingerprint(active, learned);
+      callback(0);
+    } catch (err) {
+      console.warn("[multibot] odrzucony certyfikat hosta:", err?.message ?? err);
+      callback(-2);
+    }
+  });
   // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
   // inside the app's own processes — the one capture path macOS reliably
   // attributes to the app (registers it in the Screen Recording pane and

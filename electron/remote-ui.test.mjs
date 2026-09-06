@@ -25,6 +25,12 @@ function startFakeHost() {
       res.end("<html>INTERFEJS Z HOSTA</html>");
       return;
     }
+    if (req.url === "/pulapka") {
+      // Host próbuje podać WŁASNY ekran pod adresem spoza paczki.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html>EKRAN Z HOSTA</html>");
+      return;
+    }
     if (req.url.startsWith("/api/ping")) {
       seen.auth = req.headers.authorization ?? null;
       res.writeHead(200, { "content-type": "application/json" });
@@ -208,6 +214,21 @@ test("upgrade websockify idzie na hosta z query i subprotokołem `binary`", asyn
   assert.equal(host.seen.wsUrl, path, "query z tokenem musi dojść do hosta nietknięte");
   assert.equal(host.seen.wsProtocol, "binary", "subprotokół noVNC nie może być podmieniony");
   upgraded.socket.destroy();
+});
+
+test("HTML od hosta spoza /api nie wchodzi do okna — origin proxy to nie miejsce na cudzy ekran", async () => {
+  const odpowiedz = await get(`${ui.url}/pulapka`);
+  assert.equal(odpowiedz.status, 502, "cudzy HTML ma dostać odmowę, nie trafić do renderera");
+  assert.match(odpowiedz.body, /HTML outside/);
+  assert.doesNotMatch(odpowiedz.body, /EKRAN Z HOSTA/);
+});
+
+test("host po https bez przypiętego certyfikatu nie dostaje proxy w ogóle", async () => {
+  await assert.rejects(
+    () => startRemoteUiServer({ staticDir, remoteUrl: "https://przyklad.invalid:8799" }),
+    /certificate pin/,
+    "bez przypięcia `rejectUnauthorized:false` znaczyłoby „ufam każdemu\"",
+  );
 });
 
 test("brak zapakowanego interfejsu degraduje do trybu sprzed zmiany, nie do białego ekranu", async () => {

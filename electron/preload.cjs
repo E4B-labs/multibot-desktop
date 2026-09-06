@@ -38,6 +38,20 @@ contextBridge.exposeInMainWorld("ogb", {
   addRemoteHost: (url) =>
     ipcRenderer.invoke("hosts:add-remote", { url }).then((host) => ipcRenderer.invoke("hosts:use-host", host.id)),
   useLocalHost: () => ipcRenderer.invoke("hosts:use-local"),
+
+  /** Czy pod tym adresem stoi serwer MultiBota i czy jest już skonfigurowany.
+   * Natywnie, bo przeglądarkowy fetch rozbiłby się o brak CORS. */
+  probeHost: (url) => ipcRenderer.invoke("hosts:probe", url),
+  /** Wymiana nazwy i hasła serwera na krótkotrwały grant. Sukces przełącza
+   * okno na tego hosta i wiezie grant we fragmencie URL, więc zwrócona
+   * obietnica zwykle ginie razem ze stroną — tak ma być.
+   * Hasło jedzie tędy w jawnej postaci: NIGDY nie logować argumentów tego
+   * wywołania ani nie przepisywać ich do żadnego stanu, który przeżyje ekran. */
+  joinHost: (url, serverName, serverPassword) => ipcRenderer.invoke("hosts:join", url, serverName, serverPassword),
+  /** Zapomina przypięty certyfikat hosta — jawna zgoda użytkownika po tym, jak
+   * serwer wystawił sobie nowy. Bez tego „server certificate changed" nie ma
+   * wyjścia, a z automatu byłoby to przypięcie tylko z nazwy. */
+  forgetHostCertificate: (url) => ipcRenderer.invoke("hosts:forget-certificate", url),
   /** Otwiera natywny wybór hosta bez zmiany aktywnego hosta — „← Wstecz" na
    * ekranie logowania. Zmiana następuje dopiero po jawnym wyborze w tym oknie. */
   showHostPicker: () => ipcRenderer.invoke("hosts:open-picker"),
