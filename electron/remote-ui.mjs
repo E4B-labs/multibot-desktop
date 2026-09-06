@@ -22,7 +22,7 @@
 // telefonu 401 dokładnie tak samo jak z sieci.
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { extname, join, resolve, sep } from "node:path";
 
 import { CERT_CHANGED, pinRequest } from "./tls-pin.mjs";
@@ -118,7 +118,7 @@ function requestFor(target) {
  * zwykłe GET, odpowiada 404, kanał zdarzeń nie wstaje i wraca objaw „szarej
  * wiadomości": wysłany dymek nigdy nie gaśnie, choć bot pracuje.
  */
-function upstreamOptions(req, remote, { keepHandshake = false } = {}) {
+function upstreamOptions(req, remote, { keepHandshake = false, agent } = {}) {
   const target = new URL(req.url ?? "/", remote);
   const headers = { ...req.headers, host: target.host };
   if (!keepHandshake) for (const name of HOP_BY_HOP) delete headers[name];
@@ -133,20 +133,31 @@ function upstreamOptions(req, remote, { keepHandshake = false } = {}) {
       // Hosty 0.4.0 mają certyfikat z własnego podpisu, więc łańcucha nie ma
       // czym sprawdzić; zaufanie stoi na odcisku przypiętym w `pin`
       // (electron/tls-pin.mjs) — bez niego byłoby to gołe „ufam każdemu".
-      // ponytail: odcisk sprawdzamy przy uścisku dłoni, więc gniazdo z puli
-      // (keep-alive) przechodzi bez ponownego sprawdzenia — podmiana
-      // certyfikatu na serwerze wychodzi przy następnym połączeniu, nie w tej
-      // samej milisekundzie. Gdyby to kiedyś było za mało: `agent: false`.
       rejectUnauthorized: false,
+      // Pula tego jednego hosta, BEZ wznawiania sesji (`maxCachedSessions: 0`):
+      // każde nowe gniazdo robi pełny uścisk dłoni, więc przypięcie odpala się
+      // za każdym razem, a nie tylko przy pierwszym połączeniu w sesji. Gniazdo
+      // już sprawdzone wolno używać dalej — to wciąż ten sam, zweryfikowany
+      // peer. Pula ginie razem z proxy, więc następny host zaczyna od zera.
+      agent: target.protocol === "https:" ? agent : undefined,
     },
   };
 }
 
-function proxyHttp(req, res, remote, pin) {
-  const { target, options } = upstreamOptions(req, remote);
+function proxyHttp(req, res, remote, pin, agent) {
+  const { target, options } = upstreamOptions(req, remote, { agent });
   const upstream = requestFor(target)(options, (up) => {
     const headers = { ...up.headers };
     for (const name of HOP_BY_HOP) delete headers[name];
+    // Jedyny HTML, który to okno ma prawo wyrenderować, to `index.html` z
+    // PACZKI. Strona przysłana przez hosta pod byle ścieżką dostałaby origin
+    // 127.0.0.1 — czyli most `window.ogb` i wszystko, co za nim stoi.
+    if (!target.pathname.startsWith("/api") && /^text\/html/i.test(String(headers["content-type"] ?? ""))) {
+      up.resume();
+      res.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "host tried to serve HTML outside /api" }));
+      return;
+    }
     res.writeHead(up.statusCode ?? 502, headers);
     up.pipe(res);
   });
@@ -184,8 +195,8 @@ function bail(socket, status, reason) {
  * 101 przepisujemy z powrotem i od tej chwili spinamy gniazda bajt w bajt. Subprotokół zostaje NIETKNIĘTY, bo to
  * w nim jedzie token (`["multibot-v2", <token>]`).
  */
-function pipeWs(req, socket, head, remote, live, pin) {
-  const { target, options } = upstreamOptions(req, remote, { keepHandshake: true });
+function pipeWs(req, socket, head, remote, live, pin, agent) {
+  const { target, options } = upstreamOptions(req, remote, { keepHandshake: true, agent });
   const upstream = requestFor(target)({ ...options, method: "GET" });
   if (pin) pinRequest(upstream, pin);
   upstream.on("upgrade", (upRes, upSocket, upHead) => {
@@ -253,8 +264,16 @@ async function listenOnStablePort(server) {
  * poprzedniego trybu, nigdy do białego ekranu.
  */
 export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
+  // Fail closed: `rejectUnauthorized:false` bez przypięcia to zaufanie
+  // czemukolwiek, co odpowie. Wolimy nie wstać (main.mjs degraduje wtedy do
+  // ładowania prosto z hosta, gdzie certyfikat pilnuje `setCertificateVerifyProc`)
+  // niż cicho proksować przez nieznajomego.
+  if (!pin && new URL(remoteUrl).protocol === "https:") {
+    throw new Error("remote UI proxy for an https host requires a certificate pin");
+  }
   if (!staticDir || !existsSync(join(staticDir, "index.html"))) return null;
   const root = resolve(staticDir);
+  const agent = new HttpsAgent({ keepAlive: true, maxCachedSessions: 0 });
   // Gniazda WebSocketa przejęte przy upgradzie — patrz komentarz w `pipeWs`.
   const live = new Set();
   const server = createServer((req, res) => {
@@ -262,13 +281,13 @@ export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const file = req.method === "GET" || req.method === "HEAD" ? staticFileFor(root, pathname) : null;
       if (file) serveStatic(res, file, req.method);
-      else proxyHttp(req, res, remoteUrl, pin);
+      else proxyHttp(req, res, remoteUrl, pin, agent);
     } catch (err) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(err) }));
     }
   });
-  server.on("upgrade", (req, socket, head) => pipeWs(req, socket, head, remoteUrl, live, pin));
+  server.on("upgrade", (req, socket, head) => pipeWs(req, socket, head, remoteUrl, live, pin, agent));
   server.on("clientError", (_err, socket) => socket.destroy());
   const port = await listenOnStablePort(server);
   if (port == null) {
@@ -287,6 +306,7 @@ export async function startRemoteUiServer({ staticDir, remoteUrl, pin }) {
       new Promise((done) => {
         for (const socket of live) socket.destroy();
         live.clear();
+        agent.destroy();
         server.closeAllConnections();
         server.close(() => done());
       }),

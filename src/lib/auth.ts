@@ -27,10 +27,16 @@ export function clearAuthToken(): void {
 }
 
 export function bootstrapLocalAuthToken(): void {
-  const token = new URLSearchParams(location.hash.slice(1)).get("access_token");
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const token = fragment.get("access_token");
   if (!token) return;
   setV2AuthToken(token);
-  history.replaceState(null, "", `${location.pathname}${location.search}`);
+  // Z fragmentu zabieramy WYŁĄCZNIE swój klucz: jedzie w nim też `join=<grant>`
+  // powłoki, a wymiecenie całego hasha kasowało go, zanim onboarding zdążył go
+  // przeczytać.
+  fragment.delete("access_token");
+  const rest = fragment.toString();
+  history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
 }
 
 export function setV2AuthToken(token: string): void {

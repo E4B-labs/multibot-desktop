@@ -5,7 +5,7 @@ import { app, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-import { normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, upsertRemoteHost } from "./host-resolve.mjs";
+import { mergeRemoteHost, normalizeRemoteUrl, removeRemoteHost, resolveActiveTarget, sameOrigin } from "./host-resolve.mjs";
 
 function filePath() {
   return path.join(app.getPath("userData"), "remote-hosts.json");
@@ -52,57 +52,60 @@ export function getActiveId() {
   return readRaw().activeId ?? "local";
 }
 
-/** Hosts compare by origin: `https://h:8799/` and `https://h:8799` are one
- * host, and so is the same address arriving from a certificate error. */
-function sameOrigin(a, b) {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
-}
-
 /** Pinned TLS fingerprint of this host, or undefined when its certificate has
  * never been seen (records saved before pinning existed have no field). */
 export function getHostFingerprint(url) {
   return (readRaw().hosts ?? []).find((h) => sameOrigin(h.url, url))?.tlsFingerprint;
 }
 
-/** Remembers the certificate of a host we already know — trust on first use.
+/** Remembers the certificate of a host we already know — trust on FIRST use
+ * only. Nigdy nie nadpisuje przypiętego odcisku: podmiana certyfikatu ma być
+ * twardym błędem, a nie cichym „no dobrze, teraz ufamy temu". Zapomnienie
+ * przypięcia jest osobną, jawną decyzją (`forgetHostFingerprint`).
  * An unknown address is a no-op: the fingerprint travels with addRemoteHost
  * instead, right after the join handshake that observed it. */
 export function setHostFingerprint(url, tlsFingerprint) {
   const config = readRaw();
   const hosts = config.hosts ?? [];
-  const stale = hosts.filter((h) => sameOrigin(h.url, url) && h.tlsFingerprint !== tlsFingerprint);
-  if (!stale.length) return;
-  for (const host of stale) host.tlsFingerprint = tlsFingerprint;
+  const fresh = hosts.filter((h) => sameOrigin(h.url, url) && !h.tlsFingerprint);
+  if (!fresh.length || !tlsFingerprint) return;
+  for (const host of fresh) host.tlsFingerprint = tlsFingerprint;
   writeRaw({ activeId: config.activeId, hosts });
+}
+
+/** Wyrzuca przypięcie, żeby następne połączenie zaufało od nowa. Jedyna droga
+ * po tym, jak serwer wystawił sobie nowy certyfikat — decyzja użytkownika, nie
+ * cicha zgoda kodu. */
+export function forgetHostFingerprint(url) {
+  const config = readRaw();
+  const hosts = config.hosts ?? [];
+  const pinned = hosts.filter((h) => sameOrigin(h.url, url) && h.tlsFingerprint);
+  if (!pinned.length) return false;
+  for (const host of pinned) delete host.tlsFingerprint;
+  writeRaw({ activeId: config.activeId, hosts });
+  return true;
 }
 
 // The token is optional: the onboarding "connect" flow saves the address
 // alone and lets the host's own LoginScreen take the token (it lands in that
 // origin's localStorage, which outlives restarts and updates).
-export function addRemoteHost({ name, url, token, tlsFingerprint }) {
+export function addRemoteHost({ name, url, token, tlsFingerprint, assumeHttps = false }) {
   const config = readRaw();
-  const normalized = normalizeRemoteUrl(url);
+  const normalized = normalizeRemoteUrl(url, { assumeHttps });
   const tokenEnc = token?.trim() ? encryptToken(token.trim()) : undefined;
-  // Jeden rekord na serwer. Logowanie do tego samego adresu po raz drugi ma
-  // nadpisać wpis, a nie dołożyć bliźniaka do listy hostów — i ma zachować to,
-  // czego nie przyniósł: token z poprzedniego razu i przypięty odcisk (inaczej
-  // świeży wpis bez odcisku znów zaufałby PIERWSZEMU napotkanemu certyfikatowi).
-  const existing = (config.hosts ?? []).find((h) => sameOrigin(h.url, normalized));
   const host = {
-    id: existing?.id ?? `h_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-    name: (name ?? "").trim() || existing?.name || normalized,
+    id: `h_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    name: (name ?? "").trim(),
     url: normalized,
-    tokenEnc: tokenEnc ?? existing?.tokenEnc,
+    tokenEnc,
     // Optional, and only ever written for an https host — the record stays
     // readable by shells that predate pinning.
-    tlsFingerprint: tlsFingerprint || existing?.tlsFingerprint || undefined,
-    createdAt: existing?.createdAt ?? Date.now(),
+    tlsFingerprint: tlsFingerprint || undefined,
+    createdAt: Date.now(),
   };
-  const hosts = upsertRemoteHost(config.hosts ?? [], host);
+  // Jeden rekord na serwer, z przejęciem tego, czego nowy wpis nie przyniósł —
+  // reguła siedzi w host-resolve.mjs, żeby dało się ją sprawdzić testem.
+  const hosts = mergeRemoteHost(config.hosts ?? [], host);
   writeRaw({ activeId: config.activeId, hosts });
   return { id: host.id, name: host.name, url: host.url, createdAt: host.createdAt };
 }

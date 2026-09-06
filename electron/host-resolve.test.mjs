@@ -3,11 +3,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  mergeRemoteHost,
   normalizeRemoteUrl,
   removeRemoteHost,
   resolveActiveTarget,
   shouldStartLocalHarness,
-  upsertRemoteHost,
 } from "./host-resolve.mjs";
 
 describe("host resolve", () => {
@@ -18,28 +18,43 @@ describe("host resolve", () => {
     expect(() => normalizeRemoteUrl("")).toThrow();
   });
 
-  it("normalizeRemoteUrl fills https:// in for a bare address:port", () => {
+  it("normalizeRemoteUrl fills https:// in for a bare address:port, but only when asked", () => {
     // Tak wygląda adres z trzech wartości serwera przepisany z drugiego
-    // urządzenia. Serwer 0.4.0 słucha wyłącznie po HTTPS, więc schemat jest
-    // rozstrzygnięty, a nie zgadywany.
-    expect(normalizeRemoteUrl("192.168.1.42:8799")).toBe("https://192.168.1.42:8799");
-    expect(normalizeRemoteUrl(" [2a00:f41:8c4:1::7]:8799/ ")).toBe("https://[2a00:f41:8c4:1::7]:8799");
-    expect(normalizeRemoteUrl("brave-otter.local:8799")).toBe("https://brave-otter.local:8799");
-    expect(normalizeRemoteUrl("[::ffff:192.168.1.1]:8799")).toBe("https://[::ffff:192.168.1.1]:8799");
+    // urządzenia. Serwer 0.4.0 słucha wyłącznie po HTTPS, więc w drodze
+    // logowania schemat jest rozstrzygnięty, a nie zgadywany.
+    const https = { assumeHttps: true };
+    expect(normalizeRemoteUrl("192.168.1.42:8799", https)).toBe("https://192.168.1.42:8799");
+    expect(normalizeRemoteUrl(" [2a00:f41:8c4:1::7]:8799/ ", https)).toBe("https://[2a00:f41:8c4:1::7]:8799");
+    expect(normalizeRemoteUrl("brave-otter.local:8799", https)).toBe("https://brave-otter.local:8799");
+    expect(normalizeRemoteUrl("[::ffff:192.168.1.1]:8799", https)).toBe("https://[::ffff:192.168.1.1]:8799");
+    // Domyślnie NIE zgadujemy: stara droga („Połącz" w onboardingu) dodaje dziś
+    // także serwery po gołym HTTP i zapisałaby wtedy martwy adres.
+    expect(() => normalizeRemoteUrl("192.168.1.42:8799")).toThrow();
     // Bez portu to już zgadywanie — zostaje błąd, tak samo jak port spoza zakresu.
-    expect(() => normalizeRemoteUrl("192.168.1.42")).toThrow();
-    expect(() => normalizeRemoteUrl("192.168.1.42:99999")).toThrow();
-    expect(() => normalizeRemoteUrl("192.168.1.42:0")).toThrow();
+    expect(() => normalizeRemoteUrl("192.168.1.42", https)).toThrow();
+    expect(() => normalizeRemoteUrl("192.168.1.42:99999", https)).toThrow();
+    expect(() => normalizeRemoteUrl("192.168.1.42:0", https)).toThrow();
   });
 
-  it("upsertRemoteHost replaces by id and keeps newest first", () => {
-    const a = { id: "a", name: "A", url: "https://a" };
-    const b = { id: "b", name: "B", url: "https://b" };
-    const list = upsertRemoteHost([a], b);
-    expect(list).toEqual([b, a]);
+  it("normalizeRemoteUrl odrzuca adres z wbudowanym loginem", () => {
+    // Poświadczenia z URL-a jechałyby potem w każdym żądaniu i zostały w
+    // zapisanym rekordzie hosta.
+    expect(() => normalizeRemoteUrl("https://kacper:sekret@h:8799")).toThrow(/username or password/);
+    expect(() => normalizeRemoteUrl("kacper:sekret@h:8799", { assumeHttps: true })).toThrow(/username or password/);
+  });
 
-    const a2 = { id: "a", name: "A2", url: "https://a2" };
-    expect(upsertRemoteHost(list, a2)).toEqual([a2, b]);
+  it("mergeRemoteHost keeps one record per server and inherits what the new one lacks", () => {
+    const stary = { id: "a", name: "Stary", url: "https://h:8799", tokenEnc: "tok", tlsFingerprint: "AA:BB", createdAt: 1 };
+    const duplikat = { id: "b", name: "Duplikat", url: "https://h:8799/", createdAt: 2 };
+    const nowy = { id: "c", name: "", url: "https://h:8799", tokenEnc: undefined, tlsFingerprint: undefined, createdAt: 9 };
+    // Oba wpisy o tym samym originie znikają, zostaje jeden — z id, tokenem i
+    // odciskiem pierwszego, bo nowy ich nie przyniósł.
+    expect(mergeRemoteHost([stary, duplikat], nowy)).toEqual([
+      { id: "a", name: "Stary", url: "https://h:8799", tokenEnc: "tok", tlsFingerprint: "AA:BB", createdAt: 1 },
+    ]);
+    // Obcy host zostaje nietknięty i ląduje za nowym.
+    const obcy = { id: "z", url: "https://inny:8799" };
+    expect(mergeRemoteHost([obcy], nowy).map((h) => h.id)).toEqual(["c", "z"]);
   });
 
   it("removeRemoteHost drops only the matching id", () => {

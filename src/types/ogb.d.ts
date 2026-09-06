@@ -38,6 +38,10 @@ declare global {
        * the host and switches the window to it with `#join=<grant>`. The
        * password never leaves the main process. */
       joinHost?(url: string, serverName: string, serverPassword: string): Promise<HostJoinResult>;
+      /** Forgets this host's pinned certificate so the next connection trusts
+       * again from scratch — the only way past "server certificate changed",
+       * and deliberately a decision the user has to make. */
+      forgetHostCertificate?(url: string): Promise<{ ok: boolean; forgotten?: boolean; error?: string }>;
       /** Opens the native host picker WITHOUT changing the active host. */
       showHostPicker?(): Promise<void>;
       /** Unread-conversation count for the taskbar badge. Fire-and-forget;
@@ -87,22 +91,33 @@ declare global {
   }
 }
 
-/** `error` codes: transport ones are `unreachable` | `timeout` |
- * `not-multibot` | `certificate_changed` (a pinned certificate changed — see
- * electron/tls-pin.mjs) | `forbidden` (called from a page that isn't ours —
- * a screen served straight from the host joins same-origin instead). `joinHost`
- * adds `insecure_address` — the server password is never sent in the clear to
- * anything but loopback. */
+/** Every code is snake_case. Transport: `unreachable` | `timeout` |
+ * `not_multibot` | `invalid_address` | `certificate_changed` (a pinned
+ * certificate changed — see electron/tls-pin.mjs) | `forbidden` (called from a
+ * page that isn't ours — a screen served straight from the host joins
+ * same-origin instead). `joinHost` adds `insecure_address`: the server password
+ * is never sent in the clear to anything but loopback. */
+export type HostErrorCode =
+  | "unreachable"
+  | "timeout"
+  | "not_multibot"
+  | "invalid_address"
+  | "certificate_changed"
+  | "insecure_address"
+  | "forbidden";
+
 export type HostProbeResult =
   | { ok: true; configured: boolean; tlsFingerprint?: string }
-  | { ok: false; error: string };
+  | { ok: false; error: HostErrorCode };
 
-/** On failure `error` is the server's own code — `wrong_server_name`,
- * `wrong_server_password`, `server_not_set_up`, `rate_limited` — or one of the
- * transport codes above, so the form can point at the field at fault. */
+/** On failure `error` is one of the transport codes or a server code the shell
+ * allows through — `wrong_server_name`, `wrong_server_password`,
+ * `server_not_set_up`, `rate_limited` — so the form can point at the field at
+ * fault. Anything else the server says is reported as `not_multibot`; the join
+ * grant itself never comes back here, it rides the URL fragment. */
 export type HostJoinResult =
-  | { ok: true; joinGrant: string; expiresAt?: number; hasUsers?: boolean }
-  | { ok: false; error: string };
+  | { ok: true; hasUsers?: boolean }
+  | { ok: false; error: HostErrorCode | "wrong_server_name" | "wrong_server_password" | "server_not_set_up" | "rate_limited" };
 
 export interface UpdaterState {
   status: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";

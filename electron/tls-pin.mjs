@@ -49,6 +49,8 @@ export function fingerprintOfPem(pem) {
  * @param {import("node:http").ClientRequest} req
  * @param {{ get: () => string | undefined, set: (fingerprint: string) => void }} pin
  */
+let warnedAboutStore = false;
+
 export function pinRequest(req, pin) {
   req.on("socket", (socket) => {
     socket.on("secureConnect", () => {
@@ -64,8 +66,12 @@ export function pinRequest(req, pin) {
           // zapamiętany przy następnym uścisku dłoni.
           try {
             pin.set(learned);
-          } catch {
-            /* nic — patrz wyżej */
+          } catch (err) {
+            // Raz na proces: przy każdym uścisku dłoni byłby to potok w logu.
+            if (!warnedAboutStore) {
+              warnedAboutStore = true;
+              console.warn("[multibot] nie udało się zapisać odcisku certyfikatu:", err?.message ?? err);
+            }
           }
         }
       } catch (err) {

@@ -19,12 +19,17 @@ export function failureCode(err) {
   return "unreachable";
 }
 
+/** Kody, które serwer ma prawo nam podyktować. Reszta jego `error` to tekst z
+ * sieci — nie przepuszczamy go do interfejsu, bo formularz pokazałby napastnikowi
+ * dowolne zdanie w swoim własnym oknie. */
+const SERVER_CODES = new Set(["wrong_server_name", "wrong_server_password", "server_not_set_up", "rate_limited"]);
+
 /** `GET /api/public/server` → probe result. A MultiBot server is the one that
  * answers with a serverId; anything else on that port belongs to somebody
  * else. `configured` says whether the server already has its own name and
  * password (legacy builds called it `setupDone`). */
 export function classifyProbe(status, body) {
-  if (status !== 200 || typeof body?.serverId !== "string" || !body.serverId) return { ok: false, error: "not-multibot" };
+  if (status !== 200 || typeof body?.serverId !== "string" || !body.serverId) return { ok: false, error: "not_multibot" };
   return { ok: true, configured: Boolean(body.configured ?? body.setupDone) };
 }
 
@@ -35,11 +40,11 @@ export function classifyJoin(status, body) {
   if (status === 200 && typeof body?.joinGrant === "string") {
     return { ok: true, joinGrant: body.joinGrant, expiresAt: body.expiresAt, hasUsers: body.hasUsers };
   }
-  if (typeof body?.error === "string") return { ok: false, error: body.error };
-  // No error code at all: either the route is missing (an old server) or the
-  // answer isn't JSON we understand — neither is a MultiBot server we can join.
-  if (status === 404 || status === 200) return { ok: false, error: "not-multibot" };
-  return { ok: false, error: `http_${status}` };
+  if (SERVER_CODES.has(body?.error)) return { ok: false, error: body.error };
+  // Nieznany kod, brak kodu, nie-JSON, brakująca trasa: z punktu widzenia
+  // ekranu logowania to jedno i to samo — pod tym adresem nie ma serwera,
+  // do którego umiemy się zalogować.
+  return { ok: false, error: "not_multibot" };
 }
 
 function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } = {}) {
@@ -80,10 +85,16 @@ function requestJson(url, { method = "GET", body, pin, timeoutMs = TIMEOUT_MS } 
         let raw = "";
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
-          if (raw.length < MAX_BODY) raw += chunk;
-          // Nadmiarowego strumienia nie zbieramy ANI nie przyjmujemy dalej —
-          // inaczej wrogi serwer lałby dane przez cały budżet czasu.
-          else res.destroy();
+          if (raw.length < MAX_BODY) {
+            raw += chunk;
+            return;
+          }
+          // Zerwanie strumienia zabija też `end`, więc obietnicę trzeba
+          // rozstrzygnąć TUTAJ — inaczej `hosts:probe` wisi w nieskończoność.
+          // Treść odpadła, więc nie ma czego parsować: to nie jest odpowiedź
+          // naszego serwera.
+          done({ status: res.statusCode ?? 0, json: null, tlsFingerprint });
+          res.destroy();
         });
         res.on("end", () => {
           let json = null;

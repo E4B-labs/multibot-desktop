@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld("ogb", {
    * Hasło jedzie tędy w jawnej postaci: NIGDY nie logować argumentów tego
    * wywołania ani nie przepisywać ich do żadnego stanu, który przeżyje ekran. */
   joinHost: (url, serverName, serverPassword) => ipcRenderer.invoke("hosts:join", url, serverName, serverPassword),
+  /** Zapomina przypięty certyfikat hosta — jawna zgoda użytkownika po tym, jak
+   * serwer wystawił sobie nowy. Bez tego „server certificate changed" nie ma
+   * wyjścia, a z automatu byłoby to przypięcie tylko z nazwy. */
+  forgetHostCertificate: (url) => ipcRenderer.invoke("hosts:forget-certificate", url),
   /** Otwiera natywny wybór hosta bez zmiany aktywnego hosta — „← Wstecz" na
    * ekranie logowania. Zmiana następuje dopiero po jawnym wyborze w tym oknie. */
   showHostPicker: () => ipcRenderer.invoke("hosts:open-picker"),
