@@ -172,6 +172,9 @@ describe("collaboration rooms", () => {
       expect(chip).toBeTruthy();
       expect(chip.room.ownerBotId).toBe(a.id);
       expect(chip.room.bot_ids).toEqual(expect.arrayContaining([a.id, b.id]));
+      expect(aBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "texted" && m.room.ownerBotId === a.id && m.room.bot_ids.includes(b.id))).toBe(true);
+      const bBot = await getBot(b.id);
+      expect(bBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "received" && m.room.ownerBotId === a.id && m.room.bot_ids.includes(b.id))).toBe(true);
       expect(aBot.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(true);
     },
     60_000,

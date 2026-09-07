@@ -76,7 +76,7 @@ export interface Message {
   /** collaboration-room chip: a clickable "X texted Y" / "X replied" pill
    * leading to the room. `event` names what just happened; without it the pill
    * describes the room as a whole. */
-  room?: { id: string; name: string; bot_ids: string[]; ownerBotId: string; status: string; event?: "texted" | "replied"; groupId?: string };
+  room?: { id: string; name: string; bot_ids: string[]; ownerBotId: string; status: string; event?: "texted" | "received" | "replied"; groupId?: string };
   /** In the thread for the MODEL, never for the user: peer envelopes and the
    * answers a bot writes to a colleague. The transcript replay (API drivers
    * every turn, CLI drivers after a lost session) walks the thread, so a

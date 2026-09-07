@@ -296,7 +296,7 @@ describe("comms e2e (fake ACP fleet)", () => {
       // The user watching A sees the exchange as two chips and nothing else.
       const askerAfter = (await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === asker.id);
       expect(askerAfter.messages.some((m: any) => m.kind === "room" && m.room?.event === "texted")).toBe(true);
-      expect(askerAfter.messages.some((m: any) => m.kind === "room" && m.room?.event === "replied" && m.room?.ownerBotId === helper.id)).toBe(true);
+      expect(askerAfter.messages.some((m: any) => m.kind === "room" && m.room?.event === "received" && m.room?.ownerBotId === helper.id)).toBe(true);
     },
     40_000,
   );

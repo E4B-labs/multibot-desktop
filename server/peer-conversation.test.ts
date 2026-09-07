@@ -517,7 +517,7 @@ describe("peer conversation: a message is a real turn", () => {
       const leadBot = await h.bot(lead);
       expect(leadBot.messages.some((m: any) => m.text?.includes("[Message from @"))).toBe(false);
       expect(leadBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "texted")).toBe(true);
-      expect(leadBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "replied")).toBe(true);
+      expect(leadBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "received" && m.room?.ownerBotId !== lead)).toBe(true);
     },
     60_000,
   );
