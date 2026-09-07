@@ -19,6 +19,7 @@ import { augmentedPath, resolveCliSpawn } from "../env-path.ts";
 import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
 import { approvalRule } from "../approval-rules.ts";
+import { staleCliNotice } from "../cli-update.ts";
 import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed, turnPolicy } from "../turn-policy.ts";
 
 import type {
@@ -610,7 +611,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           }
           case "assistant": {
             const msg = o.message ?? {};
-            const text = firstText(msg.content);
+            // A stale CLI reports "…or newer is required" as ordinary assistant
+            // text; staleCliNotice starts `claude update` and says so.
+            const text = staleCliNotice(firstText(msg.content));
             if (text.trim()) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!worker!.current!.sawStreamDelta) {
