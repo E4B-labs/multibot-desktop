@@ -46,7 +46,7 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
-import { lastClaudeUpdate, scheduleClaudeUpdates } from "./cli-update.ts";
+import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -2975,8 +2975,8 @@ async function cliToolsStatus() {
       loginAvailable: Boolean(tool.login),
       loginMode: tool.loginMode ?? "stdin",
       loginHint: tool.loginHint ?? null,
-      // only claude auto-updates (see server/cli-update.ts)
-      lastUpdate: tool.id === "claude" ? lastClaudeUpdate() : null,
+      // null until this tool was auto-updated (see server/cli-update.ts)
+      lastUpdate: lastToolUpdate(tool.id),
     };
   });
 }
@@ -5501,10 +5501,12 @@ server.listen(PORT, HOST, () => {
   // nothing about the boot may depend on whether one does.
   void refreshAddress(PORT).catch(() => {});
   setInterval(() => void refreshAddress(PORT).catch(() => {}), 10 * 60_000).unref?.();
-  // A stale claude CLI is a dead bot: the API rejects the turn outright. Keep
-  // it current in the background — OMB_AUTO_UPDATE=0 opts out.
-  scheduleClaudeUpdates(async () =>
-    (await registry.describe()).some((i) => i.instanceId === "claude" && i.snapshot.state === "available"),
+  // A stale CLI is a dead bot: the API rejects the turn outright. Keep every
+  // installed harness current in the background — OMB_AUTO_UPDATE=0 opts out.
+  scheduleHarnessUpdates(async () =>
+    (await registry.describe())
+      .filter((i) => i.snapshot.state === "available")
+      .map((i) => i.instanceId),
   );
 });
 
