@@ -112,6 +112,10 @@ beforeAll(async () => {
       USERPROFILE: home,
       OMB_PORT: String(PORT),
         OMB_ONBOARDING_TURN: "0",
+      // Same reason as MULTIBOT_COMPUTER below: VITEST does not reach the
+      // spawned harness, so the boot updater would run a REAL `claude update`
+      // on the developer's machine while the suite is still up.
+      OMB_AUTO_UPDATE: "0",
       // multibot (H2): a spawned harness gets a minimal env, so VITEST does not
       // reach it — without this the server would provision REAL containers for
       // every throwaway test bot.
