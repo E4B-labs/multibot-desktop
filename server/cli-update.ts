@@ -62,9 +62,11 @@ export async function updateClaude(
   if (at - lastRunAt < DEBOUNCE_MS) return null;
   lastRunAt = at;
   const run = deps.run ?? (execFile as ExecFileLike);
-  const spawn = resolveCliSpawn("claude", ["update"]);
   let result: CliUpdateResult;
   try {
+    // Inside the try: resolving the binary walks PATH and reads shims, so it
+    // can throw on its own (EACCES on a directory, a shim we cannot read).
+    const spawn = resolveCliSpawn("claude", ["update"]);
     result = await new Promise<CliUpdateResult>((resolve) => {
       run(
         spawn.command,
