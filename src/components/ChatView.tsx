@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Bell, CalendarClock, ChevronDown, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
+import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
@@ -262,10 +262,19 @@ function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   );
 }
 
+/** Pulls the full transcript and swaps the chat for the read-only room view. */
+function openRoom(roomId: string, dispatch: ReturnType<typeof useStore>["dispatch"]) {
+  void authFetch(`/api/rooms/${encodeURIComponent(roomId)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((full) => full && dispatch({ type: "toggleRoom", room: full }));
+}
+
+/** A bot-to-bot card is a door, not a drawer: tapping it swaps the chat for the
+ * room's read-only transcript (see RoomPanel). Between 07.09 and this fix the
+ * card only expanded downwards into a member list and the room was unreachable. */
 function PeerActivity({ messages, currentBotId }: { messages: Message[]; currentBotId: string }) {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
-  const [expanded, setExpanded] = useState(false);
   const first = messages[0];
   const room = first?.room;
   if (!room?.event) return null;
@@ -293,32 +302,17 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
       <span className="truncate">{label}</span>
     </span>
   );
-  const className = cn(
-    "mx-auto flex max-w-full items-center rounded-2xl border px-3 py-2 text-[13px] text-ink-secondary",
-    sent && "cursor-pointer hover:text-ink",
-    expanded ? "border-[#7d3548]/70 bg-[#351b23] text-ink" : "border-hairline/40 bg-panel",
-  );
   return (
     <div className="flex w-full justify-center">
-      <div className={cn("max-w-full", expanded && "rounded-2xl border border-[#7d3548]/70 bg-[#351b23]")}>
-        {sent ? (
-          <button type="button" className={cn(className, expanded && "border-transparent bg-transparent")} onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
-            {content}
-            <ChevronDown size={15} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
-          </button>
-        ) : <div className={className}>{content}</div>}
-        {expanded && sent && (
-          <div className="border-t border-[#7d3548]/50 px-3 pb-2 pt-1">
-            {peers.map((peer) => (
-              <div key={peer.id} className="flex items-center gap-2 py-1.5 text-[12px] text-ink-secondary">
-                <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={stateForBot(peer)} size={18} animated={false} />
-                <span className="min-w-0 flex-1 truncate text-ink">{botDisplayName(peer, polish ? "pl" : "en")}</span>
-                <span>{statusLabel}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={() => openRoom(room.id, dispatch)}
+        title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
+        className="mx-auto flex max-w-full cursor-pointer items-center gap-2 rounded-2xl border border-hairline/40 bg-panel px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+      >
+        {content}
+        <span className="shrink-0 text-[12px]">{statusLabel}</span>
+      </button>
     </div>
   );
 }
@@ -361,11 +355,7 @@ function RoomChip({ message }: { message: Message }) {
   return (
     <div className="flex justify-center">
       <button
-        onClick={() => {
-          void authFetch(`/api/rooms/${encodeURIComponent(room.id)}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((full) => full && dispatch({ type: "toggleRoom", room: full }));
-        }}
+        onClick={() => openRoom(room.id, dispatch)}
         className={pill}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
       >
