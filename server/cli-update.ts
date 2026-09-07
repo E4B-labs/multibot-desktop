@@ -10,7 +10,7 @@
 // other CLI is refreshed with exactly the command this repo installs it with
 // (server/cli-tools.ts), so package names live in one place.
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { CLI_TOOLS } from "./cli-tools.ts";
@@ -46,6 +46,7 @@ interface ShimFs {
   readFileSync: (path: string, encoding: "utf8") => string;
   writeFileSync: (path: string, data: string) => void;
   chmodSync: (path: string, mode: number) => void;
+  unlinkSync: (path: string) => void;
 }
 
 export interface UpdateDeps {
@@ -67,6 +68,11 @@ export function resetCliUpdateForTests(): void {
   lastResult.clear();
 }
 
+/** Same test scripts/install-opencode.mjs uses to pick the Termux path. */
+const onAndroid = () =>
+  process.platform === "android" ||
+  Boolean(process.env.TERMUX_VERSION || process.env.PREFIX?.includes("com.termux"));
+
 /**
  * How a tool is kept current, or null when we have no unattended way to do it
  * (grok ships no install command, kimi only a native script that refuses to
@@ -76,7 +82,21 @@ export function updateCommand(tool: string): { command: string; args: string[] }
   // In-place and shim-safe: it replaces the binary the native installer put
   // there, which is exactly what the Termux launcher points at.
   if (tool === "claude") return { command: "claude", args: ["update"] };
-  return CLI_TOOLS.find((item) => item.id === tool)?.install ?? null;
+  const install = CLI_TOOLS.find((item) => item.id === tool)?.install ?? null;
+  if (!install || install.command !== "npm" || !onAndroid()) return install;
+  // Android fails every npm os/cpu check ({"os":"android","cpu":"arm64"}), and
+  // npm's answer is to skip or refuse, not to warn: codex 0.153 installs but
+  // then dies with "Missing optional dependency @openai/codex-linux-arm64",
+  // and opencode-ai is rejected outright (EBADPLATFORM). --force is npm's
+  // documented bypass — scripts/install-opencode.mjs already installs that way.
+  const args = install.args.flatMap((arg) => (arg === "-g" ? ["-g", "--force"] : [arg]));
+  // What is actually installed on the phone is the musl platform package
+  // behind the proot shim, not opencode-ai; keep the two names in step with
+  // scripts/install-opencode.mjs.
+  if (tool === "opencode") {
+    args[args.length - 1] = `opencode-linux-${process.arch === "arm64" ? "arm64" : "x64"}-musl@latest`;
+  }
+  return { command: "npm", args };
 }
 
 /** Where `cli` resolves on PATH. Windows has no proot and no shims, so the
@@ -121,7 +141,23 @@ function captureShim(tool: string, fs: ShimFs, which: (cli: string) => string | 
   if (!text.startsWith("#!") || !/MultiBot shim|proot/.test(text)) return null;
   return () => {
     try {
-      if (fs.readFileSync(path, "utf8") === text) return;
+      let untouched = false;
+      try {
+        const stat = fs.lstatSync(path);
+        untouched = stat.isFile() && fs.readFileSync(path, "utf8") === text;
+      } catch {
+        /* npm removed the launcher outright — write the shim back */
+      }
+      if (untouched) return;
+      // Unlink first, always. What npm leaves here is a symlink into
+      // node_modules, and writeFileSync follows it: measured on the phone, the
+      // shim text landed in @openai/codex/bin/codex.js and `codex --version`
+      // died with "SyntaxError: Invalid or unexpected token" on line 2.
+      try {
+        fs.unlinkSync(path);
+      } catch {
+        /* nothing there to remove */
+      }
       fs.writeFileSync(path, text);
       fs.chmodSync(path, 0o755);
       console.log(`[multibot] ${tool} update: restored the MultiBot launcher shim`);
@@ -131,7 +167,56 @@ function captureShim(tool: string, fs: ShimFs, which: (cli: string) => string | 
   };
 }
 
-const nodeFs = { lstatSync, readFileSync, writeFileSync, chmodSync };
+const nodeFs = { lstatSync, readFileSync, writeFileSync, chmodSync, unlinkSync };
+
+/** One child process, reduced to "did it work" plus its last useful line. */
+function execute(run: ExecFileLike, command: string, args: string[]): Promise<{ ok: boolean; message: string }> {
+  const spawned = resolveCliSpawn(command, args);
+  return new Promise((resolve) => {
+    run(
+      spawned.command,
+      spawned.args,
+      { timeout: TIMEOUT_MS, windowsHide: true, env: { ...process.env, PATH: augmentedPath() } },
+      (error, stdout, stderr) => {
+        const lines = `${stdout ?? ""}\n${stderr ?? ""}`.split("\n").map((l) => l.trim()).filter(Boolean);
+        resolve({ ok: !error, message: (lines.pop() ?? error?.message ?? "no output").slice(0, 200) });
+      },
+    );
+  });
+}
+
+/**
+ * Android needs a second npm run, or the tool installs and still cannot start.
+ *
+ * npm fails every os check here, so it SKIPS the platform optionalDependency a
+ * CLI ships its binary in — quietly, "changed 1 package", and `--force` does
+ * not bring it back. codex 0.153.4 then throws "Missing optional dependency
+ * @openai/codex-linux-arm64" on every call. The package itself declares the
+ * exact alias to install (`npm:@openai/codex@0.153.4-linux-arm64`), so read it
+ * off the installed package.json rather than guessing a name or a version.
+ *
+ * Returns null when there is nothing to do, which is every tool that has no
+ * such dependency and every host that is not Android.
+ */
+async function installPlatformDep(
+  pkgSpec: string,
+  run: ExecFileLike,
+  fs: ShimFs,
+): Promise<{ ok: boolean; message: string } | null> {
+  const at = pkgSpec.lastIndexOf("@");
+  const pkg = at > 0 ? pkgSpec.slice(0, at) : pkgSpec;
+  const root = await execute(run, "npm", ["root", "-g"]);
+  if (!root.ok) return null;
+  let optional: Record<string, string>;
+  try {
+    optional = JSON.parse(fs.readFileSync(join(root.message, pkg, "package.json"), "utf8")).optionalDependencies ?? {};
+  } catch {
+    return null;
+  }
+  const name = Object.keys(optional).find((key) => key.endsWith(`linux-${process.arch}`));
+  if (!name) return null;
+  return execute(run, "npm", ["install", "-g", "--force", `${name}@${optional[name]}`]);
+}
 
 /**
  * Update one CLI. Never throws and never rejects: an update that cannot happen
@@ -146,27 +231,22 @@ export async function updateTool(tool: string, deps: UpdateDeps = {}): Promise<C
   if (previous !== undefined && at - previous < DEBOUNCE_MS) return null;
   lastRunAt.set(tool, at);
   const run = deps.run ?? (execFile as ExecFileLike);
+  const fs = deps.fs ?? (nodeFs as ShimFs);
   let restoreShim: (() => void) | null = null;
   let result: CliUpdateResult;
   try {
     // Inside the try: resolving the binary walks PATH and reads shims, so it
     // can throw on its own (EACCES on a directory, an unreadable shim).
-    const spawned = resolveCliSpawn(spec.command, spec.args);
     // Only a package manager rewrites the launcher; `claude update` does not.
     if (spec.command === "npm") {
-      restoreShim = captureShim(tool, deps.fs ?? (nodeFs as ShimFs), deps.which ?? whichCli);
+      restoreShim = captureShim(tool, fs, deps.which ?? whichCli);
     }
-    result = await new Promise<CliUpdateResult>((resolve) => {
-      run(
-        spawned.command,
-        spawned.args,
-        { timeout: TIMEOUT_MS, windowsHide: true, env: { ...process.env, PATH: augmentedPath() } },
-        (error, stdout, stderr) => {
-          const lines = `${stdout ?? ""}\n${stderr ?? ""}`.split("\n").map((l) => l.trim()).filter(Boolean);
-          resolve({ at, ok: !error, message: (lines.pop() ?? error?.message ?? "no output").slice(0, 200) });
-        },
-      );
-    });
+    const main = await execute(run, spec.command, spec.args);
+    const platform =
+      main.ok && spec.command === "npm" && onAndroid()
+        ? await installPlatformDep(spec.args[spec.args.length - 1] ?? "", run, fs)
+        : null;
+    result = { at, ...(platform ?? main) };
   } catch (error) {
     result = { at, ok: false, message: String(error).slice(0, 200) };
   }

@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,23 +25,52 @@ function fakeRun(reply: { error?: Error; stdout?: string; stderr?: string; onCal
   return { calls, run, line: () => calls.map((c) => [c.file, ...c.args].join(" ")) };
 }
 
-/** One-file in-memory fs, enough for the shim guard. */
+/**
+ * In-memory fs with regular files AND symlinks — the symlink half is the point:
+ * writeFileSync here follows a link exactly like the real one, so a restore that
+ * forgets to unlink first corrupts the target in this fake too.
+ */
 function fakeFs(path: string, content: string | null) {
-  const state = { content, chmod: 0 };
+  const files = new Map<string, string>();
+  const links = new Map<string, string>();
+  if (content !== null) files.set(path, content);
+  const target = (p: string) => links.get(p) ?? p;
+  const state = {
+    chmod: 0,
+    get content() {
+      return files.get(path) ?? null;
+    },
+    get isLink() {
+      return links.has(path);
+    },
+    read: (p: string) => files.get(p) ?? null,
+    /** what `npm install -g` leaves behind: a symlink into node_modules */
+    symlink: (to: string, body: string) => {
+      files.delete(path);
+      files.set(to, body);
+      links.set(path, to);
+    },
+  };
   const fs = {
     lstatSync: (p: string) => {
-      if (p !== path || state.content === null) throw new Error("ENOENT");
-      return { isFile: () => true, size: state.content.length };
+      if (links.has(p)) return { isFile: () => false, size: 1 };
+      const body = files.get(p);
+      if (body === undefined) throw new Error("ENOENT");
+      return { isFile: () => true, size: body.length };
     },
     readFileSync: (p: string) => {
-      if (p !== path || state.content === null) throw new Error("ENOENT");
-      return state.content;
+      const body = files.get(target(p));
+      if (body === undefined) throw new Error("ENOENT");
+      return body;
     },
-    writeFileSync: (_p: string, data: string) => {
-      state.content = data;
+    writeFileSync: (p: string, data: string) => {
+      files.set(target(p), data);
     },
     chmodSync: (_p: string, mode: number) => {
       state.chmod = mode;
+    },
+    unlinkSync: (p: string) => {
+      if (!links.delete(p) && !files.delete(p)) throw new Error("ENOENT");
     },
   };
   return { fs, state, which: () => path };
@@ -72,6 +103,58 @@ describe("updateCommand", () => {
     expect(updateCommand("grok")).toBeNull();
     expect(updateCommand("kimi")).toBeNull();
     expect(updateCommand("not-a-tool")).toBeNull();
+  });
+
+  it("on Termux forces npm past the android platform check and names opencode's musl package", () => {
+    process.env.TERMUX_VERSION = "0.118.0";
+    try {
+      expect(updateCommand("codex")).toEqual({
+        command: "npm",
+        args: ["install", "-g", "--force", "@openai/codex@latest"],
+      });
+      // opencode-ai has no android build at all; what is installed there is the
+      // platform package scripts/install-opencode.mjs pulls, behind a proot shim
+      expect(updateCommand("opencode")).toEqual({
+        command: "npm",
+        args: ["install", "-g", "--force", `opencode-linux-${process.arch === "arm64" ? "arm64" : "x64"}-musl@latest`],
+      });
+      // not an npm install, so nothing to force
+      expect(updateCommand("claude")).toEqual({ command: "claude", args: ["update"] });
+    } finally {
+      delete process.env.TERMUX_VERSION;
+    }
+  });
+});
+
+describe("android platform dependency", () => {
+  it("installs the optionalDependency npm skipped, under the alias the package declares", async () => {
+    process.env.TERMUX_VERSION = "0.118.0";
+    const root = "/data/data/com.termux/files/usr/lib/node_modules";
+    const alias = `npm:@openai/codex@0.153.4-linux-${process.arch}`;
+    const { fs, which } = fakeFs("/usr/bin/codex", null); // no shim here, only the dep step
+    fs.writeFileSync(
+      join(root, "@openai/codex", "package.json"),
+      JSON.stringify({ optionalDependencies: { [`@openai/codex-linux-${process.arch}`]: alias } }),
+    );
+    const calls: string[] = [];
+    const run = ((file: string, args: string[], _options: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      const line = [file, ...args].join(" ");
+      calls.push(line);
+      cb(null, line.includes("install") ? "changed 1 package\n" : `${root}\n`, "");
+    }) as never;
+    try {
+      const result = await updateTool("codex", { run, now: () => 1_000, fs, which });
+      // the spawn is platform-resolved (Windows quotes every argument), so
+      // assert on what the command line still contains
+      expect(calls).toHaveLength(3);
+      expect(calls[0]).toContain("@openai/codex@latest");
+      expect(calls[0]).toContain("force");
+      expect(calls[1]).toContain("root");
+      expect(calls[2]).toContain(`@openai/codex-linux-${process.arch}@${alias}`);
+      expect(result).toMatchObject({ ok: true });
+    } finally {
+      delete process.env.TERMUX_VERSION;
+    }
   });
 });
 
@@ -121,16 +204,30 @@ describe("Termux shim guard", () => {
   it("puts the MultiBot launcher back after npm replaced it", async () => {
     const { fs, state, which } = fakeFs("/usr/bin/opencode", TERMUX_SHIM);
     // what npm does: the shim file becomes npm's own launcher
-    const { run } = fakeRun({ stdout: "+ opencode-ai@1.2.3", onCall: () => fs.writeFileSync("", "#!/usr/bin/env node\nrequire('opencode')\n") });
+    const { run } = fakeRun({ stdout: "+ opencode-ai@1.2.3", onCall: () => fs.writeFileSync("/usr/bin/opencode", "#!/usr/bin/env node\nrequire('opencode')\n") });
     await updateTool("opencode", { run, now: () => 1_000, fs, which });
     expect(state.content).toBe(TERMUX_SHIM);
     expect(state.chmod).toBe(0o755);
   });
 
+  it("unlinks npm's symlink instead of writing the shim through it", async () => {
+    // The live failure: writeFileSync followed the link, the shell script landed
+    // in codex.js and every `codex --version` died with a SyntaxError on line 2.
+    const entryPoint = "/usr/lib/node_modules/@openai/codex/bin/codex.js";
+    const entryText = "#!/usr/bin/env node\nimport('../dist/main.js');\n";
+    const { fs, state, which } = fakeFs("/usr/bin/codex", TERMUX_SHIM);
+    const { run } = fakeRun({ stdout: "changed 1 package", onCall: () => state.symlink(entryPoint, entryText) });
+    await updateTool("codex", { run, now: () => 1_000, fs, which });
+    expect(state.isLink).toBe(false);
+    expect(state.content).toBe(TERMUX_SHIM);
+    expect(state.chmod).toBe(0o755);
+    expect(state.read(entryPoint)).toBe(entryText);
+  });
+
   it("leaves a launcher that is not ours alone, and survives a missing binary", async () => {
     const npmLauncher = "#!/usr/bin/env node\nrequire('codex')\n";
     const { fs, state, which } = fakeFs("/usr/bin/codex", npmLauncher);
-    const { run } = fakeRun({ stdout: "+ @openai/codex@1", onCall: () => fs.writeFileSync("", "replaced by npm") });
+    const { run } = fakeRun({ stdout: "+ @openai/codex@1", onCall: () => fs.writeFileSync("/usr/bin/codex", "replaced by npm") });
     await updateTool("codex", { run, now: () => 1_000, fs, which });
     expect(state.content).toBe("replaced by npm");
 
