@@ -958,7 +958,7 @@ export function Composer({ bot, onSend }: { bot: Bot; onSend?: (text: string) =>
             samymi ikonami ~24 px pustki i rząd wyglądał na rozstrzelony
             (Kacper). Zwinięte pigułki są teraz kwadratami 32 px jak mikrofon
             i spinacz, więc cały rząd trzyma jeden rytm. */}
-        <div className="relative flex min-h-12 items-center gap-1.5 rounded-2xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2.5">
+        <div data-composer-row className="relative flex min-h-12 items-center gap-1.5 rounded-2xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2.5">
         {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać. */}
         {strip && (
           <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center md:flex" title={botDisplayName(bot, polish ? "pl" : "en")}>
