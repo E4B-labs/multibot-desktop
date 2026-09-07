@@ -1,7 +1,7 @@
 {
   "platform": "android",
-  "version": "0.5.0",
-  "versionCode": 24,
-  "apkUrl": "https://expo.dev/artifacts/eas/zYWVd_LpEsDLLRar33XHKxTRGthXBmmqmE7RKKLmTAo.apk",
-  "notes": "Embedded Tor: the app reaches .onion servers on its own, no Orbot. Runtime 1.6.0."
+  "version": "0.5.1",
+  "versionCode": 25,
+  "apkUrl": "https://expo.dev/artifacts/eas/lK2uX0bD43sKNuw15_3VRciGDkJWO9XVHQxkxYDC824.apk",
+  "notes": "Fixes signing in to a .onion server: the embedded Tor SOCKS port is now dialled over IPv4, so 0.5.0's instant \"No answer from this address\" is gone. Runtime 1.6.0."
 }
