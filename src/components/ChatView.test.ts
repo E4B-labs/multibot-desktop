@@ -124,3 +124,35 @@ describe("pigułka pokoju: napisał(a) / odpisał(a)", () => {
     }
   });
 });
+
+// multibot: karta rozmowy bot↔bot to DRZWI do pokoju, nie szuflada. Wersja
+// z 07.09 (kierunkowa aktywność) zamieniła kliknięcie na rozwijanie w dół
+// listy członków, przez co do pokoju nie dało się wejść w ogóle. Kierunkowy
+// opis i awatary zostają, klikniecie ma znowu otwierać transkrypt.
+describe("karta bot↔bot otwiera pokój", () => {
+  const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
+
+  it("kliknięcie otwiera pokój, a nie rozwija karty", () => {
+    expect(card).toContain("openRoom(room.id, dispatch)");
+    for (const drawer of ["setExpanded", "aria-expanded", "ChevronDown"]) {
+      expect(card, `karta znowu rozwija się w dół: ${drawer}`).not.toContain(drawer);
+    }
+  });
+
+  it("karta jest klikalna w obie strony, nie tylko dla nadawcy", () => {
+    expect(card, "wariant „od kogoś\" znowu jest martwym <div>").not.toMatch(/sent \?\s*\(?\s*<button/);
+    expect((card.match(/<button/g) ?? []).length, "karta ma być jednym przyciskiem").toBe(1);
+  });
+
+  it("zostaje kierunkowy opis i awatary", () => {
+    for (const label of ["Napisano do", "Messaged", "Wiadomość od", "Message from"]) {
+      expect(card, `brak kierunkowego opisu ${label}`).toContain(label);
+    }
+    expect(card).toContain("const avatars = sent ? [actor, ...peers] : [actor];");
+  });
+
+  it("obie karty wchodzą do pokoju tym samym helperem", () => {
+    expect(chat).toContain('dispatch({ type: "toggleRoom", room: full })');
+    expect((chat.match(/openRoom\(room\.id, dispatch\)/g) ?? []).length).toBe(2);
+  });
+});
