@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
+import { ArrowDown, Bell, CalendarClock, ChevronDown, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
@@ -34,6 +34,7 @@ import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { authFetch } from "@/lib/auth";
+import { peerActivityGroupFor } from "@/lib/peerActivity";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -261,7 +262,68 @@ function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   );
 }
 
-/** Clickable centered "X texted Y" pill opening the read-only collaboration
+function PeerActivity({ messages, currentBotId }: { messages: Message[]; currentBotId: string }) {
+  const { state } = useStore();
+  const polish = useLanguage() === "pl";
+  const [expanded, setExpanded] = useState(false);
+  const first = messages[0];
+  const room = first?.room;
+  if (!room?.event) return null;
+  const sent = room.event === "texted" && room.ownerBotId === currentBotId;
+  const actor = state.bots.find((bot) => bot.id === room.ownerBotId);
+  const peerIds = [...new Set(messages.flatMap((message) => message.room?.bot_ids ?? []).filter((id) => id !== room.ownerBotId))];
+  const peers = peerIds.map((id) => state.bots.find((bot) => bot.id === id)).filter((bot): bot is Bot => Boolean(bot));
+  const names = peers.map((bot) => botDisplayName(bot, polish ? "pl" : "en"));
+  const actorName = actor ? botDisplayName(actor, polish ? "pl" : "en") : room.ownerBotId;
+  const label = sent
+    ? peers.length === 1
+      ? (polish ? `Napisano do ${names[0] ?? room.bot_ids[1] ?? "agenta"}` : `Messaged ${names[0] ?? room.bot_ids[1] ?? "agent"}`)
+      : (polish ? `Napisano do ${peers.length} agentów` : `Messaged ${peers.length} agents`)
+    : (polish ? `Wiadomość od ${actorName}` : `Message from ${actorName}`);
+  const status = state.rooms.find((candidate) => candidate.id === room.id)?.status ?? room.status;
+  const statusLabel = status === "done" ? (polish ? "Ukończone" : "Completed") : status === "failed" ? (polish ? "Błąd" : "Failed") : (polish ? "W toku" : "Working");
+  const avatars = sent ? [actor, ...peers] : [actor];
+  const content = (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="flex shrink-0 -space-x-1">
+        {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
+          <MausAvatar key={bot.id} color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={20} animated={false} />
+        ))}
+      </span>
+      <span className="truncate">{label}</span>
+    </span>
+  );
+  const className = cn(
+    "mx-auto flex max-w-full items-center rounded-2xl border px-3 py-2 text-[13px] text-ink-secondary",
+    sent && "cursor-pointer hover:text-ink",
+    expanded ? "border-[#7d3548]/70 bg-[#351b23] text-ink" : "border-hairline/40 bg-panel",
+  );
+  return (
+    <div className="flex w-full justify-center">
+      <div className={cn("max-w-full", expanded && "rounded-2xl border border-[#7d3548]/70 bg-[#351b23]")}>
+        {sent ? (
+          <button type="button" className={cn(className, expanded && "border-transparent bg-transparent")} onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
+            {content}
+            <ChevronDown size={15} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
+          </button>
+        ) : <div className={className}>{content}</div>}
+        {expanded && sent && (
+          <div className="border-t border-[#7d3548]/50 px-3 pb-2 pt-1">
+            {peers.map((peer) => (
+              <div key={peer.id} className="flex items-center gap-2 py-1.5 text-[12px] text-ink-secondary">
+                <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={stateForBot(peer)} size={18} animated={false} />
+                <span className="min-w-0 flex-1 truncate text-ink">{botDisplayName(peer, polish ? "pl" : "en")}</span>
+                <span>{statusLabel}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Clickable centered legacy room pill opening the read-only collaboration
  * room where those bots worked on a task together. */
 function RoomChip({ message }: { message: Message }) {
   const { state, dispatch } = useStore();
@@ -638,7 +700,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             w tym samym wierszu flexa, nie na nakładce, więc te 24 px ponad
             dotychczasowe 40 to czysty oddech pod ostatnim dymkiem. */}
         <div className="flex w-full min-w-0 flex-col gap-1 pb-16">
-          {bot.messages.map((m) => {
+          {bot.messages.map((m, messageIndex) => {
             let child: ReactNode;
             switch (m.kind) {
               case "secret":
@@ -663,7 +725,14 @@ export function ChatView({ bot }: { bot: Bot }) {
                 child = <EventPill key={m.id} message={m} polish={polish} />;
                 break;
               case "room":
-                child = <RoomChip key={m.id} message={m} />;
+                {
+                  const activityGroup = peerActivityGroupFor(bot.messages, messageIndex, bot.id);
+                  child = activityGroup
+                    ? activityGroup[0]?.id === m.id
+                      ? <PeerActivity key={m.id} messages={activityGroup as Message[]} currentBotId={bot.id} />
+                      : null
+                    : <RoomChip key={m.id} message={m} />;
+                }
                 break;
               case "screen":
                 child = m.png ? <ScreenFrame key={m.id} png={m.png} mime={m.mime} /> : null;

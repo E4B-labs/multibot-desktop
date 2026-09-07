@@ -524,7 +524,7 @@ const chatMessages = (threadId: string) => store.messagesFor(threadId).filter((m
 function postRoomChip(
   threadBotId: string,
   room: RoomRecord,
-  chip?: { from: string; to?: string; event: "texted" | "replied" },
+  chip?: { from: string; to?: string; event: "texted" | "received" | "replied" },
 ) {
   const owner = store.bot(threadBotId);
   if (!owner) return;
@@ -542,6 +542,14 @@ function postRoomChip(
     },
   });
   broadcast({ kind: "message", threadId: owner.threadId, message });
+}
+
+/** Show both sides of a peer exchange in their normal private chats. The room
+ * remains the source of truth for the actual text; these are only navigation
+ * markers that make the direction of the exchange visible. */
+function postPeerActivity(fromBotId: string, toBotId: string, room: RoomRecord) {
+  postRoomChip(fromBotId, room, { from: fromBotId, to: toBotId, event: "texted" });
+  postRoomChip(toBotId, room, { from: fromBotId, to: toBotId, event: "received" });
 }
 
 /** Strip @mentions of the tagged bots out of the task text. */
@@ -957,7 +965,7 @@ async function deliverPeerMessage(
   // acknowledgement words (rooms.ts), so a short real RESULT already passes.
   if (isReply && isAcknowledgement(room, fromBotId, message)) {
     recordInRoom();
-    postRoomChip(toBotId, room, { from: fromBotId, event: "replied" });
+    postPeerActivity(fromBotId, toBotId, room);
     for (const entry of peerTurn.get(fromBotId) ?? []) if (entry.fromBotId === toBotId) entry.replied = true;
     const streak = (ackStreak.get(room.id) ?? 0) + 1;
     ackStreak.set(room.id, streak);
@@ -979,12 +987,9 @@ async function deliverPeerMessage(
   // waiting on a reply that never came.
   for (const entry of peerTurn.get(fromBotId) ?? []) if (entry.fromBotId === toBotId) entry.replied = true;
 
-  // What the user sees of this exchange in a private chat: a chip, never the
-  // envelope. "X texted Y" in the sender's own thread; the answer coming back
-  // shows as "Y replied" in the thread of whoever asked. The words themselves
-  // live in the room the chip opens.
-  if (isReply) postRoomChip(toBotId, room, { from: fromBotId, event: "replied" });
-  else postRoomChip(fromBotId, room, { from: fromBotId, to: toBotId, event: "texted" });
+  // What the user sees in the private chats: one directional marker on each
+  // side. The words themselves remain in the shared room transcript.
+  postPeerActivity(fromBotId, toBotId, room);
 
   // The envelope goes to the MODEL, never to the user's chat: a raw
   // "[Message from @X (bot id: …)]" bubble is the noise this design exists to
