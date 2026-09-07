@@ -114,6 +114,7 @@ describe("fastModeAvailable", () => {
 // maskotki naraz, każda z własną animacją. Testu nie da się postawić na DOM
 // (vitest chodzi w node, repo nie ma jsdom), więc pilnujemy źródła.
 const composer = readFileSync(new URL("./Composer.tsx", import.meta.url), "utf8");
+const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("pasek nad composerem", () => {
   it("ma dokładnie jeden animowany awatar", () => {
@@ -187,5 +188,18 @@ describe("zwijanie pigułek composera", () => {
   it("odstęp w rzędzie composera zszedł do 6 px", () => {
     expect(composer).toContain("flex min-h-12 items-center gap-1.5 rounded-2xl");
     expect(composer).not.toContain("flex min-h-12 items-center gap-2 rounded-2xl");
+  });
+});
+
+describe("composer na telefonie", () => {
+  it("pole tekstowe ma wlasny wiersz, a pigulki traca podpisy ponizej 700 px", () => {
+    // Regresja 07.09: rzad byl jednoliniowy, a pigulki `shrink-0` z podpisami
+    // zjadaly cala szerokosc — przy 360 px textarea mialo 0 px i na telefonie
+    // zostawal sam pasek ikon bez pola do pisania.
+    expect(composer).toContain('<div data-composer-row className="relative flex min-h-12');
+    const phone = css.slice(css.indexOf("@media (max-width: 700px)"));
+    expect(phone).toContain("[data-composer-row] { flex-wrap: wrap; }");
+    expect(phone).toContain("[data-composer-row] > [data-composer-input] { order: -1; flex-basis: 100%; }");
+    expect(phone).toContain("[data-composer-row] > div > button > span { display: none; }");
   });
 });
