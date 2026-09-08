@@ -88,3 +88,16 @@ it (`docs/openssl.txt`, `docs/zlib.txt`, `docs/libevent.txt`).
 macOS and Linux use a `tor` installed by the system package manager
 (`brew install tor`, `apt install tor`), so no Tor binary is redistributed with
 those builds.
+
+## simple-icons — ikony katalogu wtyczek
+
+`src/lib/appIcons.ts` niesie dane ścieżek SVG (viewBox 24×24) wzięte
+z projektu [simple-icons](https://github.com/simple-icons/simple-icons),
+wydanego na **CC0-1.0** (domena publiczna, atrybucja nieobowiązkowa —
+podajemy ją, bo tak wypada). Ścieżki są wklejone do repo, a nie ściągane
+z sieci: interfejs na telefonie jedzie w paczce aplikacji i nie ma jak
+pobrać ikony z CDN-u.
+
+Znaki towarowe pozostają własnością odpowiednich firm. MultiBot używa ich
+wyłącznie do nazwania usługi, którą użytkownik sam podłącza — nie sugerują
+żadnego związku ani poparcia.
