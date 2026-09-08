@@ -8,6 +8,7 @@ import {
   composerPillShape,
   fastModeAvailable,
   reasoningLevels,
+  setBotDraft,
   sidePanelOpen,
   slashVisible,
   withCommand,
@@ -65,6 +66,19 @@ describe("withCommand", () => {
 
   it("na pustym composerze zostawia spację na argumenty", () => {
     expect(withCommand("   ", "/model")).toBe("/model ");
+  });
+});
+
+describe("drafty wiadomości per bot", () => {
+  it("zachowuje tekst każdego bota po przełączeniu i czyści tylko wysłany draft", () => {
+    let drafts = setBotDraft({}, "bot-a", "wiadomość dla A");
+    drafts = setBotDraft(drafts, "bot-b", "wiadomość dla B");
+
+    expect(drafts).toEqual({ "bot-a": "wiadomość dla A", "bot-b": "wiadomość dla B" });
+
+    drafts = setBotDraft(drafts, "bot-a", "");
+
+    expect(drafts).toEqual({ "bot-a": "", "bot-b": "wiadomość dla B" });
   });
 });
 

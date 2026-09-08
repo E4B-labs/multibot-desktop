@@ -154,6 +154,11 @@ export function withCommand(text: string, command: string): string {
   return !rest || rest.startsWith("/") ? `${command} ` : `${command} ${rest}`;
 }
 
+/** Stores a draft under its bot rather than replacing another bot's text. */
+export function setBotDraft(drafts: Record<string, string>, botId: string, text: string): Record<string, string> {
+  return drafts[botId] === text ? drafts : { ...drafts, [botId]: text };
+}
+
 /** Wiersze pickera: kształt z GET /api/bots/{id}/skills. */
 interface SlashSkill {
   name: string;
@@ -291,10 +296,25 @@ export function reasoningLevels(model: string) {
  * znaczy „nie przyjęte" — tekst ZOSTAJE w polu, bo cicho skasowana wiadomość
  * jest gorsza niż brak wysyłki. Załączników tu nie ma: grupa nie ma jednego
  * właściciela pliku, więc spinacz w tym trybie znika zamiast gubić plik. */
-export function Composer({ bot, onSend }: { bot: Bot; onSend?: (text: string) => boolean }) {
+export function Composer({
+  bot,
+  onSend,
+  draft,
+  onDraftChange,
+}: {
+  bot: Bot;
+  onSend?: (text: string) => boolean;
+  draft?: string;
+  onDraftChange?: (text: string) => void;
+}) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
-  const [text, setText] = useState("");
+  const [localText, setLocalText] = useState("");
+  const text = draft ?? localText;
+  const setText = useCallback((next: string) => {
+    if (draft !== undefined) onDraftChange?.(next);
+    else setLocalText(next);
+  }, [draft, onDraftChange]);
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
