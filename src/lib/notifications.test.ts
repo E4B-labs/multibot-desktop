@@ -34,6 +34,11 @@ describe("shouldNotify", () => {
     expect(shouldNotify(snapshot({ busy: true }), snapshot({ busy: false }), away)).toBe("finished");
   });
 
+  it("tura ruszona przez innego bota nie rysuje banerki o koncu pracy", () => {
+    expect(shouldNotify(snapshot({ busy: true, botTurn: true }), snapshot({ busy: false }), away)).toBeNull();
+    expect(shouldNotify(snapshot({ botTurn: true }), snapshot({ unread: true }), away)).toBeNull();
+  });
+
   it("fires on a fresh unread even when busy never flipped", () => {
     expect(shouldNotify(snapshot(), snapshot({ unread: true }), away)).toBe("finished");
   });

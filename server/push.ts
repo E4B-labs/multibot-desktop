@@ -9,6 +9,26 @@
 // `server/index.ts` w momencie ustawienia `needsAttention`.
 import { loadConfig, saveConfig, type AppConfig, type PushDevice } from "./config.ts";
 
+export type PushKind =
+  | "question" | "handoff" | "approval" | "started"
+  | "finished" | "failed" | "attention" | "reminder" | "notify";
+export type PushOrigin = "user" | "routine" | "bot";
+/** Prośby, na które odpowiada CZŁOWIEK, i przypomnienia, o które sam prosił —
+ * warte brzęku nawet w środku pracy bot-bot. Reszta rodzajów to relacja z
+ * pracy i czeka na otwarcie apki. */
+const ALWAYS = new Set<PushKind>(["question", "handoff", "approval", "attention", "reminder"]);
+/**
+ * JEDNA reguła „czy to warte powiadomienia". Start tury nie jest zdarzeniem:
+ * człowiek sam ją zaczął albo zaczął ją inny bot. Gadanie botów między sobą
+ * też nie — do jego czytania nikt nie jest potrzebny. Zostaje odpowiedź dla
+ * człowieka w JEGO czacie, przypomnienie i prośba o zgodę / sekret / decyzję.
+ */
+export function shouldNotify(event: { kind: PushKind; origin?: PushOrigin }): boolean {
+  if (event.kind === "started") return false;
+  if (event.origin === "bot") return ALWAYS.has(event.kind);
+  return true;
+}
+
 export function registerPushDevice(id: string, token: string, botId?: string, userId?: string): void {
   const cfg = loadConfig();
   const devices: Record<string, PushDevice> = { ...(cfg.pushDevices ?? {}) };

@@ -80,6 +80,10 @@ export interface NotifySnapshot {
   busy?: boolean;
   unread?: boolean;
   needsAttention?: string | null;
+  /** serwer: tura ruszyła od innego bota — jej koniec nie jest wiadomością dla
+   * człowieka, więc banerki „skończył" z niej nie ma (push ma tę samą regułę
+   * w `server/push.ts`) */
+  botTurn?: boolean;
   /** przełącznik per bot z SettingsPanel; brak = nie dotyczy (pokoje) */
   notifications?: boolean;
 }
@@ -107,6 +111,7 @@ export function shouldNotify(
   if (ctx.focused && ctx.selectedBotId === next.id) return null;
   const attention = next.needsAttention ?? null;
   if (attention && attention !== (prev.needsAttention ?? null)) return "attention";
+  if (prev.botTurn) return null;
   const finished = (prev.busy === true && next.busy !== true) || (next.unread === true && prev.unread !== true);
   return finished ? "finished" : null;
 }

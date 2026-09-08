@@ -117,6 +117,8 @@ export interface Bot {
   chiefOfStaff?: boolean;
   composioAccounts?: Record<string, string>;
   busy?: boolean;
+  /** tura ruszyła od innego bota, nie od czlowieka (patrz shouldNotify) */
+  botTurn?: boolean;
   // multibot: why the bot is waiting on a human (login/captcha/question); null/absent = not waiting.
   // Arrives via the same `{kind:"bot"}` SSE frame as every other bot patch.
   needsAttention?: string | null;
@@ -842,6 +844,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         busy: bot.busy,
         unread: bot.unread,
         needsAttention: bot.needsAttention ?? null,
+        botTurn: bot.botTurn,
         notifications: bot.notifications,
       };
       seen.set(bot.id, next);

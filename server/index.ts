@@ -31,7 +31,7 @@ import {
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
 import * as composio from "./composio.ts";
 // multibot (U28): powiadomienia push, gdy bot wchodzi w needsAttention.
-import { registerPushDevice, notifyPushDevices } from "./push.ts";
+import { registerPushDevice, notifyPushDevices, shouldNotify, type PushKind } from "./push.ts";
 import {
   BUILT_IN_CLI_IDS,
   DEFAULT_INSTANCE_CONFIGS,
@@ -1493,11 +1493,12 @@ const USER_ASK_DISMISS_NOTE = "MultiBot: the user closed the question without an
 // JEDNO miejsce wysyłki powiadomień: sprawdza przełącznik bota, tytułem jest
 // nazwa bota, a `data.botId` pozwala aplikacji otworzyć po tapnięciu właśnie
 // tego bota. Wysyłka nigdy nie przerywa obsługi zdarzenia.
-type PushKind = "question" | "handoff" | "approval" | "started" | "finished" | "failed" | "attention" | "reminder" | "notify";
 function pushForBot(botId: string, kind: PushKind, body: string): void {
   const bot = store.bot(botId);
   // `=== false` a nie `!`: boty zapisane zanim pole istniało nie mają go w JSON
   if (!bot || bot.notifications === false) return;
+  // JEDYNA bramka „czy to w ogóle powiadomienie" — patrz `shouldNotify`
+  if (!shouldNotify({ kind, origin: turnOrigin.get(botId) })) return;
   const audience = bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined;
   void notifyPushDevices(bot.name || "Bot", body.slice(0, 300) || "…", bot.id, { botId: bot.id, kind }, audience).catch(() => {});
 }
@@ -1540,28 +1541,11 @@ const toolkitLabel = (slug: string): string =>
 // (`warmBot`) omija `startTurn`, więc nie trafia do mapy i też nie pushuje.
 type TurnOrigin = "user" | "routine" | "bot";
 const turnOrigin = new Map<string, TurnOrigin>();
-const startedPushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-function cancelStartedPush(botId: string): void {
-  const timer = startedPushTimers.get(botId);
-  if (timer) clearTimeout(timer);
-  startedPushTimers.delete(botId);
-}
-/** Anty-zalew: bot, który odpowiedział w < 5 s, wysyła tylko „koniec". */
-function scheduleStartedPush(botId: string, body: string): void {
-  cancelStartedPush(botId);
-  const timer = setTimeout(() => {
-    startedPushTimers.delete(botId);
-    pushForBot(botId, "started", body);
-  }, 5_000);
-  timer.unref?.();
-  startedPushTimers.set(botId, timer);
-}
 function endTurnPush(botId: string, kind: "finished" | "failed", body: string): void {
   const origin = turnOrigin.get(botId);
-  turnOrigin.delete(botId);
-  cancelStartedPush(botId);
-  if (!origin || origin === "bot") return;
+  if (!origin || origin === "bot") { turnOrigin.delete(botId); return; }
   pushForBot(botId, kind, body);
+  turnOrigin.delete(botId);
 }
 
 async function askOwnerAndWait(threadId: string, card: Omit<OptionCardData, "requestId">): Promise<string> {
@@ -2444,7 +2428,10 @@ opts?: {
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   if (!isolated) {
-    store.patchBot(bot.id, { busy: true, unread: false });
+    // Tura bot-bot znaczy się na rekordzie, bo powłoka rysuje banerkę „skończył"
+    // z przejścia `busy`, a nie z pusha — bez tego kolega piszący do kolegi
+    // wyskakuje na pulpicie. Nie kasujemy jej: następna tura nadpisze.
+    store.patchBot(bot.id, { busy: true, unread: false, botTurn: (opts?.origin ?? "user") === "bot" });
     setTurnPolicy(bot.threadId, {
       autonomy: workspace.autonomy(bot.id).autonomy,
       access: workspace.access(bot.id).access,
@@ -2463,8 +2450,6 @@ opts?: {
     // bubble even if a colleague is waiting on the same turn (steering).
     if (origin !== "bot") turnUserText.add(bot.threadId);
     turnOrigin.set(bot.id, origin);
-    if (origin === "routine") scheduleStartedPush(bot.id, `rutyna ${opts?.routineName ?? ""} wystartowała`);
-    else if (origin === "user") scheduleStartedPush(bot.id, `zaczyna pracę: ${text.slice(0, 80)}`);
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
     // watchdog 70s - jesli brak turn.completed (provider zawiesil sie) zwolnij busy
     armBusyWatchdog(bot.id);

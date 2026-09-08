@@ -200,19 +200,20 @@ describe("push na telefon (fake ACP fleet)", () => {
     }
   });
 
-  it("pyta o człowieka → push `question`, a długa tura dorzuca `started`", async () => {
+  it("pyta o człowieka → push `question`, a start tury milczy", async () => {
     const botId = await newBot("Pytacz", "grokAsk");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zdecyduj coś" })).status).toBe(202);
     await until(() => kinds(botId).includes("question"));
     const question = pushes.find((p) => p.data?.botId === botId && p.data?.kind === "question");
     expect(question?.title).toBe("Pytacz");
     expect(question?.body.length).toBeGreaterThan(0);
-    // tura wisi na karcie dłużej niż 5 s, więc opóźniony push „zaczyna pracę" wychodzi
-    await until(() => kinds(botId).includes("started"));
-    expect(kinds(botId)).toContain("started");
+    // tura wisi na karcie dłużej niż 5 s — kiedyś wychodził z tego push „zaczyna
+    // pracę"; start tury nie jest zdarzeniem, więc nie wychodzi już nigdy
+    await until(() => false, 7_000);
+    expect(kinds(botId)).not.toContain("started");
   }, 40_000);
 
-  it("szybka tura: koniec bez `started`", async () => {
+  it("koniec tury użytkownika: `finished`, nigdy `started`", async () => {
     const botId = await newBot("Szybki", "happy");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "cześć" })).status).toBe(202);
     await until(() => kinds(botId).includes("finished"));
