@@ -173,6 +173,12 @@ export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState
   return state && PICKABLE_STATE_SET.has(state) ? state : "happy";
 }
 
+/**
+ * The group reference face: one quiet resting expression for every member,
+ * independent of the bot's live or saved expression state.
+ */
+export const GROUP_AVATAR_STATE: MausState = "happy";
+
 type MascotMessage = {
   kind: string;
   at?: number;

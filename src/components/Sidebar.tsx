@@ -28,7 +28,7 @@ import {
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
 import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { pickerAvatarState, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { GROUP_AVATAR_STATE, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
@@ -69,7 +69,7 @@ export { sidebarAvatarProps };
  * co wiersz bota: stoi, dopoki bot nie pracuje.
  */
 export function groupMemberAvatarProps(bot: Bot) {
-  return { ...sidebarAvatarProps(bot), state: pickerAvatarState(bot) };
+  return { ...sidebarAvatarProps(bot), state: GROUP_AVATAR_STATE };
 }
 
 function readSidebarWidth(key: string, fallback: number): number {

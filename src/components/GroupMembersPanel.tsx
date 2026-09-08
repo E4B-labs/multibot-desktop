@@ -4,7 +4,7 @@
 import { Users } from "lucide-react";
 import { useStore, type Bot, type EngineGroup } from "@/state/store";
 import { MausAvatar } from "./Avatar";
-import { pickerAvatarState } from "@/lib/mascot";
+import { GROUP_AVATAR_STATE } from "@/lib/mascot";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 
@@ -34,7 +34,7 @@ export function GroupMembersPanel({ group }: { group: EngineGroup }) {
               onClick={() => { dispatch({ type: "toggleGroup", group: null }); dispatch({ type: "select", id: bot.id }); }}
               className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised"
             >
-              <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={pickerAvatarState(bot)} size={28} animated={false} />
+              <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={GROUP_AVATAR_STATE} size={28} animated={false} />
               <span className="truncate text-[14px] text-ink">{botDisplayName(bot, polish ? "pl" : "en")}</span>
             </button>
           ))}

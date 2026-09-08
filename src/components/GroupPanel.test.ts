@@ -32,9 +32,9 @@ describe("GroupPanel", () => {
     }
   });
 
-  it("używa wybranej ekspresji awatara zamiast stanu wynikającego z nazwy", () => {
+  it("używa jednej spokojnej twarzy referencyjnej we wszystkich avatarach grupy", () => {
     for (const source of [panel, members]) {
-      expect(source).toContain("pickerAvatarState(");
+      expect(source).toContain("GROUP_AVATAR_STATE");
       expect(source).not.toContain("stateForBot(");
     }
   });

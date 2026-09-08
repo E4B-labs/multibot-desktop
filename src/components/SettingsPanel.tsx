@@ -2,7 +2,7 @@ import { ChevronLeft, ImagePlus, Pencil, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useStore, type Bot } from "@/state/store";
 import { MausAvatar } from "./Avatar";
-import { MAUS_COLORS, MAUS_COLOR_NAMES, pickerAvatarState } from "@/lib/mascot";
+import { GROUP_AVATAR_STATE, MAUS_COLORS, MAUS_COLOR_NAMES } from "@/lib/mascot";
 import { MASCOT_SHAPES } from "@/lib/mascotShapes";
 import { ModelPicker } from "./ModelPicker";
 import { EngineAutonomy } from "./EngineAutonomy";
@@ -120,7 +120,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       Pick<Bot, "name" | "title" | "description" | "notifications" | "color" | "mascotExpression" | "mascotShape" | "avatarUrl">
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
-  const activeState = pickerAvatarState(bot);
+  const activeState = GROUP_AVATAR_STATE;
 
   const handleAvatarClick = () => setAppearanceMode((m) => (m === "closed" ? "bot" : "closed"));
 
