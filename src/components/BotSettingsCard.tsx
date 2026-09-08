@@ -21,6 +21,7 @@ import {
   type AutoVerifyRule,
   type AutoVerifySettings,
 } from "@/lib/autoVerifyTypes";
+import { Skeleton, Spinner } from "./Loading";
 
 /** Rozwijane „Powinien:" — dwie pozycje z ptaszkiem przy wybranej. Natywny
  *  `<select>` nie pokazałby ptaszka, a to on mówi, co jest ustawione. */
@@ -105,18 +106,24 @@ export function BotSettingsCard({ polish }: { polish: boolean }) {
   // pytania, a nie do cichej zgody — poluzować regułę użytkownik może zawsze,
   // cofnąć akcję, która już poszła, nie zawsze.
   const [draftDecision, setDraftDecision] = useState<AutoVerifyDecision>("ask");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   /** Każda zmiana leci od razu na serwer; odpowiedź jest pełną konfiguracją,
    *  więc karta zawsze pokazuje to, co naprawdę zapisano. */
   const save = (patch: { timeZone?: string; autoVerify?: AutoVerifySettings }) => {
+    setSaveState("saving");
     void authFetch("/api/config", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     })
       .then((r) => r.json())
-      .then((config) => dispatch({ type: "configStatus", config }))
-      .catch(() => {});
+      .then((config) => {
+        dispatch({ type: "configStatus", config });
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState("idle"), 1500);
+      })
+      .catch(() => setSaveState("idle"));
   };
 
   const setRules = (rules: AutoVerifyRule[]) => save({ autoVerify: { ...autoVerify, rules } });
@@ -138,7 +145,11 @@ export function BotSettingsCard({ polish }: { polish: boolean }) {
 
   return (
     <div className="mt-4 rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">Bot</div>
+      <div className="flex items-center gap-2">
+        <div className="text-[15px] font-medium text-ink">Bot</div>
+        {saveState === "saving" && <Spinner size={13} className="text-ink-secondary" />}
+        {saveState === "saved" && <Check size={14} className="text-ink-secondary" />}
+      </div>
 
       <div className="mt-4 flex items-center justify-between gap-4">
         <div className="text-[15px] font-medium text-ink">{polish ? "Strefa czasowa" : "Time zone"}</div>
@@ -183,6 +194,13 @@ export function BotSettingsCard({ polish }: { polish: boolean }) {
             ? "Napisz jedną krótką, naturalną regułę dla każdej akcji. Przy konflikcie reguł pierwszeństwo ma „Najpierw pytaj”."
             : "Write one short, natural rule per action. When rules conflict, “Ask first” wins."}
         </div>
+
+        {!state.config && (
+          <div className="mt-3 flex flex-col gap-2">
+            <Skeleton className="h-[46px]" />
+            <Skeleton className="h-[46px]" />
+          </div>
+        )}
 
         {autoVerify.rules.length > 0 && (
           <div className="mt-3 flex flex-col gap-2">

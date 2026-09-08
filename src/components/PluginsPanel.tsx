@@ -12,6 +12,7 @@
 // obsługiwane trasami harnessa /api/connectors/custom/:id (działają bez
 // klucza Composio).
 import { useCallback, useEffect, useState } from "react";
+import { Spinner } from "./Loading";
 import { Loader2, RefreshCw, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -377,6 +378,8 @@ export function PluginsPanel() {
   const [configured, setConfigured] = useState(true);
   const [status, setStatus] = useState<Record<string, { connected: boolean; accounts?: ConnectedAccount[] }>>({});
   const [busySlug, setBusySlug] = useState<string | null>(null);
+  // OAuth kończy się w przeglądarce; kafelek czeka na wynik odpytywania.
+  const [waitingSlug, setWaitingSlug] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -430,12 +433,16 @@ export function PluginsPanel() {
         window.open(url);
         // the user finishes OAuth in the browser; poll a few times to catch it
         let tries = 0;
+        setWaitingSlug(slug);
         const timer = setInterval(() => {
           void refreshStatus([slug]);
-          if (++tries >= 6 || status[slug]?.connected) clearInterval(timer);
+          if (++tries >= 6 || status[slug]?.connected) {
+            clearInterval(timer);
+            setWaitingSlug(null);
+          }
         }, 5000);
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => { setError(e.message); setWaitingSlug(null); })
       .finally(() => setBusySlug(null));
   };
 
@@ -632,11 +639,13 @@ export function PluginsPanel() {
                           </span>
                         ) : (
                           <button
-                            disabled={!configured || busy}
+                            disabled={!configured || busy || waitingSlug === card.slug}
                             onClick={() => connect(card.slug)}
-                            className="shrink-0 rounded-full bg-raised px-3 py-1 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                            className="flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-3 py-1 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
                           >
-                            {busy ? <Loader2 size={12} className="mx-auto animate-spin" /> : polish ? "Dodaj" : "Add"}
+                            {waitingSlug === card.slug ? (
+                              <><Spinner size={12} />{polish ? "Czekam na autoryzację…" : "Waiting for authorization…"}</>
+                            ) : busy ? <Loader2 size={12} className="mx-auto animate-spin" /> : polish ? "Dodaj" : "Add"}
                           </button>
                         )}
                       </div>

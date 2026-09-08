@@ -12,6 +12,7 @@ import { requestBrowserNotifications } from "@/lib/notifications";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName, botDisplayTitle } from "@/lib/botNames";
 import { AvatarCropper } from "./AvatarCropper";
+import { Spinner } from "./Loading";
 
 function Field({
   label,
@@ -37,6 +38,7 @@ function BotSharing({ bot }: { bot: Bot }) {
   const [visibility, setVisibility] = useState<"team" | "private">(bot.visibility === "private" ? "private" : "team");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -45,7 +47,8 @@ function BotSharing({ bot }: { bot: Bot }) {
     ]).then(([sharing]) => {
       if (!alive) return;
       setVisibility(sharing.visibility === "private" ? "private" : "team");
-    }).catch((reason) => alive && setError(reason instanceof Error ? reason.message : String(reason)));
+    }).catch((reason) => alive && setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [bot.id]);
 
@@ -74,20 +77,23 @@ function BotSharing({ bot }: { bot: Bot }) {
       <div className="mt-0.5 text-[12px] text-ink-secondary">
         {polish ? "Zespołowy dla wszystkich albo prywatny tylko dla właściciela." : "Team-visible for everyone or private to its owner."}
       </div>
-      <select
-        value={visibility}
-        disabled={busy}
-        onChange={(event) => {
-          const value = event.target.value as typeof visibility;
-          setVisibility(value);
-          void save(value);
-        }}
-        className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink"
-      >
-        <option value="team">{polish ? "Zespół" : "Team"}</option>
-        <option value="private">{polish ? "Prywatny" : "Private"}</option>
-      </select>
-      {visibility === "private" && <div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Inni członkowie nie zobaczą bota, pamięci ani rozmów." : "Other members cannot see this bot, its memory, or its conversations."}</div>}
+      <div className="mt-3 flex items-center gap-2">
+        <select
+          value={visibility}
+          disabled={busy || loading}
+          onChange={(event) => {
+            const value = event.target.value as typeof visibility;
+            setVisibility(value);
+            void save(value);
+          }}
+          className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink disabled:opacity-50"
+        >
+          <option value="team">{polish ? "Zespół" : "Team"}</option>
+          <option value="private">{polish ? "Prywatny" : "Private"}</option>
+        </select>
+        {(loading || busy) && <Spinner className="shrink-0 text-ink-secondary" />}
+      </div>
+      {!loading && visibility === "private" &&<div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Inni członkowie nie zobaczą bota, pamięci ani rozmów." : "Other members cannot see this bot, its memory, or its conversations."}</div>}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
@@ -261,7 +267,8 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   </button>
                 )}
                 {appearanceMode === "photo" && bot.avatarUrl && (
-                  <button type="button" onClick={removeAvatar} disabled={avatarBusy} className="rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised">
+                  <button type="button" onClick={removeAvatar} disabled={avatarBusy} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised disabled:opacity-50">
+                    {avatarBusy && <Spinner size={12} />}
                     {polish ? "Usuń" : "Remove"}
                   </button>
                 )}
@@ -327,7 +334,14 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                       </button>
                     </div>
                   ) : (
-                    <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+                    <>
+                      <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+                      {avatarBusy && (
+                        <div className="mt-2 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
+                          <Spinner size={12} /> {polish ? "Zapisywanie…" : "Saving…"}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

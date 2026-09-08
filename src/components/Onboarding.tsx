@@ -3,6 +3,7 @@
 // custom models, permissions, workspace access) already has a settings panel —
 // duplicating it here only meant two places to fix.
 import { useEffect, useState } from "react";
+import { Spinner } from "./Loading";
 import { ArrowLeft, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { authFetch, setSessionToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
@@ -302,6 +303,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [trusting, setTrusting] = useState(false);
   // „Zapamiętaj mnie" domyślnie WŁĄCZONE — i tak nic tu nie zostaje: pięć
   // wartości trzyma powłoka, zaszyfrowanych kluczem systemowym. Przeglądarka
   // nie ma czym zapamiętać, więc tam nie ma ani haczyka, ani zapisanego wpisu.
@@ -462,6 +464,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     && (mode !== "recover" || recoveryInput.trim().length > 0);
 
   const finish = async () => {
+    if (busy) return;
+    setBusy(true);
     setStep("working");
     setErrorCode(null);
     try {
@@ -510,6 +514,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       // the form that asked for it, not three screens back.
       const spentGrant = code === "join_grant_invalid";
       setStep(spentGrant && path === "join" ? "signin" : recovering ? "recover" : "profile");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -633,8 +639,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 {/* Zapamiętany wpis stoi PRZED formularzem: po wylogowaniu to
                     jest ta jedna rzecz, którą użytkownik chce kliknąć. */}
                 <p className="mt-1 text-[13.5px] text-ink-secondary">{polish ? "Zapamiętane na tym urządzeniu." : "Remembered on this device."}</p>
-                <button type="button" disabled={busy} onClick={() => void oneTap()} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
-                  {busy ? (polish ? "Łączenie…" : "Connecting…") : savedSignInLabel(offered, polish)}
+                <button type="button" disabled={busy} onClick={() => void oneTap()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+                  {busy && <Spinner size={15} />}
+                  {busy
+                    ? isOnionHost(address)
+                      ? polish ? "Łączenie przez Tora (do 2 minut)…" : "Connecting through Tor (up to 2 minutes)…"
+                      : polish ? "Łączenie…" : "Connecting…"
+                    : savedSignInLabel(offered, polish)}
                 </button>
                 <button type="button" onClick={forgetSaved} className="mt-2 self-center text-[12px] text-ink-secondary hover:text-ink">
                   {polish ? "Zapomnij zapisane logowanie" : "Forget this saved sign-in"}
@@ -649,7 +660,18 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <PasswordField value={serverPassword} onChange={setServerPassword} placeholder={polish ? "Hasło serwera" : "Server password"} autoComplete="off" label={polish ? "Hasło serwera" : "Server password"} invalid={Boolean(field("password"))} />
             {errorCode && <div role="alert" className="mt-2 text-[12px] text-danger">{joinErrorText(errorCode, polish)}</div>}
             {errorCode === "certificate_changed" && window.ogb?.forgetHostCertificate && (
-              <button type="button" onClick={() => void window.ogb?.forgetHostCertificate?.(address.trim()).then(() => void signIn())} className="mt-2 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
+              <button
+                type="button"
+                disabled={trusting || busy}
+                onClick={() => {
+                  setTrusting(true);
+                  void window.ogb?.forgetHostCertificate?.(address.trim())
+                    .then(() => signIn())
+                    .finally(() => setTrusting(false));
+                }}
+                className="mt-2 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+              >
+                {trusting && <Spinner size={13} />}
                 {polish ? "Zaufaj nowemu certyfikatowi" : "Trust the new certificate"}
               </button>
             )}
@@ -659,9 +681,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 {polish ? "Zapamiętaj mnie na tym urządzeniu" : "Remember me on this device"}
               </label>
             )}
-            <button type="submit" disabled={busy} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+            <button type="submit" disabled={busy} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
               {/* Pierwsze połączenie z usługą ukrytą to zbudowanie obwodu, nie
                   zwykły uścisk dłoni — bez tego zdania wygląda jak zawieszenie. */}
+              {busy && <Spinner size={15} />}
               {busy
                 ? isOnionHost(address)
                   ? polish
@@ -709,7 +732,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {profilePassword.length > 0 && profilePassword.length < 12 && <div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Hasło profilu: co najmniej 12 znaków." : "Profile password: at least 12 characters."}</div>}
             {profileName.trim().length > 0 && !/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) && <div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Nazwa profilu: 3-32 znaki, litery, cyfry, kropka, myślnik." : "Profile name: 3-32 characters, letters, digits, dot, dash."}</div>}
             {errorCode && <div role="alert" className="mt-2 text-[12px] text-danger">{joinErrorText(errorCode, polish)}</div>}
-            <button type="submit" disabled={!profileReady} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+            <button type="submit" disabled={!profileReady || busy} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+              {busy && <Spinner size={15} />}
               {creating ? (polish ? "Utwórz profil" : "Create profile") : polish ? "Zaloguj się" : "Sign in"}
             </button>
             {!creating && (
@@ -735,7 +759,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {confirm.length > 0 && profilePassword !== confirm && <div className="mt-2 text-[12px] text-danger">{polish ? "Hasła nie są takie same" : "Passwords don't match"}</div>}
             {profilePassword.length > 0 && profilePassword.length < 12 && <div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Hasło profilu: co najmniej 12 znaków." : "Profile password: at least 12 characters."}</div>}
             {errorCode && <div role="alert" className="mt-2 text-[12px] text-danger">{joinErrorText(errorCode, polish)}</div>}
-            <button type="submit" disabled={!profileReady} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+            <button type="submit" disabled={!profileReady || busy} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+              {busy && <Spinner size={15} />}
               {polish ? "Ustaw nowe hasło" : "Set the new password"}
             </button>
           </form>

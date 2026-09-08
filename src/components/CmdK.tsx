@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye, FileText, GraduationCap, Link2, ListTodo, MessageSquare, Monitor, Plus, Puzzle, Search, Settings, SlidersHorizontal, Users, Wand2, Wrench } from "lucide-react";
 import { useStore } from "@/state/store";
+import { LoadingRow } from "./Loading";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
@@ -93,6 +94,7 @@ export function CmdK() {
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<SearchKind>("all");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // multibot: bot ukryty na pasku bocznym nie miał jak wrócić — filtr `!hidden`
@@ -138,14 +140,17 @@ export function CmdK() {
   useEffect(() => {
     if (!open || !query.trim() || tab === "action") {
       setResults([]);
+      setSearching(false);
       return;
     }
+    setSearching(true);
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void authFetch(`/api/search?q=${encodeURIComponent(query)}&type=${tab}`, { signal: controller.signal })
         .then((response) => response.ok ? response.json() : Promise.reject())
         .then((body: { results?: SearchResult[] }) => setResults(body.results ?? []))
-        .catch(() => { if (!controller.signal.aborted) setResults([]); });
+        .catch(() => { if (!controller.signal.aborted) setResults([]); })
+        .finally(() => { if (!controller.signal.aborted) setSearching(false); });
     }, 140);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, query, tab]);
@@ -374,8 +379,9 @@ export function CmdK() {
         </div>
         )}
         <div className="max-h-[320px] overflow-y-auto py-1.5">
-          {rows.length === 0 && (
-            <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-ink-secondary"><Search size={14} />{polish ? "Brak wyników" : "No results"}</div>
+          {rows.length === 0 && (searching
+            ? <LoadingRow label={polish ? "Szukam…" : "Searching…"} className="px-4" />
+            : <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-ink-secondary"><Search size={14} />{polish ? "Brak wyników" : "No results"}</div>
           )}
           {rows.map((row, i) => {
             if ("run" in row) {

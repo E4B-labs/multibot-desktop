@@ -26,6 +26,7 @@ import {
   Users,
 } from "lucide-react";
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
+import { Skeleton } from "./Loading";
 import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
 import { GROUP_AVATAR_STATE, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
@@ -1459,6 +1460,8 @@ export function Sidebar() {
             bota, wiersz grupy i nagłówek sekcji dostają ten sam odstęp, więc
             kilka zwiniętych nagłówków obok siebie stoi równo. */}
         <div className="flex flex-col gap-0.5">
+          {!state.hydrated && state.bots.length === 0 &&
+            [0, 1, 2, 3, 4].map((i) => <Skeleton key={`bot-skeleton-${i}`} className="h-9 w-full" />)}
           {flatBots.map((b) => (
             <BotListItem
               key={b.id}
@@ -1469,6 +1472,7 @@ export function Sidebar() {
               onUnhover={hideHoverCard}
             />
           ))}
+          {groups === null && state.hydrated && <Skeleton className="h-9 w-full" />}
           {(collapsed ? groupList : rows.unsectioned.groups).map((g) => (
             <GroupRow
               key={g.id}
