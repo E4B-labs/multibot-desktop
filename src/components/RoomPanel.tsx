@@ -170,8 +170,14 @@ export function RoomPanel() {
                       </button>
                       <span className="text-[11px] text-ink-secondary">{formatTime(entry.at)}</span>
                     </div>
-                    <div className="rounded-2xl rounded-tl-md bg-card px-3.5 py-2 text-[14px] leading-relaxed text-ink">
-                      <ChatMarkdown text={formatPeerEnvelope(entry.text)} />
+                    {/* multibot: ta sama wypowiedź bota ma wyglądać tak samo
+                        w czacie 1:1, w grupie i tutaj. Widok pokoju został
+                        przy rozmiarach panelu (`px-3.5 py-2 leading-relaxed`,
+                        markdown bez `compact`), więc pigułki wzmianek, tabele
+                        i bloki kodu były w nim większe niż te same pigułki
+                        w czacie. Wartości i flaga jak w ChatView/GroupPanel. */}
+                    <div className="rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
+                      <ChatMarkdown text={formatPeerEnvelope(entry.text)} compact />
                     </div>
                   </div>
                 </div>

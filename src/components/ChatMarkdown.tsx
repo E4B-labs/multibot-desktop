@@ -21,9 +21,7 @@ import { asciiMathToLatex } from "@/lib/asciiMath";
 import { Check, Copy } from "lucide-react";
 import { useLanguage } from "@/lib/language";
 import { cn } from "@/lib/cn";
-import { normalizeState } from "@/lib/mascot";
-import { botDisplayName } from "@/lib/botNames";
-import { MausAvatar } from "./Avatar";
+import { BotChip } from "./PeerBadge";
 import { SkillRef } from "./SkillRef";
 import { useStore } from "@/state/store";
 // multibot (2.4): wzmianki jako chip — logika wtyczki w osobnym, testowanym pliku.
@@ -122,7 +120,6 @@ function CodeBlock({ code, lang, streaming, compact }: { code: string; lang: str
  * flagi, więc zostają w dotychczasowych rozmiarach. */
 function ChatMarkdownComponent({ text, streaming = false, compact = false }: { text: string; streaming?: boolean; compact?: boolean }) {
   const { state } = useStore();
-  const polish = useLanguage() === "pl";
   const bots = useMemo<MentionBot[]>(() => state.bots, [state.bots]);
   const skillNames = useMemo(() => state.skills.map((skill) => skill.name), [state.skills]);
   const remarkPlugins = useMemo<any[]>(
@@ -163,17 +160,9 @@ function ChatMarkdownComponent({ text, streaming = false, compact = false }: { t
               }
               return <span>{children}</span>;
             }
-            return (
-              <span className="inline-flex translate-y-px items-center gap-1 rounded-full bg-raised px-2 py-0.5 align-middle text-[13px] font-medium text-ink">
-                <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={normalizeState(bot.mascotExpression) ?? "happy"} size={16} animated={false} />
-                {/* multibot: sama nazwa, bez małpki. Owal z awatarem już mówi,
-                    że to bot, a „@" zostawiało dwa różne zapisy tej samej
-                    rzeczy: plakietka nadawcy przy wiadomościach bot→bot
-                    (PeerBadge) pokazuje „Atlas", więc pigułka też ma tak
-                    pokazywać. Nazwa idzie z tego samego źródła co tam. */}
-                {botDisplayName(bot, polish ? "pl" : "en")}
-              </span>
-            );
+            // multibot: wzmianka rysuje się TĄ SAMĄ pigułką co plakietka
+            // nadawcy bot→bot — jeden komponent, patrz PeerBadge.tsx.
+            return <BotChip bot={bot} />;
           },
           pre({ children }: { children?: ReactNode }) {
             // fenced code arrives as <pre><code class="language-x">…</code></pre>

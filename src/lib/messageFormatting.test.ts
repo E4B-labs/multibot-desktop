@@ -1,7 +1,57 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { remarkBrackets } from "./brackets";
 import { remarkSkillRefs } from "./skillRefs";
+
+const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+const peerBadge = source("../components/PeerBadge.tsx");
+const chatMarkdown = source("../components/ChatMarkdown.tsx");
+const chatView = source("../components/ChatView.tsx");
+const roomPanel = source("../components/RoomPanel.tsx");
+const groupPanel = source("../components/GroupPanel.tsx");
+
+// multibot: wygląd wiadomości ma być JEDEN, niezależnie od widoku. Dotąd te
+// same kawałki miały po dwie kopie i rozjeżdżały się po kolei:
+//   - pigułka bota: własny markup w ChatMarkdown (wzmianka `@Nazwa`) i drugi,
+//     identyczny, w PeerBadge (nadawca koperty bot→bot w dymku „user"),
+//   - wypowiedź bota: `compact` w czacie i w grupie, ale NIE w widoku pokoju,
+//     więc ta sama wiadomość była tam większa.
+// Vitest chodzi tu bez DOM-u, więc pilnujemy tego na źródle.
+describe("jeden wygląd wiadomości we wszystkich widokach", () => {
+  it("pigułka bota ma jeden komponent i jeden zestaw klas", () => {
+    expect(peerBadge).toContain("export const BOT_CHIP_CLASS");
+    expect(peerBadge).toContain("export function BotChip");
+    // Klasy owalu istnieją dokładnie raz w całym kodzie — w PeerBadge.tsx.
+    for (const [name, code] of [["ChatMarkdown", chatMarkdown], ["ChatView", chatView]] as const) {
+      expect(code, `${name} znowu ma własną kopię klas pigułki bota`).not.toContain(
+        "rounded-full bg-raised px-2 py-0.5 align-middle",
+      );
+    }
+  });
+
+  it("wzmianka w markdownie i plakietka nadawcy to ten sam komponent", () => {
+    expect(chatMarkdown).toContain('import { BotChip } from "./PeerBadge";');
+    expect(chatMarkdown).toContain("<BotChip bot={bot} />");
+    expect(peerBadge).toContain("<BotChip bot={bot} className=\"mr-1.5\" />");
+    expect(chatView).toContain("<PeerBadge name={envelope.from} />");
+  });
+
+  it("czat, grupa i pokój renderują wypowiedź bota tym samym markdownem", () => {
+    for (const [name, code] of [["ChatView", chatView], ["GroupPanel", groupPanel], ["RoomPanel", roomPanel]] as const) {
+      expect(code, `${name} renderuje ChatMarkdown bez compact`).toMatch(/<ChatMarkdown[^>]*\scompact\b/);
+    }
+    // Ten sam dymek: padding i interlinia z ChatView.
+    for (const [name, code] of [["GroupPanel", groupPanel], ["RoomPanel", roomPanel]] as const) {
+      expect(code, `${name} ma inny dymek niż czat`).toContain("bg-card px-2 py-[5px] text-[14px] leading-[1.45]");
+    }
+  });
+
+  it("karta aktywności bot↔bot i czip pokoju wchodzą do pokoju tym samym helperem", () => {
+    expect(chatView).toContain("function openRoom(");
+    expect((chatView.match(/openRoom\(room\.id, dispatch\)/g) ?? []).length).toBe(2);
+  });
+});
 
 const root = (child: any) => ({ type: "root", children: [{ type: "paragraph", children: [child] }] });
 const children = (tree: any) => tree.children[0].children;
