@@ -28,7 +28,7 @@ describe("sidebar avatar", () => {
   it("freezes group members too", () => {
     const idle = groupMemberAvatarProps(bot({ busy: false }));
     expect(idle.animated).toBe(false);
-    expect(idle.state).toBe("idle");
+    expect(idle.state).toBe("happy");
     expect(idle.motion).toBe("none");
 
     const busy = groupMemberAvatarProps(bot({ id: "b2", busy: true }));

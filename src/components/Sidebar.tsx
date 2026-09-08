@@ -28,7 +28,7 @@ import {
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
 import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { pickerAvatarState, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
@@ -68,7 +68,9 @@ export { sidebarAvatarProps };
  * Awatar czlonka grupy w stosie na wierszu grupy — dokladnie ta sama zasada
  * co wiersz bota: stoi, dopoki bot nie pracuje.
  */
-export const groupMemberAvatarProps = sidebarAvatarProps;
+export function groupMemberAvatarProps(bot: Bot) {
+  return { ...sidebarAvatarProps(bot), state: pickerAvatarState(bot) };
+}
 
 function readSidebarWidth(key: string, fallback: number): number {
   if (typeof window === "undefined") return fallback;
