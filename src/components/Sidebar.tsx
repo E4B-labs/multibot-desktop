@@ -69,7 +69,12 @@ export { sidebarAvatarProps };
  * co wiersz bota: stoi, dopoki bot nie pracuje.
  */
 export function groupMemberAvatarProps(bot: Bot) {
-  return { ...sidebarAvatarProps(bot), state: GROUP_AVATAR_STATE };
+  return {
+    ...sidebarAvatarProps(bot),
+    state: GROUP_AVATAR_STATE,
+    shape: "blob" as const,
+    avatarUrl: null,
+  };
 }
 
 function readSidebarWidth(key: string, fallback: number): number {
@@ -873,8 +878,6 @@ function GroupRow({
             <span key={b.id} className={cn("relative shrink-0", i > 0 && "-ml-2 mt-2")}>
               <MausAvatar
                 color={b.color}
-                avatarUrl={b.avatarUrl}
-                shape={b.mascotShape}
                 size={20}
                 {...groupMemberAvatarProps(b)}
               />

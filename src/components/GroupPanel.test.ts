@@ -35,6 +35,8 @@ describe("GroupPanel", () => {
   it("używa jednej spokojnej twarzy referencyjnej we wszystkich avatarach grupy", () => {
     for (const source of [panel, members]) {
       expect(source).toContain("GROUP_AVATAR_STATE");
+      expect(source).toContain('shape="blob"');
+      expect(source).not.toContain("avatarUrl=");
       expect(source).not.toContain("stateForBot(");
     }
   });
