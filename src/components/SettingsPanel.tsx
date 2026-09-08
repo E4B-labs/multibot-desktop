@@ -1,4 +1,4 @@
-import { ChevronLeft, ImagePlus, Pencil, Search, Trash2, X } from "lucide-react";
+import { ChevronLeft, ImagePlus, Pencil, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useStore, type Bot } from "@/state/store";
 import { MausAvatar } from "./Avatar";
@@ -30,47 +30,6 @@ function Field({
 
 const inputCls =
   "w-full rounded-lg border border-hairline/40 bg-inset px-2.5 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline";
-
-interface ApprovalRuleOut {
-  id: string;
-  label: string;
-  provider: string;
-}
-
-function ApprovalRules({ bot }: { bot: Bot }) {
-  const polish = useLanguage() === "pl";
-  const [rules, setRules] = useState<ApprovalRuleOut[] | null>(null);
-  useEffect(() => {
-    authFetch(`/api/bots/${bot.id}/approval-rules`)
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then(setRules)
-      .catch(() => setRules([]));
-  }, [bot.id]);
-  const remove = async (id: string) => {
-    const response = await authFetch(`/api/bots/${bot.id}/approval-rules/${id}`, { method: "DELETE" });
-    if (response.ok) setRules((current) => current?.filter((rule) => rule.id !== id) ?? []);
-  };
-  return (
-    <div className="rounded-xl bg-card p-3">
-      <div className="text-[14px] font-medium text-ink">{polish ? "Zapamiętane zgody" : "Remembered approvals"}</div>
-      <div className="mt-0.5 text-[12px] text-ink-secondary">
-        {polish ? "Akcje dozwolone przez opcję „Allow for all”." : "Actions allowed with “Allow for all”."}
-      </div>
-      {rules?.length ? (
-        <div className="mt-3 divide-y divide-hairline/40">
-          {rules.map((rule) => (
-            <div key={rule.id} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
-              <span className="min-w-0 flex-1 truncate text-[13px] text-ink" title={rule.label}>{rule.label}</span>
-              <button type="button" onClick={() => void remove(rule.id)} aria-label={`${polish ? "Cofnij" : "Revoke"} ${rule.label}`} className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-danger">
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : rules ? <div className="mt-3 text-[13px] text-ink-secondary">{polish ? "Brak zapamiętanych zgód" : "No remembered approvals"}</div> : null}
-    </div>
-  );
-}
 
 function BotSharing({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
@@ -137,7 +96,7 @@ function BotSharing({ bot }: { bot: Bot }) {
 type AppearanceMode = "closed" | "bot" | "photo";
 
 export function SettingsPanel({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
+  const { dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [query, setQuery] = useState("");
   // Kliknięcie awatara otwiera panel wyglądu; wybór konkretnego trybu odbywa
@@ -412,7 +371,6 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           </div>
 
           <EngineAutonomy key={`autonomy-${bot.id}`} bot={bot} />
-          <ApprovalRules key={`approval-rules-${bot.id}-${state.workspaceVersion}`} bot={bot} />
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-3">
             <div>
               <div className="text-[14px] font-medium text-ink">
