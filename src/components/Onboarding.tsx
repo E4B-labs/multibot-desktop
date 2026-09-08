@@ -7,7 +7,7 @@ import { ArrowLeft, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { authFetch, setSessionToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
-import { copyText, isOnionHost, isReactNativeShell, joinLocalHarness, resolveHost } from "@/lib/shell";
+import { canRemember, copyText, forgetRemembered, isOnionHost, isReactNativeShell, joinLocalHarness, rememberedEntry, rememberProfile, resolveHost, signInRemembered, type RememberedEntry } from "@/lib/shell";
 import type { SetupValues } from "@/types/ogb";
 
 const isElectron = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
@@ -70,6 +70,22 @@ export function joinErrorField(code: string): JoinErrorField {
  * another device by hand as often as pasted, so the labels are part of it. */
 export function credentialsText(values: { serverName: string; address: string; serverPassword: string }): string {
   return `MultiBot server\nName: ${values.serverName}\nAddress: ${values.address}\nPassword: ${values.serverPassword}`;
+}
+
+/** "Sign in as kacper on brave-otter" — the whole point of remembering is that
+ * both names are ON the button, not behind it. A server that never told us its
+ * name falls back to its address; there is always one of the two. */
+export function savedSignInLabel(entry: RememberedEntry, polish: boolean): string {
+  const where = entry.serverName || entry.url;
+  return polish ? `Zaloguj jako ${entry.username} na ${where}` : `Sign in as ${entry.username} on ${where}`;
+}
+
+/** Whether the sign-in screen offers the one-tap. Only a shell can act on a
+ * saved entry, and only a COMPLETE one is worth offering: a button that leads
+ * straight back to the form is worse than no button. */
+export function savedSignIn(entry: RememberedEntry | null, shellCanRemember: boolean): RememberedEntry | null {
+  if (!shellCanRemember || !entry?.username) return null;
+  return entry.serverName || entry.url ? entry : null;
 }
 
 /** What this address can and cannot do, in one sentence, or nothing when the
@@ -208,6 +224,10 @@ const ERROR_TEXTS: Record<string, [string, string]> = {
   "too many attempts": ["Too many attempts. Wait a minute and try again.", "Za dużo prób. Odczekaj minutę i spróbuj ponownie."],
   "invalid recovery credentials": ["That profile name and recovery code do not go together.", "Ta nazwa profilu i kod odzyskiwania do siebie nie pasują."],
   join_grant_invalid: ["The sign-in expired. Enter the server password again.", "Logowanie wygasło. Podaj hasło serwera jeszcze raz."],
+  // Zapamiętane logowanie zniknęło między narysowaniem przycisku a stuknięciem
+  // w niego (inne okno je zapomniało), albo powłoka nie ma czym go odczytać.
+  no_saved_login: ["That saved sign-in is gone. Enter the three values again.", "Zapamiętane logowanie zniknęło. Podaj trzy wartości jeszcze raz."],
+  failed: ["The server refused the sign-in.", "Serwer odrzucił logowanie."],
   // Profile calls. The server's 422 messages are English sentences, not codes,
   // so they are matched verbatim — and said again here in the user's language.
   "invalid username": ["Profile name: 3-32 characters, lowercase letters, digits, dot, dash, underscore.", "Nazwa profilu: 3-32 znaki, małe litery, cyfry, kropka, myślnik, podkreślenie."],
@@ -282,12 +302,27 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  // „Zapamiętaj mnie" domyślnie WŁĄCZONE — i tak nic tu nie zostaje: pięć
+  // wartości trzyma powłoka, zaszyfrowanych kluczem systemowym. Przeglądarka
+  // nie ma czym zapamiętać, więc tam nie ma ani haczyka, ani zapisanego wpisu.
+  const shellRemembers = canRemember();
+  const [remember, setRemember] = useState(true);
+  const [saved, setSaved] = useState<RememberedEntry | null>(null);
   // The browser is inside the server's origin, so its address is not a choice.
   const nativeShell = isElectron || isReactNativeShell();
   // In the desktop shell's remote mode this page is served by a loopback proxy
   // for SOMEBODY ELSE'S server. Everything about setting up a server on this
   // device is wrong there, starting with never entering that path by itself.
   const remoteWindow = typeof window !== "undefined" && Boolean(window.__MULTIBOT_REMOTE__);
+
+  // Zapamiętany wpis czytamy raz, przy wejściu na ekran. Nie zawiera żadnego
+  // hasła — tylko tyle, ile trzeba, żeby napisać, kto i gdzie.
+  useEffect(() => {
+    if (!shellRemembers) return;
+    let alive = true;
+    void rememberedEntry().then((entry) => alive && setSaved(entry));
+    return () => { alive = false; };
+  }, [shellRemembers]);
 
   useEffect(() => {
     // The shell already traded name+password for a grant and reloaded us here.
@@ -373,10 +408,33 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return () => clearTimeout(timer);
   }, [copied]);
 
+  /** Jedno stuknięcie: całą robotę (join i logowanie profilu) robi POWŁOKA,
+   * natywnie, i przeładowuje stronę z gotową sesją — dlatego przy sukcesie ten
+   * formularz zostaje z kręcącym się kółkiem, aż strona zniknie. */
+  const oneTap = async () => {
+    setBusy(true);
+    setErrorCode(null);
+    const result = await signInRemembered();
+    if (result.ok) return;
+    setBusy(false);
+    setErrorCode(result.error);
+    // Wpisu, którego serwer już nie zna, nie ma po co dalej oferować.
+    if (result.error === "no_saved_login" || result.error === "no_such_profile") {
+      forgetRemembered();
+      setSaved(null);
+    }
+  };
+
+  const forgetSaved = () => {
+    forgetRemembered();
+    setSaved(null);
+    setErrorCode(null);
+  };
+
   const signIn = async () => {
     setBusy(true);
     setErrorCode(null);
-    const result = await resolveHost(address.trim(), serverName.trim(), serverPassword);
+    const result = await resolveHost(address.trim(), serverName.trim(), serverPassword, undefined, remember && shellRemembers);
     if (!result.ok) {
       setBusy(false);
       return setErrorCode(result.error);
@@ -433,6 +491,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       const result = (await response.json().catch(() => ({}))) as { accessToken?: string; sessionToken?: string; recoveryCode?: string; error?: string };
       if (!response.ok || !result.accessToken) throw new Error(result.error ?? `auth_failed_${response.status}`);
       setV2AuthToken(result.accessToken);
+      // Druga połowa zapamiętanego logowania. Idzie MOSTEM do powłoki, nigdy do
+      // localStorage i nigdy adresem — i jest bez skutku, jeśli połowa
+      // serwerowa nie czeka (haczyk był odznaczony albo to przeglądarka).
+      if (remember && shellRemembers) rememberProfile(username, profilePassword);
       // A native WebView cannot keep the session cookie, so without this a lost
       // access token is a logout instead of a refresh.
       if (result.sessionToken) setSessionToken(result.sessionToken);
@@ -456,6 +518,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   // Powłoka wybrała już hosta, więc za pierwszym ekranem stoi jej własny wybór
   // hosta, nie ekran wyboru z kreatora — patrz `backLeavesWizard`.
   const leavesWizard = backLeavesWizard(remoteHost, step);
+  const offered = savedSignIn(saved, shellRemembers);
   const goBack = () => {
     setErrorCode(null);
     if (leavesWizard) {
@@ -565,7 +628,22 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === "signin" && (
           <form className="flex flex-col" onSubmit={(event) => { event.preventDefault(); void signIn(); }}>
             <h1 className="text-[18px] font-semibold text-ink">{polish ? "Zaloguj się do serwera" : "Sign in to a server"}</h1>
-            <p className="mt-1 text-[13.5px] text-ink-secondary">{polish ? "Trzy wartości z urządzenia, na którym stoi serwer." : "The three values from the device running the server."}</p>
+            {offered ? (
+              <>
+                {/* Zapamiętany wpis stoi PRZED formularzem: po wylogowaniu to
+                    jest ta jedna rzecz, którą użytkownik chce kliknąć. */}
+                <p className="mt-1 text-[13.5px] text-ink-secondary">{polish ? "Zapamiętane na tym urządzeniu." : "Remembered on this device."}</p>
+                <button type="button" disabled={busy} onClick={() => void oneTap()} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
+                  {busy ? (polish ? "Łączenie…" : "Connecting…") : savedSignInLabel(offered, polish)}
+                </button>
+                <button type="button" onClick={forgetSaved} className="mt-2 self-center text-[12px] text-ink-secondary hover:text-ink">
+                  {polish ? "Zapomnij zapisane logowanie" : "Forget this saved sign-in"}
+                </button>
+                <div className="mt-5 text-[12.5px] text-ink-secondary">{polish ? "Albo zaloguj się na inny serwer albo profil:" : "Or sign in to a different server or profile:"}</div>
+              </>
+            ) : (
+              <p className="mt-1 text-[13.5px] text-ink-secondary">{polish ? "Trzy wartości z urządzenia, na którym stoi serwer." : "The three values from the device running the server."}</p>
+            )}
             <input value={address} onChange={(event) => setAddress(event.target.value)} readOnly={!nativeShell} placeholder="https://192.168.1.42:8799" aria-label={polish ? "Adres serwera" : "Server address"} className={`mt-4 ${inputClass} ${field("address")} ${nativeShell ? "" : "opacity-60"}`} />
             <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder={polish ? "Nazwa serwera" : "Server name"} aria-label={polish ? "Nazwa serwera" : "Server name"} className={`mt-2 ${inputClass} ${field("name")}`} />
             <PasswordField value={serverPassword} onChange={setServerPassword} placeholder={polish ? "Hasło serwera" : "Server password"} autoComplete="off" label={polish ? "Hasło serwera" : "Server password"} invalid={Boolean(field("password"))} />
@@ -574,6 +652,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <button type="button" onClick={() => void window.ogb?.forgetHostCertificate?.(address.trim()).then(() => void signIn())} className="mt-2 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
                 {polish ? "Zaufaj nowemu certyfikatowi" : "Trust the new certificate"}
               </button>
+            )}
+            {shellRemembers && (
+              <label className="mt-3 flex items-center gap-2 text-[13px] text-ink-secondary">
+                <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} className="size-4 accent-[var(--color-accent)]" />
+                {polish ? "Zapamiętaj mnie na tym urządzeniu" : "Remember me on this device"}
+              </label>
             )}
             <button type="submit" disabled={busy} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40">
               {/* Pierwsze połączenie z usługą ukrytą to zbudowanie obwodu, nie

@@ -15,6 +15,7 @@ import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { authFetch, clearAuthToken } from "@/lib/auth";
+import { canRemember, forgetRemembered } from "@/lib/shell";
 import { languageLabel, setLanguage, useLanguage, type Language } from "@/lib/language";
 import { SkinPicker } from "./SkinPicker";
 import { MicrophoneRow } from "./MicrophoneRow";
@@ -145,6 +146,7 @@ export function AccountSessions() {
   const [account, setAccount] = useState<any>(null);
   const [sessions, setSessions] = useState<Array<{ id: string; deviceName: string; lastSeenAt: number }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const [forgot, setForgot] = useState(false);
 
   useEffect(() => {
     void Promise.all([api("/api/auth/me"), api("/api/auth/sessions")])
@@ -170,6 +172,15 @@ export function AccountSessions() {
       {account?.user && <div className="mt-3 rounded-lg bg-inset px-3 py-2 text-[13px] text-ink">{account.user.displayName} <span className="text-ink-secondary">· @{account.user.username} · {account.user.role}</span></div>}
       {sessions.length > 0 && <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">{sessions.map((session) => <div key={session.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{session.deviceName}</span><button type="button" onClick={() => void revoke(session.id)} className="text-ink hover:text-danger">{polish ? "Unieważnij" : "Revoke"}</button></div>)}</div>}
       <div className="mt-3 flex flex-wrap gap-2">
+        {/* Wylogowanie NIE kasuje zapamiętanego logowania — po to ono jest.
+            Kasuje je wyłącznie ta jawna decyzja. Przycisk stoi zawsze, gdy jest
+            powłoka: „zapomnij" bez zapisanego wpisu nic nie robi, a pytanie
+            powłoki o to, czy coś ma, kosztowałoby okrążenie przez most. */}
+        {canRemember() && (
+          <button type="button" onClick={() => { forgetRemembered(); setForgot(true); }} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
+            {forgot ? (polish ? "Zapomniane" : "Forgotten") : polish ? "Zapomnij zapisane logowanie" : "Forget saved sign-in"}
+          </button>
+        )}
         <button type="button" onClick={() => void logout(false)} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">{polish ? "Wyloguj" : "Log out"}</button>
         <button type="button" onClick={() => void logout(true)} className="rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10">{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
       </div>
