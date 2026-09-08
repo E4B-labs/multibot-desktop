@@ -18,13 +18,19 @@ describe("drafty wiadomości per bot", () => {
   });
 });
 
-/** Szerokości z linii, które opisują sam dymek (mają zaokrąglenie 2xl). */
+/** Linie, które opisują sam dymek (mają zaokrąglenie 2xl).
+ *  Samo zaokraglenie nie wystarcza: ma je tez podglad ekranu bota,
+ *  ktory dymkiem nie jest. Padding py-[5px] maja tylko oba dymki. */
+function bubbleLines(): string[] {
+  return chat
+    .split(/\r?\n/)
+    .filter((line) => line.includes("rounded-2xl") && line.includes("py-[5px]"));
+}
+
+/** Szerokości z linii, które opisują sam dymek. */
 function bubbleWidths(): string[] {
   const out: string[] = [];
-  for (const line of chat.split(/\r?\n/)) {
-    // Samo zaokraglenie nie wystarcza: ma je tez podglad ekranu bota,
-    // ktory dymkiem nie jest. Padding py-[5px] maja tylko oba dymki.
-    if (!line.includes("rounded-2xl") || !line.includes("py-[5px]")) continue;
+  for (const line of bubbleLines()) {
     if (!line.includes("max-w-[")) continue;
     const at = line.indexOf("max-w-[") + "max-w-[".length;
     out.push(line.slice(at, line.indexOf("]", at)));
@@ -41,6 +47,21 @@ describe("szerokość dymków czatu", () => {
 
   it("dymek jest szeroki, nie zwężony do jednej trzeciej", () => {
     expect(Number.parseInt(bubbleWidths()[0], 10)).toBeGreaterThanOrEqual(80);
+  });
+
+  // multibot: `max-w-` to sufit, nie szerokość — dymek jest elementem flexa,
+  // więc kurczy się do treści i jednoliniowa odpowiedź bota („Sesja wygasła,
+  // loguję się ponownie.") zajmuje tyle, ile potrzebuje. `w-full` w tej samej
+  // klasie zamienia sufit w szerokość na sztywno i każdy dymek staje się
+  // pasem na całą kolumnę. Mobilna kopia webui zrobiła dokładnie to (Kacper
+  // 08.09, zrzut z telefonu), stąd strażnik po tej stronie.
+  it("dymek ma sufit szerokości, a nie sztywną pełną szerokość", () => {
+    const lines = bubbleLines();
+    expect(lines.length, "nie znalazłem linii dymków").toBeGreaterThanOrEqual(2);
+    for (const line of lines) {
+      expect(line, `dymek bez sufitu szerokości: ${line.trim()}`).toContain("max-w-[");
+      expect(line, `dymek przypięty do pełnej szerokości: ${line.trim()}`).not.toMatch(/\bw-full\b/);
+    }
   });
 });
 
