@@ -148,6 +148,10 @@ export interface BotRecord {
   /** Podagent tymczasowy znika po restarcie serwera. */
   temporary?: boolean;
   busy?: boolean;
+  /** multibot: TRWAJĄCA (albo ostatnia) tura ruszyła od innego bota, nie od
+   * człowieka — powłoka nie rysuje z niej banerki „skończył". Nie kasujemy po
+   * turze: następna tura nadpisuje wartość. */
+  botTurn?: boolean;
   /** multibot (D7): bot silnika czeka na człowieka (login, captcha, pytanie) —
    * treść powodu prosto z eventu `attention`, `null`/brak = nie czeka. Jedzie
    * w bots.json, więc powód przeżywa restart tak samo jak po stronie silnika. */
