@@ -351,9 +351,9 @@ describe("peer conversation: a message is a real turn", () => {
       expect([...authors].sort()).toEqual([a, b, c].sort());
       // nobody was refused along the way
       expect(JSON.stringify(room.transcript)).not.toContain("Do not retry");
-      // the owner of the room gets the report once it settles
+      // the owner chat keeps only the directional room activity
       const owner = await h.bot(a);
-      expect(owner.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(true);
+      expect(owner.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(false);
     },
     90_000,
   );
@@ -746,11 +746,10 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
       const room = await h.room(roomId);
       expect(room.status).toBe("done");
       expect(room.transcript).toHaveLength(4);
-      // The owner is told the room finished — but never that a "budget" ran
-      // out: a bot↔bot conversation has no message limit the user is shown.
+      // The room status is visible through the directional activity chip, not
+      // as a technical report in the owner's chat.
       const owner = await h.bot(a);
-      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes(`Room "never stop" finished (done)`))).toBe(true);
-      expect(JSON.stringify(owner.messages)).not.toContain("budget spent");
+      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes(`Room "never stop" finished (done)`))).toBe(false);
     },
     90_000,
   );
@@ -779,7 +778,7 @@ describe("peer conversation: a quiet room still settles", () => {
   });
 
   it(
-    "the sweep closes a room past its wall clock and reports it to the owner",
+    "the sweep closes a room past its wall clock without a technical chat report",
     async () => {
       const owner = await h.newBot("Zegar A", "happy");
       const peer = await h.newBot("Zegar B", "happy");
@@ -788,9 +787,7 @@ describe("peer conversation: a quiet room still settles", () => {
 
       await h.waitFor("the sweep to close the room", 30_000, async () => (await h.room(created.body.id)).status !== "running");
       expect((await h.room(created.body.id)).status).toBe("done");
-      await h.waitFor("the owner to be told", 15_000, async () =>
-        Boolean((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("finished (done)"))));
-      expect(JSON.stringify(await h.bot(owner))).not.toContain("budget spent");
+      expect((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("finished (done)"))).toBe(false);
 
     },
     60_000,

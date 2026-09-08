@@ -563,31 +563,9 @@ function stripMentions(text: string, tagged: Array<{ name: string }>): string {
   return out.trim() || text;
 }
 
-/** Settled room, rendered as text a bot can read in its own chat turn. */
-function roomSummary(roomId: string): string {
-  const final = rooms.get(roomId);
-  return final && final.transcript.length
-    ? final.transcript.map((m) => `${store.bot(m.from)?.name ?? m.from}: ${m.text}`).join("\n\n")
-    : "(the collaboration produced no result)";
-}
-
-/** Tell the bot that opened a room how it ended. */
-function reportRoom(roomId: string, status: string, reason = ""): void {
-  const room = rooms.get(roomId);
-  const owner = room && store.bot(room.ownerBotId);
-  if (!room || !owner) return;
-  const report = store.appendMessage(owner.threadId, {
-    role: "bot",
-    kind: "text",
-    text: `Room "${room.name}" finished (${status})${reason ? ` — ${reason}` : ""}.\n\n${roomSummary(roomId)}`,
-  });
-  broadcast({ kind: "message", threadId: owner.threadId, message: report });
-}
-
-/** Settle a room and report it back to the bot that opened it. Every way a
- * conversation can end — [TASK COMPLETE], spent budget, spent clock — comes
- * through here, so the owner always learns how it went exactly once. */
-function closeRoom(roomId: string, status: "done" | "failed", reason = ""): void {
+/** Settle a room. The directional room chip is the user-facing completion
+ * status; the room transcript remains available by opening that chip. */
+function closeRoom(roomId: string, status: "done" | "failed"): void {
   const room = rooms.get(roomId);
   if (!room || room.status !== "running") return;
   rooms.setStatus(roomId, status);
@@ -596,7 +574,6 @@ function closeRoom(roomId: string, status: "done" | "failed", reason = ""): void
   rooms.setPending(roomId, null); // a closed room owes nobody a turn after a restart
   const settled = rooms.get(roomId);
   if (settled) broadcast({ kind: "room", room: settled });
-  if (!room.groupId) reportRoom(roomId, status, reason);
 }
 
 /** The wall clock only ever fired when somebody tried to send. A conversation
@@ -609,7 +586,7 @@ function sweepExpiredRooms(): void {
     // is nobody's "collaboration result" to report into a private thread.
     if (room.status !== "running" || room.groupId || room.createdAt > cutoff) continue;
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
   }
 }
 
@@ -631,7 +608,7 @@ function resumeRecoveredRooms(): void {
     const last = room.transcript.at(-1);
     const stale = Date.now() - (last?.at ?? room.createdAt) >= collabMaxMs();
     if (!room.pendingTo || !last || stale || budgetLeft(room, max) <= 0) {
-      closeRoom(roomId, "failed", "the server restarted mid-conversation");
+      closeRoom(roomId, "failed");
       continue;
     }
     const to = room.pendingTo;
@@ -639,7 +616,7 @@ function resumeRecoveredRooms(): void {
       .then((delivery) => {
         // A recipient that is gone (deleted bot, revoked permission) can never
         // take that turn: settle the room instead of leaving it open forever.
-        if (delivery.status === "refused") closeRoom(roomId, "failed", "the server restarted mid-conversation");
+        if (delivery.status === "refused") closeRoom(roomId, "failed");
       })
       .catch((error) =>
         console.warn(`[multibot] resuming room ${roomId} failed:`, error instanceof Error ? error.message : error),
@@ -918,12 +895,12 @@ async function deliverPeerMessage(
   const max = collabMaxMessages();
   if (budgetLeft(room, max) <= 0) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
     return refuse("This conversation has run long enough - wrap up and report to the user. Do not retry.");
   }
   if (Date.now() - room.createdAt >= collabMaxMs()) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
     return refuse("This conversation ran out of time - wrap up and report to the user. Do not retry.");
   }
   const ledgerKey = `${room.id}|${fromBotId}|${toBotId}`;
@@ -977,7 +954,7 @@ async function deliverPeerMessage(
     // conversation is over. Leaving the room open just parked it until the wall
     // clock swept it up hours later. A GROUP room is the user's own chat: two
     // polite members must never close the room the user is still writing into.
-    if (!room.groupId && (streak >= 2 || room.bot_ids.length <= 2)) closeRoom(room.id, "done", "");
+    if (!room.groupId && (streak >= 2 || room.bot_ids.length <= 2)) closeRoom(room.id, "done");
     return refuse("An acknowledgement is not a reply. It was recorded; do not send another one.");
   }
   ackStreak.delete(room.id);
@@ -1053,7 +1030,7 @@ async function routePeerReply(
   // ending dressed up as a failure. A group room is the user's own chat and
   // never closes on a member's silence.
   if (!visible || visible === NO_REPLY_MARKER) {
-    if (room && !room.groupId) closeRoom(peer.roomId, "done", "");
+    if (room && !room.groupId) closeRoom(peer.roomId, "done");
     return;
   }
   // A bot whose delegation was off for this turn does not get to answer a peer
@@ -3977,7 +3954,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // budget. A spent budget rotates the room instead of killing the chat.
         let room = rooms.forGroup(gid);
         if (room && budgetLeft(room, collabMaxMessages()) <= 0) {
-          closeRoom(room.id, "done", "");
+          closeRoom(room.id, "done");
           room = null;
         }
         room ??= rooms.create({

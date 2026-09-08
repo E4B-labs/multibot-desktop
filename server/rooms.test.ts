@@ -140,7 +140,7 @@ describe("collaboration rooms", () => {
   });
 
   it(
-    "hands the task over as a real turn, settles on the marker, and reports back to the originator",
+    "hands the task over as a real turn, settles on the marker, and keeps the originator chat clean",
     async () => {
       const selection = { instanceId: "grok", model: "fake-model" };
       const a = (await api("POST", "/api/bots")).body.bot;
@@ -166,7 +166,7 @@ describe("collaboration rooms", () => {
       // when the incoming text reached it, and only a real turn carries it
       expect(room.transcript.some((m: any) => m.text.startsWith("peer seen"))).toBe(true);
 
-      // the originator's 1:1 chat carries the clickable chip and the report
+      // the originator's 1:1 chat carries the clickable chip, not a technical room report
       const aBot = await getBot(a.id);
       const chip = aBot.messages.find((m: any) => m.kind === "room" && m.room?.id === roomId);
       expect(chip).toBeTruthy();
@@ -175,7 +175,7 @@ describe("collaboration rooms", () => {
       expect(aBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "texted" && m.room.ownerBotId === a.id && m.room.bot_ids.includes(b.id))).toBe(true);
       const bBot = await getBot(b.id);
       expect(bBot.messages.some((m: any) => m.kind === "room" && m.room?.event === "received" && m.room.ownerBotId === a.id && m.room.bot_ids.includes(b.id))).toBe(true);
-      expect(aBot.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(true);
+      expect(aBot.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(false);
     },
     60_000,
   );
