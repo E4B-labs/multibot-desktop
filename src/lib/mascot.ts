@@ -140,14 +140,6 @@ export function normalizeState(value: string | null | undefined): MausState | nu
 }
 
 /**
- * Static avatar face used by bot pickers and group members. Group avatars must
- * show the bot's chosen face, not a transient/name-derived status expression.
- */
-export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState {
-  return normalizeState(bot.mascotExpression) ?? "happy";
-}
-
-/**
  * The states worth offering in the appearance picker.
  *
  * The engine carries 40, but many are transient beats the app drives itself
@@ -172,6 +164,14 @@ export const PICKABLE_STATES: MausState[] = [
   "suspicious", // 14
   "proud", // 15
 ];
+
+const PICKABLE_STATE_SET = new Set<MausState>(PICKABLE_STATES);
+
+/** Static face for group members, restricted to expressions offered by the picker. */
+export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState {
+  const state = normalizeState(bot.mascotExpression);
+  return state && PICKABLE_STATE_SET.has(state) ? state : "happy";
+}
 
 type MascotMessage = {
   kind: string;
