@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, Notification, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, Notification, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { addRemoteHost, claimUiOrigin, forgetHostFingerprint, getActiveId, getHostFingerprint, listRemoteHosts, removeHost, resolveLoadTarget, setActiveHost, setHostFingerprint } from "./hosts.mjs";
-import { getJson, joinServer, probeServer } from "./host-probe.mjs";
+import { getJson, joinServer, loginServer, probeServer } from "./host-probe.mjs";
+import { forgetRemembered, readRemembered, rememberedEntry, rememberProfile, writeRemembered } from "./remember.mjs";
 import { fingerprintOfPem, verifyFingerprint } from "./tls-pin.mjs";
 import { isOnionHost, normalizeRemoteUrl, sameDocument, shouldStartLocalHarness } from "./host-resolve.mjs";
 import { isLocalSender } from "./local-origin.mjs";
@@ -337,12 +338,16 @@ const TOR_ERROR_PAGE = errorPage(
 // Never reaches HTTP — src/lib/auth.ts's bootstrapLocalAuthToken() reads
 // window.location.hash client-side, stores it, and erases it before first
 // paint.
-function remoteFragment(token, joinGrant) {
+function remoteFragment(token, joinGrant, sessionToken) {
   const parts = [];
   if (token) parts.push(`access_token=${encodeURIComponent(token)}`);
   // Krótkotrwały bilet z `POST /api/auth/join`, wymieniany przez webui na
   // rejestrację albo logowanie profilu. Nigdy nie trafia do logów ani na dysk.
   if (joinGrant) parts.push(`join=${encodeURIComponent(joinGrant)}`);
+  // Zapamiętane logowanie: profil zalogowała POWŁOKA (`loginServer`), więc
+  // ciastko sesji poszło do node'a, nie do okna. Bez tokenu sesji strona
+  // wstaje zalogowana i wylatuje po 15 minutach, przy pierwszym odnowieniu.
+  if (sessionToken) parts.push(`session=${encodeURIComponent(sessionToken)}`);
   return parts.length ? `#${parts.join("&")}` : "";
 }
 
@@ -430,7 +435,7 @@ function startupTargetMode() {
 /** Decides what `win` should load: a saved remote host, or the existing
  * local flow (packaged server / dev vite), completely unchanged when no
  * remote host is active. */
-async function loadTargetNow(win, { joinGrant } = {}) {
+async function loadTargetNow(win, { joinGrant, accessToken, sessionToken } = {}) {
   const target = resolveLoadTarget();
   if (target.mode === "remote") {
     // multibot: interfejs bierzemy z PACZKI, a z hosta wyłącznie dane. Wcześniej
@@ -470,7 +475,7 @@ async function loadTargetNow(win, { joinGrant } = {}) {
     // Okno mogło zniknąć, kiedy czekaliśmy — dotknięcie `webContents` po tym
     // rzuca „Object has been destroyed" prosto w handler IPC.
     if (win.isDestroyed()) return;
-    const url = `${origin ?? target.url}/${remoteFragment(target.token, joinGrant)}`;
+    const url = `${origin ?? target.url}/${remoteFragment(accessToken || target.token, joinGrant, sessionToken)}`;
     // Ponowne logowanie do TEGO SAMEGO hosta zmienia w adresie wyłącznie
     // fragment (`#join=…`). Dla przeglądarki to nawigacja w obrębie tego samego
     // dokumentu: strona żyje dalej, nikt nie czyta granta, a formularz zostaje
@@ -789,7 +794,7 @@ ipcMain.handle("hosts:probe", async (event, url) => {
 // Hasło serwera i grant nie idą NIGDZIE poza to wywołanie: nie do logów, nie na
 // dysk. W rekordzie hosta lądują wyłącznie adres i odcisk certyfikatu, który
 // właśnie zobaczyliśmy w uścisku dłoni (TOFU — dalsze połączenia go pilnują).
-ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
+ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword, remember) => {
   if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
   let normalized;
   try {
@@ -803,6 +808,11 @@ ipcMain.handle("hosts:join", async (event, url, serverName, serverPassword) => {
   if (!result.ok) return result;
   const host = addRemoteHost({ url: normalized, tlsFingerprint: result.tlsFingerprint });
   setActiveHost(host.id);
+  // „Zapamiętaj mnie": tu ląduje POŁOWA serwerowa. Drugą (nazwa i hasło
+  // profilu) dokłada `remember:profile`, gdy logowanie profilu się uda — tego
+  // stąd nie widać, bo robi je strona. Odznaczony haczyk kasuje poprzedni wpis:
+  // logowanie bez zapamiętania nie ma prawa zostawić starych haseł na dysku.
+  rememberServerHalf(remember ? { url: normalized, serverName, serverPassword } : null);
   // Host jest już zapisany i aktywny, więc nieudane przeładowanie okna nie
   // czyni z udanego logowania błędu — najwyżej trzeba je powtórzyć albo
   // uruchomić apkę ponownie. Rzucenie tutaj wywróciłoby onboarding po tym,
@@ -850,6 +860,79 @@ ipcMain.handle("setup:join", async (event, serverName, serverPassword) => {
   const url = localHarnessUrl(SERVER_PORT);
   const result = await joinServer(url, { serverName, serverPassword, pin: verifyOnlyPin(url) });
   return result.ok ? { ok: true, joinGrant: result.joinGrant } : result;
+});
+
+// ── zapamiętane logowanie ──────────────────────────────────────────────────
+// Pięć wartości leży TYLKO tutaj, zaszyfrowanych kluczem systemowym
+// (electron/remember.mjs). Renderer nie dostaje z nich ani jednego hasła —
+// tylko adres, nazwę serwera i nazwę profilu, czyli tyle, ile trzeba, żeby
+// napisać na przycisku „zaloguj jako X na Y".
+function rememberFile() {
+  return path.join(app.getPath("userData"), "remembered-login.json");
+}
+
+/** Zapisuje połowę serwerową albo kasuje cały wpis. Brak magazynu poświadczeń
+ * (Linux bez pęku kluczy) nie jest błędem logowania — po prostu nie ma czym
+ * zapamiętać, więc nie zapamiętujemy. */
+function rememberServerHalf(record) {
+  try {
+    if (record) writeRemembered(rememberFile(), safeStorage, record);
+    else forgetRemembered(rememberFile());
+  } catch (err) {
+    console.warn("[multibot] nie udało się zapisać zapamiętanego logowania:", err?.message ?? err);
+  }
+}
+
+ipcMain.handle("remember:get", (event) => (isLocalSender(event) ? rememberedEntry(rememberFile(), safeStorage) : null));
+
+ipcMain.handle("remember:forget", (event) => (isLocalSender(event) ? forgetRemembered(rememberFile()) : false));
+
+// Druga połowa wpisu, po udanym logowaniu profilu. Poświadczenia idą tędy, a
+// nie fragmentem adresu: fragment jedzie w drugą stronę i ląduje w historii
+// nawigacji, a to jest hasło profilu.
+ipcMain.handle("remember:profile", (event, username, password) => {
+  if (!isLocalSender(event)) return false;
+  try {
+    return rememberProfile(rememberFile(), safeStorage, username, password);
+  } catch (err) {
+    console.warn("[multibot] nie udało się dopisać profilu do zapamiętanego logowania:", err?.message ?? err);
+    return false;
+  }
+});
+
+// Jedno stuknięcie: powłoka robi NATYWNIE i join, i logowanie profilu, a okno
+// dostaje gotową sesję fragmentem. Strona nie widzi po drodze żadnego hasła.
+ipcMain.handle("remember:signin", async (event) => {
+  if (!isLocalSender(event)) return { ok: false, error: "forbidden" };
+  const record = readRemembered(rememberFile(), safeStorage);
+  if (!record?.url || !record.username || !record.password) return { ok: false, error: "no_saved_login" };
+  const via = await onionTransport(record.url);
+  if (via.error) return { ok: false, error: via.error };
+  const joined = await joinServer(record.url, {
+    serverName: record.serverName,
+    serverPassword: record.serverPassword,
+    pin: verifyOnlyPin(record.url),
+    ...via,
+  });
+  if (!joined.ok) return joined;
+  const signedIn = await loginServer(record.url, {
+    joinGrant: joined.joinGrant,
+    username: record.username,
+    password: record.password,
+    deviceName: `MultiBot desktop (${os.platform()})`,
+    ...via,
+  });
+  if (!signedIn.ok) return signedIn;
+  const host = addRemoteHost({ url: record.url, tlsFingerprint: joined.tlsFingerprint });
+  setActiveHost(host.id);
+  if (mainWindow) {
+    try {
+      await loadActiveTarget(mainWindow, { accessToken: signedIn.accessToken, sessionToken: signedIn.sessionToken });
+    } catch (err) {
+      console.warn("[multibot] zalogowano, ale okno się nie przeładowało:", err?.message ?? err);
+    }
+  }
+  return { ok: true };
 });
 
 // Serwer wystawił sobie nowy certyfikat (przeniesiony host, nowy adres w SAN) —
