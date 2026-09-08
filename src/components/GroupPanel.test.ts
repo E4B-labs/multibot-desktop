@@ -31,6 +31,13 @@ describe("GroupPanel", () => {
       for (const tag of tags) expect(tag).toContain("animated={false}");
     }
   });
+
+  it("używa wybranej ekspresji awatara zamiast stanu wynikającego z nazwy", () => {
+    for (const source of [panel, members]) {
+      expect(source).toContain("pickerAvatarState(");
+      expect(source).not.toContain("stateForBot(");
+    }
+  });
 });
 
 describe("GroupMembersPanel", () => {

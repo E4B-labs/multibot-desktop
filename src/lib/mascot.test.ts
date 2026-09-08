@@ -4,6 +4,7 @@ import {
   MAUS_COLORS,
   MAUS_COLOR_NAMES,
   MODEL_LOAD_MS,
+  pickerAvatarState,
   stripMascotState,
   type MascotBotProfile,
   type RuntimePhase,
@@ -134,5 +135,17 @@ describe("paleta maskotki", () => {
   it("MAUS_COLORS pokrywa całą allowlistę nazw", () => {
     expect(Object.keys(MAUS_COLORS).sort()).toEqual([...MAUS_COLOR_NAMES].sort());
     for (const name of MAUS_COLOR_NAMES) expect(MAUS_COLORS[name]).toMatch(/^#[0-9A-Fa-f]{6}$/);
+  });
+});
+
+describe("pickerAvatarState", () => {
+  it("keeps a selectable stored face", () => {
+    expect(pickerAvatarState({ mascotExpression: "curious" })).toBe("curious");
+  });
+
+  it("uses a calm picker face for missing, unknown, or transient states", () => {
+    expect(pickerAvatarState({ mascotExpression: null })).toBe("happy");
+    expect(pickerAvatarState({ mascotExpression: "not-a-state" })).toBe("happy");
+    expect(pickerAvatarState({ mascotExpression: "thinking-dots" })).toBe("happy");
   });
 });

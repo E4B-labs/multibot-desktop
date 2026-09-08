@@ -165,6 +165,14 @@ export const PICKABLE_STATES: MausState[] = [
   "proud", // 15
 ];
 
+const PICKABLE_STATE_SET = new Set<MausState>(PICKABLE_STATES);
+
+/** Static face for group members, restricted to expressions offered by the picker. */
+export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState {
+  const state = normalizeState(bot.mascotExpression);
+  return state && PICKABLE_STATE_SET.has(state) ? state : "happy";
+}
+
 type MascotMessage = {
   kind: string;
   at?: number;
