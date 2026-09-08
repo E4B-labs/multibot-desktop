@@ -22,7 +22,7 @@ import { OptionCard } from "./OptionCard";
 import { ComputerHandoffCard } from "./ComputerHandoffCard";
 import { ConnectCard } from "./ConnectCard";
 import { SecretRequestCard } from "./SecretRequestCard";
-import { Composer } from "./Composer";
+import { Composer, setBotDraft } from "./Composer";
 // multibot: TTS głośniczek przy wiadomościach bota (tylko z kluczem TTS)
 import { SpeakButton } from "./SpeakButton";
 import { ModelPicker } from "./ModelPicker";
@@ -434,6 +434,13 @@ export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const scrollRef = useRef<HTMLDivElement>(null);
+  // ChatView stays mounted while sidebar selection changes. Keeping drafts in
+  // this map makes the textarea follow the selected bot without overwriting
+  // the text that belongs to another conversation.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const setDraft = useCallback((text: string) => {
+    setDrafts((current) => setBotDraft(current, bot.id, text));
+  }, [bot.id]);
 
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
@@ -806,7 +813,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         </button>
       )}
 
-      <Composer bot={bot} />
+      <Composer bot={bot} draft={drafts[bot.id] ?? ""} onDraftChange={setDraft} />
 
     </main>
   );

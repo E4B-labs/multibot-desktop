@@ -8,6 +8,16 @@ import { describe, expect, it } from "vitest";
 // 29.08 (35% → 90%) drugie miejsce zostało w tyle. Stąd ten test.
 const chat = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8");
 
+// Vitest działa tu bez DOM, więc integrację ChatView → Composer sprawdzamy na
+// źródle; sama reguła aktualizacji mapy ma test wykonawczy w Composer.test.ts.
+describe("drafty wiadomości per bot", () => {
+  it("przekazuje Composerowi draft aktywnego bota i callback zapisujący po jego id", () => {
+    expect(chat).toContain("const [drafts, setDrafts] = useState<Record<string, string>>({});");
+    expect(chat).toContain("setBotDraft(current, bot.id, text)");
+    expect(chat).toContain('<Composer bot={bot} draft={drafts[bot.id] ?? ""} onDraftChange={setDraft} />');
+  });
+});
+
 /** Szerokości z linii, które opisują sam dymek (mają zaokrąglenie 2xl). */
 function bubbleWidths(): string[] {
   const out: string[] = [];
