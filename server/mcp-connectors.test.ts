@@ -63,12 +63,15 @@ describe("mcp-connectors registry", () => {
     expect(() => saveConnector("x", { transport: { type: "http", url: "file:///etc/passwd" } })).toThrow(/http\(s\)/);
   });
 
-  it("names the catalog card after the connector and tags its host", () => {
+  // `domain` z karty wyleciało razem z faviconem z google.com — ikony biorą
+  // się teraz z bundla (src/lib/appIcons.ts) albo z monogramu, więc host
+  // konektora nie ma już czego karmić.
+  it("names the catalog card after the connector", () => {
     saveConnector("echo", STDIO);
     saveConnector("firma", { transport: HTTP.transport }); // bez `name` → id
     expect(connectorCards()).toEqual([
-      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, domain: null },
-      { slug: "firma", label: "firma", blurb: "http: https://mcp.firma.dev/mcp", logo: null, domain: "mcp.firma.dev" },
+      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null },
+      { slug: "firma", label: "firma", blurb: "http: https://mcp.firma.dev/mcp", logo: null },
     ]);
   });
 });

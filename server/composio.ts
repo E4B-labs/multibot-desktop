@@ -112,38 +112,96 @@ export interface ToolkitCard {
   label: string;
   blurb: string;
   logo: string | null;
-  /** used for the client-side favicon fallback when logo is null/broken */
-  domain: string | null;
 }
 
-// Curated fallback — the services agentcal's connectors page ships plus the
-// long marketplace tail. Logos resolve client-side:
-// logo → favicon(domain) → monogram.
+// Curated fallback — what the marketplace shows without a Composio project
+// API key, czyli w praktyce u każdego, kto klucza nie wpisał. Ikony biorą się
+// z `src/lib/appIcons.ts` po slugu (bundle, zero żądań), więc karta wygląda
+// tak samo na desktopie i na telefonie.
+//
+// KAŻDY slug tu musi być prawdziwym toolkitem Composio, bo inaczej „Dodaj"
+// kończy się błędem z connect.composio.dev. Weryfikacja: slug występuje
+// w https://docs.composio.dev/toolkits/<slug> (sitemap docs to pełna lista).
+// Stąd `twitter`, nie `x`, i stąd brak Zapiera — Composio go nie ma wcale.
 const CURATED: ToolkitCard[] = [
-  { slug: "slack", label: "Slack", blurb: "Post updates and read channels", domain: "slack.com", logo: null },
-  { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", domain: "github.com", logo: null },
-  { slug: "gmail", label: "Gmail", blurb: "Read and send email", domain: "gmail.com", logo: null },
-  { slug: "googlecalendar", label: "Google Calendar", blurb: "Read and create events", domain: "calendar.google.com", logo: null },
-  { slug: "googlesheets", label: "Google Sheets", blurb: "Read and update spreadsheets", domain: "sheets.google.com", logo: null },
-  { slug: "googledocs", label: "Google Docs", blurb: "Read and write documents", domain: "docs.google.com", logo: null },
-  { slug: "googledrive", label: "Google Drive", blurb: "Browse and manage files", domain: "drive.google.com", logo: null },
-  { slug: "notion", label: "Notion", blurb: "Pages and databases", domain: "notion.so", logo: null },
-  { slug: "linear", label: "Linear", blurb: "Issues and project tracking", domain: "linear.app", logo: null },
-  { slug: "sentry", label: "Sentry", blurb: "Errors and alerts", domain: "sentry.io", logo: null },
-  { slug: "posthog", label: "PostHog", blurb: "Analytics, feature flags, experiments", domain: "posthog.com", logo: null },
-  { slug: "discord", label: "Discord", blurb: "Messages and channels", domain: "discord.com", logo: null },
-  { slug: "x", label: "X (Twitter)", blurb: "Post and read on X", domain: "x.com", logo: null },
-  { slug: "reddit", label: "Reddit", blurb: "Browse and post", domain: "reddit.com", logo: null },
-  { slug: "zapier", label: "Zapier", blurb: "Connect 9,000+ apps", domain: "zapier.com", logo: null },
-  { slug: "hubspot", label: "HubSpot", blurb: "CRM search & updates", domain: "hubspot.com", logo: null },
-  { slug: "salesforce", label: "Salesforce", blurb: "CRM records and reports", domain: "salesforce.com", logo: null },
-  { slug: "jira", label: "Jira", blurb: "Issues and sprints", domain: "atlassian.com", logo: null },
-  { slug: "asana", label: "Asana", blurb: "Tasks and projects", domain: "asana.com", logo: null },
-  { slug: "trello", label: "Trello", blurb: "Boards and cards", domain: "trello.com", logo: null },
-  { slug: "dropbox", label: "Dropbox", blurb: "Files and folders", domain: "dropbox.com", logo: null },
-  { slug: "airtable", label: "Airtable", blurb: "Bases and records", domain: "airtable.com", logo: null },
-  { slug: "figma", label: "Figma", blurb: "Files and comments", domain: "figma.com", logo: null },
-  { slug: "stripe", label: "Stripe", blurb: "Payments and customers", domain: "stripe.com", logo: null },
+  // ── praca i pliki ──
+  { slug: "gmail", label: "Gmail", blurb: "Read and send email", logo: null },
+  { slug: "googlecalendar", label: "Google Calendar", blurb: "Read and create events", logo: null },
+  { slug: "googledrive", label: "Google Drive", blurb: "Browse and manage files", logo: null },
+  { slug: "googlesheets", label: "Google Sheets", blurb: "Read and update spreadsheets", logo: null },
+  { slug: "googledocs", label: "Google Docs", blurb: "Read and write documents", logo: null },
+  { slug: "googlebigquery", label: "BigQuery", blurb: "Query warehouse datasets", logo: null },
+  { slug: "google_maps", label: "Google Maps", blurb: "Places, routes and geocoding", logo: null },
+  { slug: "outlook", label: "Outlook", blurb: "Microsoft mail and calendar", logo: null },
+  { slug: "microsoft_teams", label: "Microsoft Teams", blurb: "Messages and channels", logo: null },
+  { slug: "notion", label: "Notion", blurb: "Pages and databases", logo: null },
+  { slug: "coda", label: "Coda", blurb: "Docs, tables and automations", logo: null },
+  { slug: "confluence", label: "Confluence", blurb: "Wiki spaces and pages", logo: null },
+  { slug: "todoist", label: "Todoist", blurb: "Tasks and projects", logo: null },
+  { slug: "calendly", label: "Calendly", blurb: "Scheduling links and bookings", logo: null },
+  { slug: "zoom", label: "Zoom", blurb: "Meetings and recordings", logo: null },
+  { slug: "dropbox", label: "Dropbox", blurb: "Files and folders", logo: null },
+  { slug: "box", label: "Box", blurb: "Files and folders", logo: null },
+  // ── kod i produkcja ──
+  { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", logo: null },
+  { slug: "gitlab", label: "GitLab", blurb: "Issues, merge requests, pipelines", logo: null },
+  { slug: "jira", label: "Jira", blurb: "Issues and sprints", logo: null },
+  { slug: "linear", label: "Linear", blurb: "Issues and project tracking", logo: null },
+  { slug: "sentry", label: "Sentry", blurb: "Errors and alerts", logo: null },
+  { slug: "datadog", label: "Datadog", blurb: "Metrics, logs and monitors", logo: null },
+  { slug: "pagerduty", label: "PagerDuty", blurb: "Incidents and on-call", logo: null },
+  { slug: "supabase", label: "Supabase", blurb: "Postgres, auth and storage", logo: null },
+  { slug: "vercel", label: "Vercel", blurb: "Deployments and projects", logo: null },
+  // ── rozmowy i social ──
+  { slug: "slack", label: "Slack", blurb: "Post updates and read channels", logo: null },
+  { slug: "discord", label: "Discord", blurb: "Messages and channels", logo: null },
+  { slug: "twitter", label: "X (Twitter)", blurb: "Post and read on X", logo: null },
+  { slug: "reddit", label: "Reddit", blurb: "Browse and post", logo: null },
+  { slug: "linkedin", label: "LinkedIn", blurb: "Posts and company pages", logo: null },
+  { slug: "youtube", label: "YouTube", blurb: "Videos, playlists and stats", logo: null },
+  { slug: "instagram", label: "Instagram", blurb: "Posts and insights", logo: null },
+  { slug: "facebook", label: "Facebook", blurb: "Pages and posts", logo: null },
+  { slug: "tiktok", label: "TikTok", blurb: "Videos and analytics", logo: null },
+  { slug: "spotify", label: "Spotify", blurb: "Playlists and playback", logo: null },
+  // ── biznes ──
+  { slug: "hubspot", label: "HubSpot", blurb: "CRM search and updates", logo: null },
+  { slug: "salesforce", label: "Salesforce", blurb: "CRM records and reports", logo: null },
+  { slug: "shopify", label: "Shopify", blurb: "Orders, products, customers", logo: null },
+  { slug: "stripe", label: "Stripe", blurb: "Payments and customers", logo: null },
+  { slug: "mailchimp", label: "Mailchimp", blurb: "Campaigns and audiences", logo: null },
+  { slug: "intercom", label: "Intercom", blurb: "Conversations and contacts", logo: null },
+  { slug: "zendesk", label: "Zendesk", blurb: "Tickets and users", logo: null },
+  { slug: "asana", label: "Asana", blurb: "Tasks and projects", logo: null },
+  { slug: "trello", label: "Trello", blurb: "Boards and cards", logo: null },
+  { slug: "clickup", label: "ClickUp", blurb: "Tasks, docs and goals", logo: null },
+  { slug: "monday", label: "monday.com", blurb: "Boards and items", logo: null },
+  { slug: "airtable", label: "Airtable", blurb: "Bases and records", logo: null },
+  { slug: "make", label: "Make", blurb: "Automate across 2,000+ apps", logo: null },
+  { slug: "posthog", label: "PostHog", blurb: "Analytics, feature flags, experiments", logo: null },
+  { slug: "mixpanel", label: "Mixpanel", blurb: "Product analytics and funnels", logo: null },
+  { slug: "snowflake", label: "Snowflake", blurb: "Warehouse queries", logo: null },
+  { slug: "contentful", label: "Contentful", blurb: "Content models and entries", logo: null },
+  // ── projekt i web ──
+  { slug: "figma", label: "Figma", blurb: "Files and comments", logo: null },
+  { slug: "canva", label: "Canva", blurb: "Designs and folders", logo: null },
+  { slug: "miro", label: "Miro", blurb: "Boards and widgets", logo: null },
+  { slug: "webflow", label: "Webflow", blurb: "Sites, CMS and publishing", logo: null },
+  { slug: "wordpress_com", label: "WordPress.com", blurb: "Posts, pages and media", logo: null },
+  // ── AI ──
+  { slug: "openai", label: "OpenAI", blurb: "Models, files and assistants", logo: null },
+  { slug: "gemini", label: "Gemini", blurb: "Google's multimodal models", logo: null },
+  { slug: "perplexityai", label: "Perplexity", blurb: "Answers with citations", logo: null },
+  { slug: "openrouter", label: "OpenRouter", blurb: "One key, many models", logo: null },
+  { slug: "mistral_ai", label: "Mistral AI", blurb: "Open-weight and hosted models", logo: null },
+  { slug: "groqcloud", label: "Groq", blurb: "Very fast model inference", logo: null },
+  { slug: "hugging_face", label: "Hugging Face", blurb: "Models, datasets and spaces", logo: null },
+  { slug: "replicate", label: "Replicate", blurb: "Run and fine-tune models", logo: null },
+  { slug: "elevenlabs", label: "ElevenLabs", blurb: "Text to speech and voices", logo: null },
+  { slug: "higgsfield_mcp", label: "Higgsfield", blurb: "Generate images, video and audio", logo: null },
+  { slug: "runway", label: "Runway", blurb: "Generative video and editing", logo: null },
+  { slug: "firecrawl", label: "Firecrawl", blurb: "Scrape and crawl to markdown", logo: null },
+  { slug: "exa", label: "Exa", blurb: "Neural web search for agents", logo: null },
+  { slug: "apify", label: "Apify", blurb: "Actors for scraping and automation", logo: null },
 ];
 
 let toolkitCache: { at: number; cards: ToolkitCard[] } | null = null;
@@ -172,7 +230,6 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
             label: t.name ?? t.slug ?? "",
             blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
             logo: t.meta?.logo ?? t.logo ?? null,
-            domain: null,
           }));
           toolkitCache = { at: Date.now(), cards };
           return { cards, source: "api" };

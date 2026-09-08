@@ -94,16 +94,7 @@ export function connectorCards(cfg: AppConfig = loadConfig()) {
         ? `stdio: ${[c.transport.command, ...(c.transport.args ?? [])].join(" ")}`.slice(0, 90)
         : `${c.transport.type}: ${c.transport.url}`.slice(0, 90),
     logo: null as string | null,
-    domain: c.transport.type === "stdio" ? null : hostOf(c.transport.url),
   }));
-}
-
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
 }
 
 /** Podłącz (albo nadpisz) konektor. Zwraca zapisany wpis. */

@@ -767,7 +767,7 @@ describe("harness HTTP API", () => {
     expect(catalog.status).toBe(200);
     const custom = catalog.body.cards.filter((c: { source: string }) => c.source === "custom");
     expect(custom).toEqual([
-      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, domain: null, source: "custom" },
+      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, source: "custom" },
     ]);
     // Composio zostaje primary: jego karty są w tym samym katalogu, otagowane.
     expect(catalog.body.cards.filter((c: { source: string }) => c.source === "composio").length).toBeGreaterThan(0);
