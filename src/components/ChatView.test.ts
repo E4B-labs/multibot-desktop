@@ -60,7 +60,8 @@ describe("szerokość dymków czatu", () => {
     expect(lines.length, "nie znalazłem linii dymków").toBeGreaterThanOrEqual(2);
     for (const line of lines) {
       expect(line, `dymek bez sufitu szerokości: ${line.trim()}`).toContain("max-w-[");
-      expect(line, `dymek przypięty do pełnej szerokości: ${line.trim()}`).not.toMatch(/\bw-full\b/);
+      // `\b` nie wystarcza: w `max-w-full` przed „w" też stoi granica słowa.
+      expect(line, `dymek przypięty do pełnej szerokości: ${line.trim()}`).not.toMatch(/(?<![-\w])w-full\b/);
     }
   });
 });
