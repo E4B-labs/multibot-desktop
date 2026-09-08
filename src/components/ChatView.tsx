@@ -18,6 +18,7 @@ import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSession
 import { MausAvatar } from "./Avatar";
 import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { CopyMessageButton } from "./CopyMessageButton";
 import { OptionCard } from "./OptionCard";
 import { ComputerHandoffCard } from "./ComputerHandoffCard";
 import { ConnectCard } from "./ConnectCard";
@@ -213,6 +214,8 @@ function Bubble({
         <div className={cn("mt-1 flex items-center gap-1.5 text-[10px] leading-none", user ? "justify-end" : "justify-start")}>
           {/* multibot: TTS — see SpeakButton.tsx; renders null with no voice key */}
           {!user && <SpeakButton text={text} />}
+          {/* multibot: kopiowanie zrodla wiadomosci - patrz CopyMessageButton.tsx */}
+          {!user && <CopyMessageButton text={text} />}
         </div>
       </div>
     </div>
