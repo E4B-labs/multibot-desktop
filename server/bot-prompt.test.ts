@@ -96,6 +96,10 @@ describe("botSystemPrompt", () => {
     expect(noAgents).toContain("Peer Ala replied");
   });
 
+  it("na pierwsze powitanie od peera odpowiada zamiast milczeć", () => {
+    expect(prompt(ALL)).toContain("A direct greeting from another bot always gets a brief reply");
+  });
+
   it("w trybie autonomicznym nie każe prosić o zgodę", () => {
     const text = botSystemPrompt(bot, {
       isolated: false,
