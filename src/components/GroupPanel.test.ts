@@ -54,16 +54,21 @@ describe("GroupMembersPanel", () => {
 });
 
 describe("wiersz grupy w Sidebarze", () => {
-  it("ma małe, statyczne awatary i znaczek +N na drugim z nich", () => {
-    const start = sidebar.indexOf("groupAvatarSplit(members");
+  it("układa awatary w skos i zastępuje przedni kółkiem +N", () => {
+    const start = sidebar.indexOf("groupAvatarStack(members");
     const end = sidebar.indexOf("function GroupCreateForm", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
-    expect(row).toContain("size={20}");
-    expect(row).not.toContain("size={40}");
-    expect(row).toContain("i === shown.length - 1 && overflow > 0");
+    // kafelek 48 px jak awatar bota, tylny mniejszy w lewym górnym rogu
+    expect(row).toContain("relative size-12 shrink-0");
+    expect(row).toContain("absolute left-0 top-0");
+    expect(row).toContain("size={28}");
+    // przedni w prawym dolnym rogu, z obwódką w kolorze tła wiersza
+    expect(row).toContain("absolute bottom-0 right-0");
+    expect(row).toContain("ring-2 ring-panel");
+    expect(row).toContain("+{plus}");
     // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
-    expect(row).toContain("{...groupMemberAvatarProps(b)}");
+    expect(row).toContain("{...groupMemberAvatarProps(shown[0])}");
   });
 });
