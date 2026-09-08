@@ -20,6 +20,7 @@ import { languageLabel, setLanguage, useLanguage, type Language } from "@/lib/la
 import { SkinPicker } from "./SkinPicker";
 import { MicrophoneRow } from "./MicrophoneRow";
 import { BotSettingsCard } from "./BotSettingsCard";
+import { Skeleton, Spinner } from "./Loading";
 import { applyMotionMode, readMotionMode, type MotionMode } from "@/lib/motion";
 import { readDesktopNotifications, requestBrowserNotifications, setDesktopNotifications } from "@/lib/notifications";
 
@@ -147,6 +148,8 @@ export function AccountSessions() {
   const [sessions, setSessions] = useState<Array<{ id: string; deviceName: string; lastSeenAt: number }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [forgot, setForgot] = useState(false);
+  const [leaving, setLeaving] = useState<"one" | "all" | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
 
   useEffect(() => {
     void Promise.all([api("/api/auth/me"), api("/api/auth/sessions")])
@@ -155,13 +158,19 @@ export function AccountSessions() {
   }, []);
 
   const logout = async (all: boolean) => {
+    if (leaving) return;
+    setLeaving(all ? "all" : "one");
     await authFetch(`/api/auth/logout${all ? "-all" : ""}`, { method: "POST" }).catch(() => {});
     clearAuthToken();
     window.location.reload();
   };
 
   const revoke = async (id: string) => {
-    if (!(await authFetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" })).ok) return;
+    if (revoking) return;
+    setRevoking(id);
+    const ok = (await authFetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null))?.ok;
+    setRevoking(null);
+    if (!ok) return;
     setSessions((current) => current.filter((session) => session.id !== id));
   };
 
@@ -169,8 +178,9 @@ export function AccountSessions() {
     <div className="mt-4 rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">{polish ? "Konto i sesje" : "Account & sessions"}</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">{polish ? "Każde urządzenie loguje się własną sesją. Tokeny techniczne nie są pokazywane." : "Each device has its own session. Technical tokens are never displayed."}</div>
+      {!account && !error && <div className="mt-3 space-y-2"><Skeleton className="h-9" /><Skeleton className="h-4 w-2/3" /><Skeleton className="h-4 w-1/2" /></div>}
       {account?.user && <div className="mt-3 rounded-lg bg-inset px-3 py-2 text-[13px] text-ink">{account.user.displayName} <span className="text-ink-secondary">· @{account.user.username} · {account.user.role}</span></div>}
-      {sessions.length > 0 && <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">{sessions.map((session) => <div key={session.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{session.deviceName}</span><button type="button" onClick={() => void revoke(session.id)} className="text-ink hover:text-danger">{polish ? "Unieważnij" : "Revoke"}</button></div>)}</div>}
+      {sessions.length > 0 && <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">{sessions.map((session) => <div key={session.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{session.deviceName}</span><button type="button" disabled={revoking !== null} onClick={() => void revoke(session.id)} className="flex items-center gap-1 text-ink hover:text-danger disabled:opacity-50">{revoking === session.id && <Spinner size={12} />}{polish ? "Unieważnij" : "Revoke"}</button></div>)}</div>}
       <div className="mt-3 flex flex-wrap gap-2">
         {/* Wylogowanie NIE kasuje zapamiętanego logowania — po to ono jest.
             Kasuje je wyłącznie ta jawna decyzja. Przycisk stoi zawsze, gdy jest
@@ -181,8 +191,8 @@ export function AccountSessions() {
             {forgot ? (polish ? "Zapomniane" : "Forgotten") : polish ? "Zapomnij zapisane logowanie" : "Forget saved sign-in"}
           </button>
         )}
-        <button type="button" onClick={() => void logout(false)} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">{polish ? "Wyloguj" : "Log out"}</button>
-        <button type="button" onClick={() => void logout(true)} className="rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10">{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
+        <button type="button" disabled={leaving !== null} onClick={() => void logout(false)} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{leaving === "one" && <Spinner size={13} />}{polish ? "Wyloguj" : "Log out"}</button>
+        <button type="button" disabled={leaving !== null} onClick={() => void logout(true)} className="flex items-center gap-1.5 rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10 disabled:opacity-50">{leaving === "all" && <Spinner size={13} />}{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
       </div>
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
@@ -219,6 +229,7 @@ function CustomModels() {
   const [checking, setChecking] = useState<string | null>(null);
   const [checks, setChecks] = useState<Record<string, { reachable: boolean; tools: string; error?: string }>>({});
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const polish = useLanguage() === "pl";
   const inputClass =
     "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none";
@@ -229,7 +240,8 @@ function CustomModels() {
         const rows = Array.isArray(body) ? body : body.models ?? [];
         setModels(rows.map(readCustomModel).filter((item: CustomModel) => item.id));
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     reload();
@@ -293,6 +305,7 @@ function CustomModels() {
       <div className="mt-0.5 text-[13px] text-ink-secondary">
         {polish ? "Adres zgodny z OpenAI. Lokalne Ollama, vLLM i LM Studio nie wymagają klucza." : "OpenAI-compatible URL. Local Ollama, vLLM and LM Studio need no key."}
       </div>
+      {!loaded && <div className="mt-3 flex flex-col gap-2"><Skeleton className="h-[46px]" /><Skeleton className="h-[46px]" /></div>}
       {models.length > 0 && (
         <div className="mt-3 flex flex-col gap-2">
           {models.map((item) => (
@@ -933,7 +946,9 @@ export function AppSettingsPanel() {
           aria-label={polish ? "Sekcje ustawień" : "Settings sections"}
           className="flex w-[72px] shrink-0 flex-col items-center gap-2 border-r border-hairline/40 bg-panel px-2 py-5"
         >
-          {visibleTabs.map(({ id, Icon, pl, en }) => {
+          {settingsTabs.map(({ id, Icon, pl, en }) => {
+            // Admin needs /api/auth/me: hold its slot instead of popping in late.
+            if (id === "admin" && role !== "owner") return role === "loading" ? <Skeleton key={id} className="size-10" /> : null;
             const label = polish ? pl : en;
             const active = tab === id;
             return (

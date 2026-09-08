@@ -9,7 +9,7 @@
 // SSE `room` odświeżają panel w trakcie tury. `group.messages` zostaje jako
 // zapas dla grup sprzed tej zmiany, które pokoju jeszcze nie mają.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Loader2, Monitor, Users } from "lucide-react";
+import { ArrowDown, Monitor, Users } from "lucide-react";
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { MausAvatar } from "./Avatar";
@@ -19,6 +19,7 @@ import { Composer } from "./Composer";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
+import { Skeleton, Spinner } from "./Loading";
 
 // Ten sam lokalny helper co RoutinesPanel: silnik zwraca błędy jako `{detail}`
 // (FastAPI), przelotka jako `{error}`.
@@ -46,6 +47,7 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [legacy, setLegacy] = useState<Entry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -53,10 +55,12 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
 
   useEffect(() => {
     let alive = true;
+    setHistoryLoading(true);
     api(`/api/groups/${group.id}`)
       .then((saved: { messages?: Array<{ id?: string; from: string; text: string; at: number }> }) =>
         alive && setLegacy((saved.messages ?? []).map((m, i) => ({ id: m.id ?? `legacy-${i}`, from: m.from, text: m.text, at: m.at }))))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive) setHistoryLoading(false); });
     return () => { alive = false; };
   }, [group.id]);
 
@@ -162,7 +166,14 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
           onScroll={() => { if (!follow && atEnd()) setFollow(true); }}
         >
           <div className="flex w-full flex-col gap-1 pb-10">
-            {entries.length === 0 && (
+            {entries.length === 0 && historyLoading && (
+              <div className="mt-4 flex flex-col gap-3">
+                <Skeleton className="h-10 w-[60%] self-end" />
+                <Skeleton className="h-14 w-[75%]" />
+                <Skeleton className="h-10 w-[50%] self-end" />
+              </div>
+            )}
+            {entries.length === 0 && !historyLoading && (
               <div className="mt-8 flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
                 <Users size={22} />
                 <div className="text-[13px] font-medium text-ink">{polish ? "Brak wiadomości" : "No messages yet"}</div>
@@ -210,7 +221,7 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
             )}
             {busy && !answering?.busy && (
               <div className="flex items-center gap-2 px-1 text-[12px] text-ink-secondary">
-                <Loader2 size={12} className="animate-spin" />
+                <Spinner size={12} />
                 {polish ? "Wysyłam do grupy…" : "Sending to the group…"}
               </div>
             )}

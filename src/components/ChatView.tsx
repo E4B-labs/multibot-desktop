@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
+import { Spinner } from "./Loading";
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
 import { AttachmentCard } from "./AttachmentCard";
@@ -267,7 +268,7 @@ function EventPill({ message, polish }: { message: Message; polish: boolean }) {
 
 /** Pulls the full transcript and swaps the chat for the read-only room view. */
 function openRoom(roomId: string, dispatch: ReturnType<typeof useStore>["dispatch"]) {
-  void authFetch(`/api/rooms/${encodeURIComponent(roomId)}`)
+  return authFetch(`/api/rooms/${encodeURIComponent(roomId)}`)
     .then((r) => (r.ok ? r.json() : null))
     .then((full) => full && dispatch({ type: "toggleRoom", room: full }));
 }
@@ -278,6 +279,7 @@ function openRoom(roomId: string, dispatch: ReturnType<typeof useStore>["dispatc
 function PeerActivity({ messages, currentBotId }: { messages: Message[]; currentBotId: string }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
+  const [opening, setOpening] = useState(false);
   const first = messages[0];
   const room = first?.room;
   if (!room?.event) return null;
@@ -309,12 +311,15 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
     <div className="flex w-full justify-center">
       <button
         type="button"
-        onClick={() => openRoom(room.id, dispatch)}
+        onClick={() => {
+          setOpening(true);
+          void openRoom(room.id, dispatch).finally(() => setOpening(false));
+        }}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
         className="mx-auto flex max-w-full cursor-pointer items-center gap-2 rounded-2xl border border-hairline/40 bg-panel px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
       >
         {content}
-        <span className="shrink-0 text-[12px]">{statusLabel}</span>
+        {opening ? <Spinner size={13} className="shrink-0" /> : <span className="shrink-0 text-[12px]">{statusLabel}</span>}
       </button>
     </div>
   );
@@ -325,6 +330,7 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
 function RoomChip({ message }: { message: Message }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
+  const [opening, setOpening] = useState(false);
   const room = message.room;
   if (!room) return null;
   const pill = "flex max-w-full items-center gap-1.5 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink";
@@ -337,13 +343,16 @@ function RoomChip({ message }: { message: Message }) {
       <div className="flex justify-center">
         <button
           onClick={() => {
+            setOpening(true);
             void authFetch(`/api/groups/${encodeURIComponent(groupId)}`)
               .then((r) => (r.ok ? r.json() : null))
-              .then((group) => group && dispatch({ type: "toggleGroup", group }));
+              .then((group) => group && dispatch({ type: "toggleGroup", group }))
+              .finally(() => setOpening(false));
           }}
           className={pill}
           title={polish ? "Otwórz czat grupowy" : "Open group chat"}
         >
+          {opening && <Spinner size={13} />}
           <span>{polish ? "Rozmowa w grupie" : "Group chat:"}</span>
           <span className="truncate font-medium text-ink">{room.name}</span>
         </button>
@@ -358,10 +367,14 @@ function RoomChip({ message }: { message: Message }) {
   return (
     <div className="flex justify-center">
       <button
-        onClick={() => openRoom(room.id, dispatch)}
+        onClick={() => {
+          setOpening(true);
+          void openRoom(room.id, dispatch).finally(() => setOpening(false));
+        }}
         className={pill}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
       >
+        {opening && <Spinner size={13} />}
         <span className="flex items-center gap-1 font-medium text-ink">
           {owner && (
             <MausAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape={owner.mascotShape} state={stateForBot(owner)} size={18} animated={false} />
@@ -403,6 +416,29 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
         alt="Bot's screen"
         className="max-w-[70%] rounded-2xl border border-hairline/40"
       />
+    </div>
+  );
+}
+
+/** Bot is thinking but nothing has streamed yet — three dots in a bubble the
+ * size of the real one, so the transcript does not jump when text arrives. */
+function TypingBubble() {
+  const polish = useLanguage() === "pl";
+  return (
+    <div className="flex w-full justify-start">
+      <div
+        role="status"
+        aria-label={polish ? "Bot pisze…" : "Bot is typing…"}
+        className="flex items-center gap-1 rounded-2xl bg-card px-3 py-[9px]"
+      >
+        {[0, 150, 300].map((delay) => (
+          <span
+            key={delay}
+            className="size-[5px] animate-pulse rounded-full bg-ink-secondary"
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -776,7 +812,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               </div>
             </div>
           )}
-          {streaming ? <StreamingBubble text={streaming} /> : null}
+          {streaming ? <StreamingBubble text={streaming} /> : bot.busy ? <TypingBubble /> : null}
         </div>
         </div>
         {/* desktop drag&drop overlay — any file dropped onto chat becomes an attachment */}

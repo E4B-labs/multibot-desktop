@@ -1,5 +1,6 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Spinner } from "./Loading";
 import { ArrowUp, Brain, CalendarClock, File as FileIcon, Loader2, Mic, Plus, Puzzle, Shield, SlidersHorizontal, Wand2, Wrench, X, Zap } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -1166,7 +1167,7 @@ export function Composer({
           title={polish ? "Wyślij" : "Send"}
           aria-label={polish ? "Wyślij" : "Send"}
         >
-          <ArrowUp size={16} />
+          {uploading ? <Spinner size={16} /> : <ArrowUp size={16} />}
         </button>
         </div>
       </div>

@@ -9,6 +9,7 @@ import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
+import { Skeleton } from "./Loading";
 import {
   buildTeamMapEdges,
   buildTeamMapSections,
@@ -21,6 +22,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
   const { state } = useStore();
   const polish = useLanguage() === "pl";
   const [snapshot, setSnapshot] = useState<TeamMapSnapshot>(EMPTY_TEAM_MAP_SNAPSHOT);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -30,7 +32,10 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
         if (!alive || !res.ok) return;
         const body = (await res.json()) as TeamMapSnapshot;
         setSnapshot(body);
-      } catch {}
+      } catch {
+      } finally {
+        if (alive) setLoaded(true);
+      }
     };
     void tick();
     const id = window.setInterval(tick, 3000);
@@ -57,6 +62,13 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
+          {!loaded ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <Skeleton className="h-28" />
+              <Skeleton className="h-28" />
+            </div>
+          ) : (
+          <>
           {edges.length > 0 && (
             <div className="mb-5 rounded-xl bg-card p-3">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
@@ -134,6 +146,8 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
             ))}
             {sections.length === 0 && <span className="text-[13px] text-ink-secondary">{polish ? "Brak zespołów" : "No teams"}</span>}
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>
