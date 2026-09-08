@@ -91,10 +91,10 @@ describe("ACP turns (fake CLI)", () => {
       "turn.started",
       "session.started",
       "content.delta",
+      "item.completed", // assistant_text — the tool call after it closes the block
       "item.started", // tool tc-1
       "item.completed", // tool tc-1 done
       "thread.token-usage.updated",
-      "item.completed", // assistant_text (summed) on settle
       "turn.completed",
     ]);
     expect(recorder.events.every((e) => e.turnId === turnId && e.provider === "grokAgent")).toBe(true);
@@ -105,6 +105,28 @@ describe("ACP turns (fake CLI)", () => {
     const done = recorder.events.at(-1)!;
     expect(done).toMatchObject({ type: "turn.completed", ok: true });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
+  });
+
+  // Regression: every assistant text block of a multi-step turn is its own
+  // message. They used to fold into one growing bubble glued without a
+  // separator, and only the settle's single flush reached the transcript.
+  it("splits a multi-step turn into one assistant_text per block", async () => {
+    await create(GrokAgentDriver, "two-blocks");
+    await instance.adapter.sendTurn({ threadId: "t-two", text: "hi", model: "grok-4.6" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const texts = recorder.events
+      .filter((e) => e.type === "item.completed" && (e as any).itemType === "assistant_text")
+      .map((e) => (e as any).text);
+    expect(texts).toEqual(["hello from fake acp", "second block"]);
+    // the second block never carries the first one's text: the buffer resets
+    expect(texts[1]).not.toContain("hello");
+    // and the deltas add up to exactly what the two messages hold
+    const streamed = recorder.events
+      .filter((e) => e.type === "content.delta" && (e as any).streamKind === "assistant_text")
+      .map((e) => (e as any).delta)
+      .join("");
+    expect(streamed).toBe(texts.join(""));
   });
 
   it("passes ACP stdio flags and strips XAI_API_KEY from the child env", async () => {
