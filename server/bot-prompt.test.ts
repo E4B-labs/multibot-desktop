@@ -48,6 +48,10 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("On it:");
     expect(text).toContain("ask_user(question, choices)` is the ONLY way");
     expect(text).toContain("# Human writing style");
+    // Wyjatek na pogrubienia: odpowiedz krokowa MA miec wytluszczony poczatek
+    // punktu (tego chce Kacper), zwykla rozmowa nadal bez pogrubien.
+    expect(text).toContain("In plain conversational prose, no bold at all");
+    expect(text).toContain("bold lead-in on a numbered or bulleted step");
     expect(text).not.toMatch(/[—–]/);
     // Pamięć, notatki i skille użytkownika lecą na końcu.
     expect(text.indexOf("# Memory facts")).toBeGreaterThan(text.indexOf("# How you work"));
