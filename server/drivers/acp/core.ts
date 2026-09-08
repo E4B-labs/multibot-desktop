@@ -266,6 +266,19 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
         const stop = () => killTree(child); // multibot: process groups are POSIX-only
 
+        // One assistant text block = one message. ACP has no "message ended"
+        // notification, so the boundary is the next tool call (the agent
+        // stopped narrating and started acting) or the settle. Without the
+        // flush every step's prose folded into ONE growing bubble, glued with
+        // no separator, and the settle replaced it with a single message.
+        const flushText = () => {
+          const text = state.text;
+          state.text = "";
+          if (text.trim()) {
+            emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
+          }
+        };
+
         const settle = (ok: boolean, stopReason: string | null) => {
           if (state.settled) return;
           state.settled = true;
@@ -277,9 +290,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           rpcPending.clear();
           active.delete(threadId);
-          if (state.text.trim()) {
-            emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: state.text });
-          }
+          flushText();
           emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
           stop(); // the agent process does not exit on its own
         };
@@ -400,6 +411,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               break;
             }
             case "tool_call": {
+              flushText(); // the narration before this call is its own message
               emit({
                 ...base(threadId, turnId),
                 type: "item.started",
