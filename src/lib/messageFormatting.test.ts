@@ -50,4 +50,27 @@ describe("skill references", () => {
       .map((node: any) => node.data.hProperties.dataSkillRef);
     expect(refs).toEqual(["Grill Me"]);
   });
+  it("zamienia znany skill w backtickach na pigułkę, obcego kodu nie rusza", () => {
+    // Bot pisze „…: skill weryfikacja-premier-modeli-ai je…" w backtickach —
+    // czarna pigułka kodu wcinała się w zdanie zamiast żółtej nazwy.
+    const tree = root({ type: "inlineCode", value: "skill weryfikacja-premier-modeli-ai" });
+    remarkSkillRefs({ skills: ["weryfikacja-premier-modeli-ai"] })(tree);
+    expect(children(tree)).toEqual([
+      { type: "text", value: "skill " },
+      {
+        type: "skillRef",
+        data: { hName: "span", hProperties: { dataSkillRef: "weryfikacja-premier-modeli-ai" } },
+        children: [{ type: "text", value: "weryfikacja-premier-modeli-ai" }],
+      },
+    ]);
+
+    const other = root({ type: "inlineCode", value: "npm run build" });
+    remarkSkillRefs({ skills: ["weryfikacja-premier-modeli-ai"] })(other);
+    expect(children(other)).toEqual([{ type: "inlineCode", value: "npm run build" }]);
+  });
+  it("nie rusza bloku kodu", () => {
+    const tree = { type: "root", children: [{ type: "code", value: "Grill Me" }] };
+    remarkSkillRefs({ skills: ["Grill Me"] })(tree);
+    expect(tree.children).toEqual([{ type: "code", value: "Grill Me" }]);
+  });
 });

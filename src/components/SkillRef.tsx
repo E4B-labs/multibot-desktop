@@ -19,7 +19,7 @@ export function SkillRef({
   /** Tekst z transkryptu; bez niego rysujemy samą nazwę. */
   children?: ReactNode;
   compact?: boolean;
-  /** Wariant „pigułka zdarzenia": wyśrodkowana, z własną ramką. */
+  /** Wariant „pigułka zdarzenia": wyśrodkowana, bez ramki — sam oddech. */
   block?: boolean;
 }) {
   const { state, dispatch } = useStore();
@@ -41,7 +41,7 @@ export function SkillRef({
         title={name}
         className={cn(
           "inline-flex items-center gap-1 font-semibold text-[#ffb700] hover:underline",
-          block && "rounded-full border border-[#ffb700]/30 px-3 py-1",
+          block && "px-3 py-1",
           compact ? "text-[13px]" : "text-[12.5px]",
         )}
       >

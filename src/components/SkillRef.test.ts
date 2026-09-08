@@ -16,6 +16,13 @@ describe("SkillRef", () => {
     expect(ref).not.toContain("bg-[#111]");
   });
 
+  it("nie ma ramki ani tła — sama nazwa z różdżką", () => {
+    // Kacper (screenshot 19:17): chip ma zostać ikoną i żółtym tekstem,
+    // żółta obwódka/pigułka znika także w wariancie zdarzenia.
+    expect(ref).not.toMatch(/border-\[#ffb700\]/);
+    expect(ref.match(/className=\{cn\([\s\S]*?\)\}/)?.[0] ?? "").not.toContain("rounded-full");
+  });
+
   it("ma ikonę różdżki przy nazwie", () => {
     expect(ref).toContain("<Wand2");
   });
