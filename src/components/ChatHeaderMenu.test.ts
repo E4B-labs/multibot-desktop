@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CHAT_HEADER_ACTIONS, FLY_MS, LETTER_MS, TYPE_MS, UNROLL_MS, letterDelay } from "./ChatHeaderMenu";
+import { CHAT_HEADER_ACTIONS, HIDDEN_CHAT_HEADER_ACTIONS, FLY_MS, LETTER_MS, TYPE_MS, UNROLL_MS, letterDelay } from "./ChatHeaderMenu";
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const menu = readFileSync(new URL("./ChatHeaderMenu.tsx", import.meta.url), "utf8");
@@ -15,16 +15,21 @@ function rule(selector: string): string {
 // że któraś funkcja po cichu zniknie. Te testy pilnują kompletu i tego, że
 // nagłówek czatu oddał je menu wyłącznie na pulpicie.
 describe("menu akcji w nagłówku czatu", () => {
-  it("niesie wszystkie funkcje, bez powtórzeń", () => {
-    expect([...CHAT_HEADER_ACTIONS].sort()).toEqual(
-      ["computer", "find", "inspector", "rooms", "routines", "skills", "team"],
-    );
+  it("niesie widoczne funkcje, bez powtórzeń", () => {
+    expect([...CHAT_HEADER_ACTIONS].sort()).toEqual(["computer", "find", "routines", "skills"]);
   });
 
   it("kolejność jest ta sama co na telefonie", () => {
-    expect([...CHAT_HEADER_ACTIONS]).toEqual(
-      ["computer", "routines", "skills", "find", "inspector", "rooms", "team"],
-    );
+    expect([...CHAT_HEADER_ACTIONS]).toEqual(["computer", "routines", "skills", "find"]);
+  });
+
+  // hidden per Kacper 07.09.2026, panels kept
+  it("schowane pozycje nie wchodzą do menu, ale ich obsługa zostaje", () => {
+    expect(HIDDEN_CHAT_HEADER_ACTIONS).toEqual(["inspector", "rooms", "team"]);
+    for (const action of HIDDEN_CHAT_HEADER_ACTIONS) {
+      expect(CHAT_HEADER_ACTIONS).not.toContain(action);
+      expect(menu).toContain(`    ${action}: {`);
+    }
   });
 
   it("ChatView pokazuje menu na pulpicie, a pięć ikon poza nim", () => {

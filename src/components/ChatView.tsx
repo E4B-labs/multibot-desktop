@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
+import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
@@ -616,14 +616,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               >
                 <Search size={18} />
               </button>
-              <button
-                onClick={() => dispatch({ type: "toggleInspector" })}
-                className={cn("rounded-md p-1.5 hover:bg-raised", state.inspectorOpen ? "text-accent" : "text-ink hover:text-ink")}
-                title={polish ? "Inspector runtime" : "Runtime inspector"}
-                aria-label={polish ? "Inspector runtime" : "Runtime inspector"}
-              >
-                <ScanSearch size={18} />
-              </button>
+              {/* hidden per Kacper 07.09.2026, panels kept */}
               <button
                 onClick={() => dispatch({ type: "toggleComputer" })}
                 className={cn(

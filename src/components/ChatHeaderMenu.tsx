@@ -27,8 +27,13 @@ import { motionIsReduced } from "@/lib/motion";
 
 /** Kolejność jak na telefonie. Lista jest jawna, żeby po schowaniu ikon żadna
  * funkcja nie wyparowała — pilnuje tego ChatHeaderMenu.test.ts. */
-export const CHAT_HEADER_ACTIONS = ["computer", "routines", "skills", "find", "inspector", "rooms", "team"] as const;
-export type ChatHeaderAction = (typeof CHAT_HEADER_ACTIONS)[number];
+const ALL_CHAT_HEADER_ACTIONS = ["computer", "routines", "skills", "find", "inspector", "rooms", "team"] as const;
+export type ChatHeaderAction = (typeof ALL_CHAT_HEADER_ACTIONS)[number];
+/** hidden per Kacper 07.09.2026, panels kept */
+export const HIDDEN_CHAT_HEADER_ACTIONS: readonly ChatHeaderAction[] = ["inspector", "rooms", "team"];
+export const CHAT_HEADER_ACTIONS: readonly ChatHeaderAction[] = ALL_CHAT_HEADER_ACTIONS.filter(
+  (action) => !HIDDEN_CHAT_HEADER_ACTIONS.includes(action),
+);
 
 /** Czasy faz. Te same liczby stoją w klatkach CSS (src/styles.css:
  * menu-unroll, menu-dot-fly, menu-letter-in) i muszą się zgadzać —
