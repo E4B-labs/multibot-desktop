@@ -35,7 +35,7 @@ import { authFetch } from "@/lib/auth";
 // multibot: F11 — status silnika dla warunkowej kropki w stopce
 import { getLanguage, useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { groupAvatarSplit, groupRowTitle } from "@/lib/groupRow";
+import { groupAvatarStack, groupRowTitle } from "@/lib/groupRow";
 // multibot: kolejność sekcji i podział wierszy — czysta logika, testowana osobno
 import { moveSectionTo, sectionRows } from "@/lib/sidebarSections";
 // multibot: czerwony wykrzyknik na ikonie ustawień — jest widoczna aktualizacja
@@ -829,7 +829,9 @@ function GroupRow({
   const members = g.bot_ids
     .map((id) => bots.find((b) => "mb-" + b.threadId === id))
     .filter((b): b is Bot => b != null);
-  const { shown, overflow } = groupAvatarSplit(members, 2, g.bot_ids.length);
+  const { shown, plus } = groupAvatarStack(members, g.bot_ids.length);
+  // sam członek nie ma z czym się krzyżować, więc siada na środku kafelka
+  const solo = shown.length === 1 && plus === 0;
   const last = g.messages?.[g.messages.length - 1];
   const attention = members.find((b) => b.needsAttention != null)?.needsAttention;
 
@@ -865,29 +867,35 @@ function GroupRow({
       title={g.name || g.id}
       className={cn(
         "relative flex w-full items-center rounded-xl text-left",
-        collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2.5",
+        collapsed ? "justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5",
         dragOver ? "bg-raised ring-1 ring-accent" : state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50",
       )}
     >
       {members.length > 0 ? (
-        // multibot: wzorzec z Grok Bota - dwa male awatary jeden na drugim
-        // (drugi w prawo i w dol), a "+N" to znaczek NA tym drugim, nie osobny
-        // kafelek obok nazwy. Wiersz ma byc kompaktowy, jak wiersz bota.
-        <span className="relative flex shrink-0 items-center">
-          {shown.map((b, i) => (
-            <span key={b.id} className={cn("relative shrink-0", i > 0 && "-ml-2 mt-2")}>
-              <MausAvatar
-                color={b.color}
-                size={20}
-                {...groupMemberAvatarProps(b)}
-              />
-              {i === shown.length - 1 && overflow > 0 && (
-                <span className="absolute -bottom-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-control text-[8px] font-semibold leading-none text-ink">
-                  +{overflow}
+        // multibot: wiersz grupy 1:1 jak w komunikatorze — skos z dwóch awatarów
+        // (tylny w lewym górnym rogu, przedni w prawym dolnym z obwódką w kolorze
+        // tła wiersza). Powyżej dwóch członków przedni awatar zastępuje zielone
+        // kółko „+N". Kafelek ma 48 px, tyle co awatar bota, żeby wysokość
+        // wiersza i wcięcie tekstu były wspólne dla botów i grup.
+        <span className="relative size-12 shrink-0">
+          {solo ? (
+            <MausAvatar color={shown[0].color} size={48} {...groupMemberAvatarProps(shown[0])} />
+          ) : (
+            <>
+              <span className="absolute left-0 top-0">
+                <MausAvatar color={shown[0].color} size={28} {...groupMemberAvatarProps(shown[0])} />
+              </span>
+              {plus > 0 ? (
+                <span className="absolute bottom-0 right-0 flex size-8 items-center justify-center rounded-full bg-success text-[12px] font-semibold leading-none text-app ring-2 ring-panel">
+                  +{plus}
+                </span>
+              ) : (
+                <span className="absolute bottom-0 right-0 rounded-full ring-2 ring-panel">
+                  <MausAvatar color={shown[1].color} size={32} {...groupMemberAvatarProps(shown[1])} />
                 </span>
               )}
-            </span>
-          ))}
+            </>
+          )}
           {attention && (
             <span
               title={attention}
@@ -898,8 +906,8 @@ function GroupRow({
           )}
         </span>
       ) : (
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
-          <Users size={14} />
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
+          <Users size={20} />
         </span>
       )}
       {!collapsed && (
@@ -907,7 +915,7 @@ function GroupRow({
           <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">
             {groupRowTitle(members.map((b) => botDisplayName(b, lang))) || g.name || g.id}
           </span>
-          {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
+          {last && <span className="shrink-0 text-xs text-ink-secondary">{formatTime(last.at)}</span>}
         </div>
       )}
     </button>

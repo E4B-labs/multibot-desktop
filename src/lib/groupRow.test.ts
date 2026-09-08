@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupAvatarSplit, groupRowTitle } from "./groupRow";
+import { groupAvatarStack, groupRowTitle } from "./groupRow";
 
 describe("groupRowTitle", () => {
   it("joins member names with a comma", () => {
@@ -11,16 +11,20 @@ describe("groupRowTitle", () => {
   });
 });
 
-describe("groupAvatarSplit", () => {
-  it("shows at most two avatars and counts the rest", () => {
-    expect(groupAvatarSplit(["a", "b", "c", "d"])).toEqual({ shown: ["a", "b"], overflow: 2 });
+describe("groupAvatarStack", () => {
+  it("stacks both members when the group has exactly two", () => {
+    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"], plus: 0 });
+  });
+
+  it("keeps one avatar and counts the rest behind a +N badge", () => {
+    expect(groupAvatarStack(["a", "b", "c", "d"])).toEqual({ shown: ["a"], plus: 3 });
   });
 
   it("counts unknown bots via the total member count", () => {
-    expect(groupAvatarSplit(["a", "b"], 2, 5)).toEqual({ shown: ["a", "b"], overflow: 3 });
+    expect(groupAvatarStack(["a", "b"], 5)).toEqual({ shown: ["a"], plus: 4 });
   });
 
-  it("never returns negative overflow", () => {
-    expect(groupAvatarSplit(["a", "b"], 2, 1)).toEqual({ shown: ["a", "b"], overflow: 0 });
+  it("shows a single avatar for a one-member group", () => {
+    expect(groupAvatarStack(["a"])).toEqual({ shown: ["a"], plus: 0 });
   });
 });

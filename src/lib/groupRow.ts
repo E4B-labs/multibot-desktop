@@ -3,12 +3,13 @@ export function groupRowTitle(memberNames: string[]): string {
   return memberNames.join(", ");
 }
 
-/** Widoczne awatary i liczba wszystkich niewidocznych członków grupy. */
-export function groupAvatarSplit<T>(
+/** Kafelek grupy w stylu komunikatora: skos z dwóch awatarów, a przy większym
+ *  składzie przedni awatar zastępuje kółko „+N" (N = wszyscy oprócz tylnego).
+ *  Jeden członek — jeden awatar, bez skosu. */
+export function groupAvatarStack<T>(
   members: T[],
-  max = 2,
   total = members.length,
-): { shown: T[]; overflow: number } {
-  const shown = members.slice(0, max);
-  return { shown, overflow: Math.max(0, total - shown.length) };
+): { shown: T[]; plus: number } {
+  if (total > 2) return { shown: members.slice(0, 1), plus: total - 1 };
+  return { shown: members.slice(0, 2), plus: 0 };
 }
