@@ -336,6 +336,7 @@ function RoomChip({ message }: { message: Message }) {
   const room = message.room;
   if (!room) return null;
   const pill = "flex max-w-full items-center gap-1.5 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink";
+  const groupPill = "flex max-w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-raised hover:text-ink active:bg-raised-hover focus-visible:bg-raised focus-visible:text-ink focus-visible:outline-none";
   // A group turn mirrors ONE room shared by every member, so "X texted Y, Z"
   // read as nonsense in a member's private thread: name the group instead and
   // lead back to the group chat, not the room ledger.
@@ -351,7 +352,7 @@ function RoomChip({ message }: { message: Message }) {
               .then((group) => group && dispatch({ type: "toggleGroup", group }))
               .finally(() => setOpening(false));
           }}
-          className={pill}
+          className={groupPill}
           title={polish ? "Otwórz czat grupowy" : "Open group chat"}
         >
           {opening && <Spinner size={13} />}

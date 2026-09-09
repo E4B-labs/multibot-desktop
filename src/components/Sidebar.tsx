@@ -582,6 +582,7 @@ function BotListItem({
         motion={avatar.motion}
         motionKey={avatar.motionKey}
         animated={avatar.animated}
+        trackPointerWhenPaused
       />
       {/* multibot: nazwa i podgląd znikają w szynie, ale kropka zostaje —
           to jedyny sygnał „coś się tu dzieje", jaki tam przeżył. Ta sama
@@ -1421,6 +1422,7 @@ export function Sidebar() {
                       shape={b.mascotShape}
                       size={avatarSize}
                       {...sidebarAvatarProps(b)}
+                      trackPointerWhenPaused
                     />
                     <span className="w-full truncate text-center text-[12px] font-medium leading-tight text-ink">
                       {botDisplayName(b, lang)}

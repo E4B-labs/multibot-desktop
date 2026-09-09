@@ -48,3 +48,12 @@ describe("statyczna maskotka ma twarz", () => {
     expect(off).toEqual(["SettingsPanel.tsx"]);
   });
 });
+
+describe("static avatar pointer follow", () => {
+  it("supports paused hover follow and resets gaze on leave", () => {
+    expect(avatar).toContain("trackPointerWhenPaused?: boolean;");
+    expect(avatar).toContain("const pointerFollow = trackPointer && (animated || trackPointerWhenPaused);");
+    expect(avatar).toContain("const onPointerLeave = () => setPointer({ x: 0, y: 0 });");
+    expect(avatar).toContain("onPointerLeave={pointerFollow ? onPointerLeave : undefined}");
+  });
+});

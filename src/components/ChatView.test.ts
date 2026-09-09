@@ -143,6 +143,16 @@ describe("czip pokoju grupowego", () => {
     expect(branch).toContain('type: "toggleGroup"');
     expect(branch).not.toContain("toggleRoom");
   });
+
+  it("group chat nie jest obramowana, ale zachowuje podświetlenie wiersza", () => {
+    const branch = chip.slice(chip.indexOf("if (groupId) {"), chip.indexOf("const owner ="));
+    const style = chip.slice(chip.indexOf("const groupPill ="), chip.indexOf("const groupId ="));
+    expect(chip).toContain("const groupPill =");
+    expect(branch).toContain("className={groupPill}");
+    expect(style).not.toContain("border");
+    expect(style).toContain("hover:bg-raised");
+    expect(style).toContain("active:bg-raised-hover");
+  });
 });
 
 // multibot: prywatny czat pokazuje rozmowę bot↔bot jako pigułki zdarzeń

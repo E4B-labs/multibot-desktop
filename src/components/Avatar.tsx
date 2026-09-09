@@ -129,6 +129,8 @@ export type MausAvatarProps = {
   forward?: boolean;
   /** Let the eyes follow the pointer across this avatar. */
   trackPointer?: boolean;
+  /** Allow pointer-follow while the avatar itself remains paused/static. */
+  trackPointerWhenPaused?: boolean;
   /** Run the animation. Off renders the state's resting face. */
   animated?: boolean;
   /** Legacy Maus face-placement knobs — accepted, ignored. */
@@ -158,6 +160,7 @@ function MausAvatarComponent(
     mouthStroke,
     forward = true,
     trackPointer = true,
+    trackPointerWhenPaused = false,
     animated = true,
   }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
@@ -195,8 +198,9 @@ function MausAvatarComponent(
   // Pointer-follow gaze, composed with any gaze the caller pins.
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
+  const pointerFollow = trackPointer && (animated || trackPointerWhenPaused);
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (!trackPointer || !animated) return;
+    if (!pointerFollow) return;
     const rect = event.currentTarget.getBoundingClientRect();
     setPointer({
       x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
@@ -228,8 +232,8 @@ function MausAvatarComponent(
     <span
       className="relative inline-flex shrink-0"
       style={{ width: size, height: size }}
-      onPointerMove={trackPointer && animated ? onPointerMove : undefined}
-      onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
+      onPointerMove={pointerFollow ? onPointerMove : undefined}
+      onPointerLeave={pointerFollow ? onPointerLeave : undefined}
     >
       <BlobAvatar
         ref={inner}

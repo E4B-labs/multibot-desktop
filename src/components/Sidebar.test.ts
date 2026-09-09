@@ -49,3 +49,24 @@ describe("sidebar footer alignment", () => {
     expect(footer).toContain('flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left');
   });
 });
+
+describe("bot picker avatar follow", () => {
+  it("follows only in BotListItem and pinned bot picker", () => {
+    const itemStart = sidebarSource.indexOf("function BotListItem");
+    const itemEnd = sidebarSource.indexOf("export function Sidebar", itemStart);
+    const item = sidebarSource.slice(itemStart, itemEnd);
+    const pinnedStart = sidebarSource.indexOf("const pinnedBots =");
+    const pinnedEnd = sidebarSource.indexOf("Unified conversation list", pinnedStart);
+    const pinned = sidebarSource.slice(pinnedStart, pinnedEnd);
+    const hoverCard = sidebarSource.slice(sidebarSource.indexOf("function BotHoverCard"), itemStart);
+    const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
+
+    expect(item).toContain("trackPointerWhenPaused");
+    expect(item).toContain("onMouseEnter");
+    expect(item).toContain("onMouseLeave");
+    expect(pinned).toContain("trackPointerWhenPaused");
+    expect(hoverCard).not.toContain("trackPointerWhenPaused");
+    expect(groupRow).not.toContain("trackPointerWhenPaused");
+    expect((sidebarSource.match(/trackPointerWhenPaused/g) ?? []).length).toBe(2);
+  });
+});
