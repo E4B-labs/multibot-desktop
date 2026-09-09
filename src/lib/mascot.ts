@@ -206,6 +206,17 @@ export type MascotBotProfile = {
 export const MODEL_LOAD_MS = 10_000;
 /** Ile świętujemy koniec tury, zanim bot zejdzie z paska. */
 export const CELEBRATE_MS = 1_000;
+/**
+ * Jak długo po OSTATNIM kawałku tekstu pasek jeszcze „pisze".
+ *
+ * `streaming` znaczy tylko tyle, że strumień jest niezamknięty — a wisi on aż
+ * do settlującego się dymka, czyli zwykle do końca tury. Sam ten warunek
+ * trzymał maskotkę na trzech kropkach przez CAŁĄ turę: bot rzucał zdanie, szedł
+ * pracować na minutę, a nad composerem stały trzy ledwo widoczne kropki. Stąd
+ * skarga „maskotki nie widać, kiedy bot pracuje". Kropki należą się pisaniu na
+ * żywo; kiedy tekst przestaje płynąć, ciało wraca i widać, że bot robi swoje.
+ */
+export const WRITING_MS = 1_500;
 
 /** Faza tury złożona z eventów runtime — patrz `runtime` w store. */
 export type RuntimeKind = "start" | "reasoning" | "tool" | "text" | "done";
@@ -229,7 +240,7 @@ function pendingAsk(last: MascotMessage | undefined): boolean {
  *
  * Kolejność wierszy jest tabelą priorytetów, pierwsze dopasowanie wygrywa:
  * 1-2 pytanie/uwaga > 3 narzędzie > 4 myślenie > 5 pisanie > 6 zimny start >
- * 7 sukces > 8 ŻYWA TURA > 9 nieprzeczytane.
+ * 7 sukces > 8 ŻYWA TURA > 9 ROZMOWA Z BOTEM > 10 nieprzeczytane.
  *
  * `bot.busy` jest ostatnią deską ratunku, nie ozdobą: dopóki serwer trzyma turę
  * otwartą, pasek MUSI stać i się ruszać, choćby nie przyszło ani jedno
@@ -247,11 +258,13 @@ export function stripMascotState(input: {
   runtime?: RuntimePhase | null;
   /** trwa strumień tekstu asystenta (store.streaming[threadId]) */
   streaming?: boolean;
+  /** bot jest w żywej wymianie z innym botem (`isEngagedInPeerChat`) */
+  engaged?: boolean;
   /** okno aplikacji jest na wierzchu — wtedy „nieprzeczytane" nic nie znaczy */
   focused?: boolean;
   now?: number;
 }): BotState | null {
-  const { bot, runtime = null, streaming = false, focused = false, now = Date.now() } = input;
+  const { bot, runtime = null, streaming = false, engaged = false, focused = false, now = Date.now() } = input;
   const last = bot.messages?.[bot.messages.length - 1];
   const attention = bot.needsAttention ?? null;
 
@@ -273,8 +286,13 @@ export function stripMascotState(input: {
   if (live && (runtime?.kind === "reasoning" || (runtime?.kind === "start" && now - runtime.at < MODEL_LOAD_MS))) {
     return "thinking";
   }
-  // 5: leci tekst — ciało rozpada się na trzy kropki (stan silnika, nie nakładka).
-  if (live && (streaming || runtime?.kind === "text")) return "thinking-dots";
+  // 5: tekst leci TERAZ — ciało rozpada się na trzy kropki (stan silnika, nie
+  // nakładka). Świeżość jest tu istotna: `streaming` wisi do końca tury, więc
+  // bez `WRITING_MS` kropki zostawały na pasku także wtedy, gdy bot dawno
+  // przestał pisać i po prostu pracował.
+  if (live && streaming && runtime?.kind === "text" && now - runtime.at < WRITING_MS) return "thinking-dots";
+  // 5b: tekst był, ale ucichł, a tura wciąż trwa — bot pracuje dalej.
+  if (live && runtime?.kind === "text") return "working";
   // 6: dostawca milczy od MODEL_LOAD_MS — zimny start modelu albo procesu.
   if (live && runtime?.kind === "start") return "loading";
   // 7: tura właśnie się skończyła — moment radości, już po `busy`.
@@ -283,6 +301,12 @@ export function stripMascotState(input: {
   // „working". To jedyny wiersz, który trzyma maskotkę przez całą turę, gdy
   // dostawca nie sypie eventami; kończy go dopiero `busy:false` z serwera.
   if (bot.busy === true) return "working";
+  // 9: bot rozmawia z innym botem, a teraz kolej TAMTEGO — własnej tury nie ma,
+  // więc żaden wiersz wyżej nie zapala się i pasek gasł w środku wymiany.
+  // Czekanie na odpowiedź kolegi to nadal udział w rozmowie: maskotka nasłuchuje
+  // (`listening`) aż do końca wymiany, a potem przechodzi sprężyną w to, co
+  // zostanie — bez odmontowania, więc bez przeskoku.
+  if (engaged) return "listening";
   if (bot.unread && !focused) return "notifying";
   return null;
 }

@@ -4,6 +4,7 @@ import {
   BOT_COLORS,
   BOT_COLOR_NAMES,
   MODEL_LOAD_MS,
+  WRITING_MS,
   pickerAvatarState,
   stripMascotState,
   type MascotBotProfile,
@@ -24,7 +25,7 @@ const bot = (over: Partial<MascotBotProfile> = {}): MascotBotProfile => ({
 
 const strip = (
   over: Partial<MascotBotProfile> = {},
-  extra: { runtime?: RuntimePhase | null; streaming?: boolean; focused?: boolean; now?: number } = {},
+  extra: { runtime?: RuntimePhase | null; streaming?: boolean; engaged?: boolean; focused?: boolean; now?: number } = {},
 ) => stripMascotState({ bot: bot(over), now: NOW, ...extra });
 
 const activity = (at: number, ok?: boolean) => ({ kind: "activity", at, tool: { name: "bash", ok } as any });
@@ -87,8 +88,10 @@ describe("stripMascotState — tabela stanów paska", () => {
   });
 
   it("5. wyjście modelu → thinking-dots (stan silnika, nie nakładka)", () => {
-    expect(strip({}, { runtime: { at: NOW, kind: "text" } })).toBe("thinking-dots");
-    expect(strip({}, { streaming: true })).toBe("thinking-dots");
+    expect(strip({}, { streaming: true, runtime: { at: NOW, kind: "text" } })).toBe("thinking-dots");
+    // …ale tylko dopóki tekst NAPRAWDĘ leci: otwarty strumień bez świeżego
+    // kawałka to bot, który dawno przestał pisać i po prostu pracuje.
+    expect(strip({}, { streaming: true, runtime: { at: NOW - WRITING_MS - 1, kind: "text" } })).toBe("working");
   });
 
   it("4 > 5: rozumowanie wygrywa ze strumieniem tekstu", () => {
@@ -155,8 +158,12 @@ describe("stripMascotState — tabela stanów paska", () => {
   it("tabela: narzędzie → working, tekst → thinking-dots, sama tura → working", () => {
     const cases: Array<[string, ReturnType<typeof strip>, string | null]> = [
       ["narzędzie w locie", strip({ busy: true }, { runtime: { at: NOW, kind: "tool" } }), "working"],
-      ["pisze (strumień)", strip({ busy: true }, { streaming: true }), "thinking-dots"],
-      ["pisze (faza text)", strip({ busy: true }, { runtime: { at: NOW, kind: "text" } }), "thinking-dots"],
+      ["pisze teraz", strip({ busy: true }, { streaming: true, runtime: { at: NOW, kind: "text" } }), "thinking-dots"],
+      // `streaming` wisi az do settlujacego sie dymka, wiec sam z siebie nie
+      // znaczy "pisze": bez swiezego kawalka tekstu bot po prostu pracuje dalej.
+      ["strumien otwarty, ale cisza", strip({ busy: true }, { streaming: true, runtime: { at: NOW - WRITING_MS - 1, kind: "text" } }), "working"],
+      ["strumien bez fazy tekstu", strip({ busy: true }, { streaming: true }), "working"],
+      ["faza text bez strumienia", strip({ busy: true }, { runtime: { at: NOW, kind: "text" } }), "working"],
       ["myśli", strip({ busy: true }, { runtime: { at: NOW, kind: "reasoning" } }), "thinking"],
       ["między narzędziami", strip({ busy: true }, { runtime: { at: NOW, kind: "reasoning" } }), "thinking"],
       ["tura bez zdarzeń", strip({ busy: true }), "working"],
@@ -173,12 +180,41 @@ describe("stripMascotState — tabela stanów paska", () => {
       { runtime: { at: NOW, kind: "reasoning" } },
       { runtime: { at: NOW, kind: "text" }, streaming: true },
       { runtime: { at: NOW, kind: "text" } }, // blok wypłukany, strumień zamknięty
+      { runtime: { at: NOW - WRITING_MS - 1, kind: "text" }, streaming: true }, // tekst ucichł
       { runtime: { at: NOW, kind: "tool" } },
       { runtime: { at: NOW, kind: "reasoning" } }, // narzędzie oddało wynik
       { runtime: { at: NOW, kind: "tool" } },
       {}, // dziura: dostawca milczy, nie przyszedł żaden event
     ];
     for (const extra of live) expect(strip({ busy: true }, extra)).not.toBeNull();
+  });
+
+  // Rozmowa bot↔bot: tura kolegi leci na JEGO wątku, więc u oglądanego bota
+  // nie ma ani `busy`, ani żadnej fazy `runtime` — i dokładnie tam pasek gasł.
+  it("9. wymiana z innym botem → listening, także bez własnej tury", () => {
+    expect(strip({ busy: false }, { engaged: true })).toBe("listening");
+    expect(strip({}, { engaged: true })).toBe("listening");
+  });
+
+  it("9. własna tura w tej rozmowie wygrywa z czekaniem", () => {
+    expect(strip({ busy: true }, { engaged: true })).toBe("working");
+    expect(strip({ busy: true }, { engaged: true, runtime: { at: NOW, kind: "tool" } })).toBe("working");
+  });
+
+  it("9. koniec wymiany gasi pasek, a nie zostawia go na listening", () => {
+    expect(strip({ busy: false }, { engaged: false })).toBeNull();
+  });
+
+  // Cała wymiana, sekwencja po sekwencji: od chwili gdy kolega dostaje turę, aż
+  // do jej końca pasek ani razu nie może być pusty.
+  it("przez całą wymianę bot↔bot pasek ani razu nie gaśnie", () => {
+    const exchange: Array<[Partial<MascotBotProfile>, Parameters<typeof strip>[1]]> = [
+      [{ busy: true }, { engaged: true, runtime: { at: NOW, kind: "tool" } }], // pisze do kolegi
+      [{ busy: false }, { engaged: true }], // oddał turę, kolega jeszcze nie zaczął
+      [{ busy: false }, { engaged: true }], // kolega pisze
+      [{ busy: true }, { engaged: true, runtime: { at: NOW, kind: "start" } }], // wróciło do nas
+    ];
+    for (const [over, extra] of exchange) expect(strip(over, extra)).not.toBeNull();
   });
 });
 

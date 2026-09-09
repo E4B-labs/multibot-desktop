@@ -390,6 +390,32 @@ describe("peer conversation: a message is a real turn", () => {
     60_000,
   );
 
+  // Between one bot finishing and the next one starting NEITHER side is `busy`.
+  // `pendingTo` is the only thing that spans that gap, so a client watching a
+  // bot-to-bot exchange has to be TOLD when it changes — otherwise the whole
+  // conversation reads as "nobody is doing anything" for a moment and the
+  // mascot above the composer blinks out mid-exchange.
+  it(
+    "broadcasts the room when a turn is handed over and again when it starts",
+    async () => {
+      const sender = await h.newBot("Handover A", "happy");
+      const slow = await h.newBot("Handover B", "slow");
+      const created = await h.api("POST", "/api/rooms", { task: "take this when you can", bot_ids: [sender, slow] });
+      expect(created.status).toBe(201);
+      const roomId = created.body.id as string;
+
+      const roomFrames = () => h.frames.filter((f) => f.kind === "room" && f.room?.id === roomId);
+      await h.waitFor("the hand-over frame", 20_000, () => roomFrames().some((f) => f.room.pendingTo === slow));
+      // …and the debt is cleared on a frame of its own once that turn starts.
+      await h.waitFor("the turn-start frame", 30_000, async () => {
+        const seen = roomFrames();
+        const handover = seen.findIndex((f) => f.room.pendingTo === slow);
+        return handover !== -1 && seen.slice(handover + 1).some((f) => !f.room.pendingTo);
+      });
+    },
+    60_000,
+  );
+
   it(
     "the same message sent to the same bot twice lands in the room once",
     async () => {
