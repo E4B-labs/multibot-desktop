@@ -166,6 +166,9 @@ describe("karta bot↔bot otwiera pokój", () => {
 
   it("kliknięcie otwiera pokój, a nie rozwija karty", () => {
     expect(card).toContain("openRoom(room.id, dispatch)");
+    expect(card).toContain('disabled={opening}');
+    expect(card).toContain('aria-busy={opening}');
+    expect(card).toContain("active:scale-[0.97]");
     for (const drawer of ["setExpanded", "aria-expanded", "ChevronDown"]) {
       expect(card, `karta znowu rozwija się w dół: ${drawer}`).not.toContain(drawer);
     }
