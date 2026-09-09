@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Bot } from "@/state/store";
 import { clampSidebarWidth, groupMemberAvatarProps, sidebarAvatarProps, sidebarWidthFromDrag } from "./Sidebar";
+
+const sidebarSource = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
 
 describe("sidebar width", () => {
   it("snaps narrow drag to icon rail and clamps custom width", () => {
@@ -34,5 +37,15 @@ describe("sidebar avatar", () => {
     const busy = groupMemberAvatarProps(bot({ id: "b2", busy: true }));
     expect(busy.animated).toBe(false);
     expect(busy.motion).toBe("none");
+  });
+});
+
+describe("sidebar footer alignment", () => {
+  it("keeps the profile avatar and label aligned with Plugins", () => {
+    const footer = sidebarSource.slice(sidebarSource.indexOf("/* Footer */"));
+    expect(footer).toContain('inline-flex size-8 shrink-0 items-center');
+    expect(footer).toContain('<InitialsAvatar initials={profileInitials(state.config?.profile)} size={32} />');
+    expect(footer).toContain('truncate text-[14px] font-semibold text-ink');
+    expect(footer).toContain('flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left');
   });
 });
