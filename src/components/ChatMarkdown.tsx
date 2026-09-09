@@ -57,13 +57,8 @@ function CodeBlock({ code, lang, streaming, compact }: { code: string; lang: str
     const cached = highlightCache.get(key);
     if (cached) return setHtml(cached);
     let alive = true;
-    import("shiki")
-      .then((shiki) =>
-        shiki.codeToHtml(code, {
-          lang: lang || "text",
-          theme: "github-dark-default",
-        }),
-      )
+    import("@/lib/highlighter")
+      .then((shiki) => shiki.highlightCode(code, lang || "text"))
       .then((out) => {
         if (!alive) return;
         if (highlightCache.size >= CACHE_MAX) {
