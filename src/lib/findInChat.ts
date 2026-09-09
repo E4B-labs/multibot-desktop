@@ -1,5 +1,5 @@
 // multibot: find-in-chat — trafienia liczysz po stronie klienta, bo cały
-// transkrypt bota i tak siedzi w storze (port z MultiBot #437, tam był
+// transkrypt bota i tak siedzi w storze (port z upstreamu #437, tam był
 // potrzebny endpoint /api/search, bo ich store nie trzyma pełnej listy).
 import type { Message } from "@/state/store";
 

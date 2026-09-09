@@ -13,7 +13,7 @@ import { parseSchedule, type PresetOrUnknown } from "@/lib/routineSchedule";
 import { AttachmentCard } from "./AttachmentCard";
 import { randomId } from "@/lib/shell";
 
-// multibot: szybki przełącznik dostępu w composerze (port z MultiBot #442,
+// multibot: szybki przełącznik dostępu w composerze (port z upstreamu #442,
 // tam PermissionModeSelector) — te same endpointy co EngineAutonomy.
 type ComposerAccess = "read-only" | "approval" | "full";
 

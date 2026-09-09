@@ -1,4 +1,4 @@
-// multibot: live team map — projection over the persisted roster (port z MultiBot, src/lib/team-map.ts).
+// multibot: live team map — projection over the persisted roster (port z upstreamu, src/lib/team-map.ts).
 // Zero guessing; only durable groups + in-memory delegation watches (to fill in when inter-bot delegation lands).
 
 export interface TeamMapBot {

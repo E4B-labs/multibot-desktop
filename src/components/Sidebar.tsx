@@ -152,7 +152,7 @@ function BotContextMenu({
 }: {
   menu: MenuState;
   onClose: () => void;
-  /** multibot: sekcje sidebaru (port z MultiBot #296) */
+  /** multibot: sekcje sidebaru (port z upstreamu #296) */
   onMoveToSection?: (botId: string) => void;
 }) {
   const { state, dispatch } = useStore();
@@ -253,7 +253,7 @@ function BotContextMenu({
 // — obcy tekst czy link nie ma prawa udawać wiersza ani sekcji.
 const SIDEBAR_DRAG_TYPES = ["text/mb-section", "text/mb-group-id", "text/mb-bot-id"] as const;
 
-// multibot: nagłówek sekcji na liście (port z MultiBot #296). Wysokość i
+// multibot: nagłówek sekcji na liście (port z upstreamu #296). Wysokość i
 // marginesy są STAŁE (`h-9`, zero paddingu pionowego) — wcześniej `pt-3 pb-1`
 // dawało inny odstęp nad pierwszą sekcją niż między kolejnymi, więc kilka
 // zwiniętych nagłówków obok siebie wyglądało na krzywo poukładane. Odstępy
@@ -638,7 +638,7 @@ function GroupContextMenu({ menu, onClose }: { menu: GroupMenuState; onClose: ()
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [busy, setBusy] = useState(false);
-  // multibot: zmiana nazwy grupy (port z MultiBot #343) — inline input
+  // multibot: zmiana nazwy grupy (port z upstreamu #343) — inline input
   // w menu, Enter zapisuje (IME-safe), Escape wraca do pozycji menu.
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(menu.group.name || "");
@@ -1139,7 +1139,7 @@ export function Sidebar() {
   const visibleBots = state.bots
     .filter((b) => !b.hidden)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
-  // multibot: sekcje sidebaru (port z MultiBot #296) — przypięte zostają na
+  // multibot: sekcje sidebaru (port z upstreamu #296) — przypięte zostają na
   // górze bez podziałów; reszta dzieli się na „bez sekcji" i sekcje w
   // kolejności zapisanej na serwerze. W zwiniętej szynie podziałów nie rysujemy.
   const [sectionPicker, setSectionPicker] = useState<{ botId: string; x: number; y: number } | null>(null);

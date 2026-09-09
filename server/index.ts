@@ -3881,7 +3881,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         ? json(res, 200, { ok: true })
         : json(res, 404, { error: "no such group" });
     }
-    // multibot: zmiana nazwy grupy (port z MultiBot #343) — harnessowy
+    // multibot: zmiana nazwy grupy (port z upstreamu #343) — harnessowy
     // zapis jest źródłem dla UI, silnik dostaje PATCH best-effort.
     if (m && method === "PATCH") {
       const body = await readBody(req);
@@ -4042,7 +4042,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
-      // multibot: sekcja sidebaru (port z MultiBot #296) — null/"" czyści,
+      // multibot: sekcja sidebaru (port z upstreamu #296) — null/"" czyści,
       // inaczej trim i limit 60 znaków.
       if (body.section !== undefined) {
         if (body.section !== null && typeof body.section !== "string") {
@@ -4837,7 +4837,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { instances: await registry.describe() });
     }
 
-    // multibot: live team map (port z MultiBot, GET /api/team-map)
+    // multibot: live team map (port z upstreamu, GET /api/team-map)
     if (method === "GET" && path === "/api/team-map") {
       const collaborations = groupStore
         .list()
@@ -4851,7 +4851,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { collaborations, queued: [], running: [] });
     }
 
-    // multibot: scout folderu → manifest zespołu (port z MultiBot #339)
+    // multibot: scout folderu → manifest zespołu (port z upstreamu #339)
     if (method === "GET" && path === "/api/teams/scout") {
       const cwd = url.searchParams.get("cwd") ?? "";
       if (!cwd || !isAbsolute(cwd)) return json(res, 400, { error: "cwd must be an absolute path" });
