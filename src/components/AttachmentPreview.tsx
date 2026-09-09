@@ -1,4 +1,4 @@
-// multibot: podgląd załącznika-obrazka w aplikacji (port z MultiBot #436).
+// multibot: podgląd załącznika-obrazka w aplikacji (port z upstreamu #436).
 // Portal nad całą powłoką; Escape i klik w tło zamykają, pobieranie zostaje.
 import { useEffect } from "react";
 import { createPortal } from "react-dom";

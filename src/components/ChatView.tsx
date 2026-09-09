@@ -5,11 +5,11 @@ import { Spinner } from "./Loading";
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
 import { AttachmentCard } from "./AttachmentCard";
-// multibot: lightbox załączników-obrazków (port z MultiBot #436)
+// multibot: lightbox załączników-obrazków (port z upstreamu #436)
 import { AttachmentPreviewDialog } from "./AttachmentPreview";
-// multibot: pasek szukania w transkrypcie (port z MultiBot #437)
+// multibot: pasek szukania w transkrypcie (port z upstreamu #437)
 import { ChatFindBar } from "./ChatFindBar";
-// multibot: flat replies — cytowanie wiadomości (port z MultiBot #437)
+// multibot: flat replies — cytowanie wiadomości (port z upstreamu #437)
 import { ReplyQuote, replyTargetOf } from "./ReplyQuote";
 import { routineStartName, slashCommandLabel } from "@/lib/transcriptChips";
 import { useStore, type Bot, type Message } from "@/state/store";

@@ -1,4 +1,4 @@
-// multibot: live team map (port z MultiBot, TeamMapPage → Panel).
+// multibot: live team map (port z upstreamu, TeamMapPage → Panel).
 // Polls GET /api/team-map co 3s; krawędzie live z snapshotu, sekcje z rostra
 // botów. Droga awaryjna, gdy backend nie ma delegacji: pokazuje same sekcje.
 import { useEffect, useState } from "react";

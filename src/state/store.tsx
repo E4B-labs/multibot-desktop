@@ -112,7 +112,7 @@ export interface Bot {
   /** multibot: id pierwszej nieprzeczytanej wiadomości — nad nią rysujemy
    *  separator "NEW" (wyczyszczany przy otwarciu czatu / select). */
   firstUnreadId?: string | null;
-  /** multibot: sekcja sidebaru (port z MultiBot #296) — brak = lista główna. */
+  /** multibot: sekcja sidebaru (port z upstreamu #296) — brak = lista główna. */
   section?: string;
   chiefOfStaff?: boolean;
   composioAccounts?: Record<string, string>;
@@ -228,7 +228,7 @@ interface AppState {
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
   memoryOpen: boolean;
   skillsOpen: boolean;
-  // multibot: live team map (port z MultiBot)
+  // multibot: live team map (port z upstreamu)
   teamMapOpen: boolean;
   inspectorOpen: boolean;
   /** multibot: skille bieżącego bota — nazwy podświetlają się w treści
@@ -303,7 +303,7 @@ type Action =
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
   | { type: "toggleMemory"; open?: boolean }
   | { type: "toggleSkills"; open?: boolean; skill?: string }
-  // multibot: team map (port z MultiBot)
+  // multibot: team map (port z upstreamu)
   | { type: "toggleTeamMap"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   /** multibot: nazwy skilli do podświetlania w treści wiadomości */
