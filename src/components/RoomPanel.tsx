@@ -8,7 +8,7 @@ import { useStore, formatTime, type Room } from "@/state/store";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { formatPeerEnvelope } from "@/lib/peerEnvelope";
 import { BotAvatar } from "./Avatar";
-import { stateForBot } from "@/lib/mascot";
+import { sidebarAvatarProps } from "@/lib/mascot";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
@@ -88,7 +88,7 @@ export function RoomPanel() {
               <span className="flex shrink-0 items-center -space-x-2">
                 {members.slice(0, 5).map((bot) => (
                   <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                    <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={24} animated={false} />
+                    <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={24} {...sidebarAvatarProps(bot)} />
                   </span>
                 ))}
               </span>
@@ -167,7 +167,7 @@ export function RoomPanel() {
                       >
                         {entryBot && (
                           <span className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                            <BotAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" state={stateForBot(entryBot)} size={28} animated={false} />
+                            <BotAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" size={28} {...sidebarAvatarProps(entryBot)} />
                           </span>
                         )}
                         <span className="text-[12.5px] font-semibold text-accent">{nameOf(entry.from)}</span>

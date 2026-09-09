@@ -17,7 +17,7 @@ import { formatPeerEnvelope, parsePeerEnvelope } from "@/lib/peerEnvelope";
 import { PeerBadge } from "./PeerBadge";
 import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSessions";
 import { BotAvatar } from "./Avatar";
-import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { sidebarAvatarProps } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CopyMessageButton } from "./CopyMessageButton";
 import { OptionCard } from "./OptionCard";
@@ -300,7 +300,7 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
       <span className="flex shrink-0 -space-x-1">
         {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
           <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-            <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={20} animated={false} />
+            <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...sidebarAvatarProps(bot)} />
           </span>
         ))}
       </span>
@@ -380,7 +380,7 @@ function RoomChip({ message }: { message: Message }) {
         {opening && <Spinner size={13} />}
         <span className="flex items-center gap-1 font-medium text-ink">
           {owner && (
-            <BotAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" state={stateForBot(owner)} size={18} animated={false} />
+            <BotAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" size={18} {...sidebarAvatarProps(owner)} />
           )}
           {owner ? botDisplayName(owner, polish ? "pl" : "en") : room.ownerBotId}
         </span>
@@ -389,7 +389,7 @@ function RoomChip({ message }: { message: Message }) {
         </span>
         {peers.map((peer) => (
           <span key={peer.id} className="flex items-center gap-1 font-medium text-ink">
-            <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" state={stateForBot(peer)} size={18} animated={false} />
+            <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" size={18} {...sidebarAvatarProps(peer)} />
             {botDisplayName(peer, polish ? "pl" : "en")}
           </span>
         ))}

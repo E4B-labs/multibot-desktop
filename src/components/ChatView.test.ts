@@ -215,10 +215,14 @@ describe("małe awatary rozmów botów", () => {
     const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
     expect(card).toContain("bg-app ring-2 ring-app");
     expect(card).toContain('shape="blob"');
+    expect(card).toContain("{...sidebarAvatarProps(bot)}");
+    expect(card).not.toContain("state={stateForBot(bot)}");
   });
 
   it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
     expect(roomPanel).toContain("bg-app ring-2 ring-app");
     expect(roomPanel).toContain('shape="blob"');
+    expect(roomPanel).toContain("{...sidebarAvatarProps(bot)}");
+    expect(roomPanel).not.toContain("state={stateForBot(bot)}");
   });
 });
