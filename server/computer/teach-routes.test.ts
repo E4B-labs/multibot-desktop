@@ -38,9 +38,9 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
 
 beforeAll(async () => {
   fake = await startFakeCdp();
-  home = mkdtempSync(join(tmpdir(), "omb-teach-test-"));
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({}));
+  home = mkdtempSync(join(tmpdir(), "multibot-teach-test-"));
+  mkdirSync(join(home, ".multibot"), { recursive: true });
+  writeFileSync(join(home, ".multibot", "config.json"), JSON.stringify({}));
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
@@ -49,9 +49,9 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
-      OMB_ONBOARDING_TURN: "0",
-      OMB_HOST: "127.0.0.1",
+      MULTIBOT_PORT: String(PORT),
+      MULTIBOT_ONBOARDING_TURN: "0",
+      MULTIBOT_HOST: "127.0.0.1",
       // No container in a test run — the browser is the fake below.
       MULTIBOT_COMPUTER: "off",
       MULTIBOT_COMPUTER_CDP_URL: fake.url,

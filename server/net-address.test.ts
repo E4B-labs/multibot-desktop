@@ -72,7 +72,7 @@ describe("candidatesFrom", () => {
     }
   });
 
-  it("falls back to http only when told to (OMB_TLS=off behind a proxy)", () => {
+  it("falls back to http only when told to (MULTIBOT_TLS=off behind a proxy)", () => {
     expect(candidatesFrom({ eth0: [iface("1.1.1.1", "IPv4")] }, 8799, "http")[0].address)
       .toBe("http://1.1.1.1:8799");
   });

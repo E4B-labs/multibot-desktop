@@ -94,28 +94,28 @@ import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
 import { onionSuppressed, startTor, torBinary, torEnabled, TOR_INGRESS_PORT, type Tor } from "./tor.ts";
 
-const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
+const PORT = Number(process.env.MULTIBOT_PORT || process.env.OGB_PORT || 8799);
 // `Number("eight")` is NaN and `server.listen(NaN)` quietly picks a RANDOM free
 // port — a server nobody can find, reported as running. And 8798 is the Tor
 // ingress: sharing it would put every direct client in the Tor rate-limit
 // bucket and, worse, make `isLoopbackRequest` false for the local browser.
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535 || PORT === TOR_INGRESS_PORT) {
-  console.error(`[multibot] OMB_PORT=${process.env.OMB_PORT ?? process.env.OGB_PORT ?? ""} is not usable — give a whole number from 1 to 65535, and not ${TOR_INGRESS_PORT} (that one belongs to the Tor ingress).`);
+  console.error(`[multibot] MULTIBOT_PORT=${process.env.MULTIBOT_PORT ?? process.env.OGB_PORT ?? ""} is not usable — give a whole number from 1 to 65535, and not ${TOR_INGRESS_PORT} (that one belongs to the Tor ingress).`);
   process.exit(1);
 }
-const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
+const HOST = process.env.MULTIBOT_HOST?.trim() || "127.0.0.1";
 const LOOPBACK_HOST = new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
 // TLS jest ZAWSZE, poza jednym świadomym wyjątkiem: reverse proxy, które samo
 // kończy HTTPS i rozmawia z harnessem po loopbacku (docs/REMOTE-ACCESS.md).
-const TLS_OFF = /^(0|off|false|no)$/i.test(process.env.OMB_TLS?.trim() ?? "");
+const TLS_OFF = /^(0|off|false|no)$/i.test(process.env.MULTIBOT_TLS?.trim() ?? "");
 const SCHEME = TLS_OFF ? "http" : "https";
-const PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "");
+const PUBLIC_URL = process.env.MULTIBOT_PUBLIC_URL?.trim().replace(/\/+$/, "");
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE = !LOOPBACK_HOST;
 
 /** What to print as "the address". A server bound to one interface is only
  * reachable there, so advertising some other NIC would be a lie; only a
- * wildcard bind gets to pick. `OMB_PUBLIC_URL` still wins — someone who put a
+ * wildcard bind gets to pick. `MULTIBOT_PUBLIC_URL` still wins — someone who put a
  * real domain in front knows better than any discovery. */
 function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
@@ -167,7 +167,7 @@ function relayHost(): string | null {
 // see `onionSuppressed`; that check also decides whether the built UI is served.
 const ONION_SUPPRESSED = onionSuppressed(LOOPBACK_HOST, TLS_OFF);
 const TOR_POSSIBLE = !ONION_SUPPRESSED && torEnabled() && torBinary() !== null;
-const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
+const STATIC_DIR = process.env.MULTIBOT_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -203,12 +203,12 @@ ensureDirs();
 // Materiał TLS PO `ensureDirs` (migracja starego katalogu danych sprawdza, czy
 // DATA_DIR jeszcze nie istnieje) i PRZED serwerem, bo `createServer` chce go
 // od razu. `tls.crt` jest publiczny, `tls.key` ma 0600.
-// `OMB_TLS=off` ma jedno zastosowanie: reverse proxy kończące TLS u siebie i
+// `MULTIBOT_TLS=off` ma jedno zastosowanie: reverse proxy kończące TLS u siebie i
 // rozmawiające z harnessem po pętli zwrotnej. Na adresie widocznym w sieci
 // znaczyłoby to hasła i sesje gołym tekstem — dlatego nie ostrzeżenie, tylko
 // odmowa startu: serwer, który cicho poszedł bez TLS-a, jest gorszy niż żaden.
 if (TLS_OFF && !LOOPBACK_HOST) {
-  console.error(`[multibot] OMB_TLS=off wolno użyć TYLKO na pętli zwrotnej, a OMB_HOST=${HOST}. Ustaw OMB_HOST=127.0.0.1 (za reverse proxy) albo zdejmij OMB_TLS.`);
+  console.error(`[multibot] MULTIBOT_TLS=off wolno użyć TYLKO na pętli zwrotnej, a MULTIBOT_HOST=${HOST}. Ustaw MULTIBOT_HOST=127.0.0.1 (za reverse proxy) albo zdejmij MULTIBOT_TLS.`);
   process.exit(1);
 }
 const TLS = TLS_OFF ? null : ensureTlsMaterial(DATA_DIR);
@@ -294,12 +294,12 @@ const COMMS_TOKEN = randomBytes(24).toString("hex");
 // meant to see, and nothing in the UI counts against it.
 const DEFAULT_COLLAB_MAX_MESSAGES = 200;
 function collabMaxMessages(): number {
-  const raw = Number(process.env.OMB_COLLAB_MAX_MESSAGES);
+  const raw = Number(process.env.MULTIBOT_COLLAB_MAX_MESSAGES);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_COLLAB_MAX_MESSAGES;
 }
 const DEFAULT_COLLAB_MAX_MS = 2 * 60 * 60_000;
 function collabMaxMs(): number {
-  const raw = Number(process.env.OMB_COLLAB_MAX_MS);
+  const raw = Number(process.env.MULTIBOT_COLLAB_MAX_MS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_COLLAB_MAX_MS;
 }
 /** "Room only for task": a user @mention opens a collaboration room only when
@@ -310,7 +310,7 @@ const TASK_HINTS =
 // wiarygodniejsza) połowa `chainDepth` w `store.ts`. Upstream ufa `depth` z env
 // proxy, co działa, dopóki proxy startuje raz na turę (claude/ACP); bot silnika
 const activeCommsDepth = new Map<string, number>();
-// multibot: boty, których tura trzyma slot z OMB_MAX_PARALLEL_TURNS. Slot
+// multibot: boty, których tura trzyma slot z MULTIBOT_MAX_PARALLEL_TURNS. Slot
 // bierze tylko tura główna (nieizolowana, depth 0) — tura zagnieżdżona czekałaby
 // na slot trzymany przez własnego wołającego.
 const gatedTurnBots = new Set<string>();
@@ -333,7 +333,7 @@ const busyWatchdog = new Map<string, ReturnType<typeof setTimeout>>();
 /** 70 s of a provider saying nothing means the provider is gone. Overridable
  * only so tests can reach the teardown without waiting out the real ceiling. */
 function busyWatchdogMs(): number {
-  const raw = Number(process.env.OMB_BUSY_WATCHDOG_MS);
+  const raw = Number(process.env.MULTIBOT_BUSY_WATCHDOG_MS);
   return Number.isFinite(raw) && raw >= 500 ? Math.floor(raw) : 70_000;
 }
 
@@ -379,9 +379,9 @@ function proxyIntegration(proxy: string, botId: string) {
     args: [proxy],
     env: {
       ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `${SCHEME}://127.0.0.1:${PORT}`,
-      OMB_BOT_ID: botId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
+      MULTIBOT_HARNESS_URL: `${SCHEME}://127.0.0.1:${PORT}`,
+      MULTIBOT_BOT_ID: botId,
+      MULTIBOT_COMMS_TOKEN: COMMS_TOKEN,
     },
   };
 }
@@ -745,7 +745,7 @@ const sentPeerText = new Map<string, string>();
 const budgetCooldown = new Map<string, number>();
 const DEFAULT_COLLAB_COOLDOWN_MS = 10 * 60_000;
 function collabCooldownMs(): number {
-  const raw = Number(process.env.OMB_COLLAB_COOLDOWN_MS);
+  const raw = Number(process.env.MULTIBOT_COLLAB_COOLDOWN_MS);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_COLLAB_COOLDOWN_MS;
 }
 const pairKey = (a: string, b: string) => [a, b].sort().join("|");
@@ -786,7 +786,7 @@ type PeerDelivery = "steered" | "queued" | "refused";
 const ONBOARDING_FIRST_TURN =
   "Before anything else: check what is already connected. List your connectors, tools and whether you have a computer, then tell the user in two or three sentences what you can do right now, and ask only for the access you are actually missing.";
 /** Off inside vitest and wherever a harness needs bots that stay quiet. */
-const onboardingTurnEnabled = () => !process.env.VITEST && process.env.OMB_ONBOARDING_TURN !== "0";
+const onboardingTurnEnabled = () => !process.env.VITEST && process.env.MULTIBOT_ONBOARDING_TURN !== "0";
 
 /** Polish is the only second language MultiBot ships texts in, so telling the
  * two apart is all the peer protocol needs: the envelope carries "Reply in X"
@@ -1159,13 +1159,13 @@ async function runGroupChat(
 
 /**
  * multibot: okno sklejania. Kilka zdań wysłanych szybko pod rząd to JEDNA tura
- * i JEDNA odpowiedź — tura rusza dopiero, gdy przez `OMB_TURN_DEBOUNCE_MS` nic
+ * i JEDNA odpowiedź — tura rusza dopiero, gdy przez `MULTIBOT_TURN_DEBOUNCE_MS` nic
  * nowego nie przyszło. W wątku każda wiadomość zostaje osobną bańką; sklejony
  * jest wyłącznie prompt lecący do drivera.
  */
 const DEFAULT_TURN_DEBOUNCE_MS = 1500;
 const turnDebounceMs = () => {
-  const raw = Number(process.env.OMB_TURN_DEBOUNCE_MS);
+  const raw = Number(process.env.MULTIBOT_TURN_DEBOUNCE_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_TURN_DEBOUNCE_MS;
 };
 const turnDebounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2382,12 +2382,12 @@ opts?: {
 
   const turnAttachments = opts?.attachments ?? [];
   // multibot: tury RÓŻNYCH botów chodzą równolegle. Jedyne, co je ogranicza, to
-  // liczba jednoczesnych tur (OMB_MAX_PARALLEL_TURNS) — nie kolejność. Tura
+  // liczba jednoczesnych tur (MULTIBOT_MAX_PARALLEL_TURNS) — nie kolejność. Tura
   // zagnieżdżona (izolowana albo delegowana, depth > 0) slotu nie bierze: jej
   // wołający właśnie jeden trzyma, więc czekałaby sama na siebie.
   // ponytail: tura peera to teraz zwykła tura głównego wątku, więc BIERZE slot
   // — rozmowa botów potrafi wygłodzić wiadomość człowieka przy małym
-  // OMB_MAX_PARALLEL_TURNS. Sufit świadomy: gdyby doskwierało, należy się
+  // MULTIBOT_MAX_PARALLEL_TURNS. Sufit świadomy: gdyby doskwierało, należy się
   // osobna pula slotów dla tur o origin "bot", nie zdejmowanie bramki.
   const gated = !isolated && commsDepth === 0;
   const userMessage = isolated || opts?.userMessagePosted ? null : store.appendMessage(bot.threadId, {
@@ -2406,7 +2406,7 @@ opts?: {
   // transcript: settled text turns only. Driverzy API-owi (grok) grają z niego
   // rozmowę co turę, drivery CLI (codex/claude) dostają go tylko wtedy, gdy
   // sesja dostawcy przepadła i trzeba odtworzyć rozmowę od zera. Dlatego CAŁY
-  // wątek, przycięty budżetem znaków (OMB_HISTORY_MAX_CHARS) zamiast sztywnym
+  // wątek, przycięty budżetem znaków (MULTIBOT_HISTORY_MAX_CHARS) zamiast sztywnym
   // „ostatnie 40" — po 40 wiadomościach bot zapominał początek rozmowy.
   const transcript = opts?.transcript ?? trimTranscript(
     store
@@ -2457,7 +2457,7 @@ opts?: {
 
   void (async () => {
     try {
-      // Slot na turę. Wolny (flota poniżej OMB_MAX_PARALLEL_TURNS) → rusza od
+      // Slot na turę. Wolny (flota poniżej MULTIBOT_MAX_PARALLEL_TURNS) → rusza od
       // razu, więc dwa boty pracują naprawdę równolegle.
       if (gated) {
         gatedTurnBots.add(bot.id);
@@ -3881,7 +3881,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         ? json(res, 200, { ok: true })
         : json(res, 404, { error: "no such group" });
     }
-    // multibot: zmiana nazwy grupy (port z OpenMausBot #343) — harnessowy
+    // multibot: zmiana nazwy grupy (port z MultiBot #343) — harnessowy
     // zapis jest źródłem dla UI, silnik dostaje PATCH best-effort.
     if (m && method === "PATCH") {
       const body = await readBody(req);
@@ -4042,7 +4042,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
-      // multibot: sekcja sidebaru (port z OpenMausBot #296) — null/"" czyści,
+      // multibot: sekcja sidebaru (port z MultiBot #296) — null/"" czyści,
       // inaczej trim i limit 60 znaków.
       if (body.section !== undefined) {
         if (body.section !== null && typeof body.section !== "string") {
@@ -4395,7 +4395,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       // multibot: KAŻDA wiadomość idzie przez kolejkę — i ta wysłana w trakcie
       // tury (0.1.44: zamiast 409), i ta wysłana do wolnego bota. Bańka ląduje
-      // w wątku od razu, a tura rusza po oknie `OMB_TURN_DEBOUNCE_MS`, więc
+      // w wątku od razu, a tura rusza po oknie `MULTIBOT_TURN_DEBOUNCE_MS`, więc
       // trzy zdania wysłane pod rząd to JEDNA tura i JEDNA odpowiedź, nie trzy.
       const target = store.bot(m[1]);
       if (!target) return json(res, 404, { error: "no such bot" });
@@ -4776,7 +4776,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         app: "multibot",
         pid: process.pid,
         static: Boolean(STATIC_DIR),
-        service: process.env.OMB_SERVER_SERVICE === "1",
+        service: process.env.MULTIBOT_SERVER_SERVICE === "1",
       });
     }
 
@@ -4837,7 +4837,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { instances: await registry.describe() });
     }
 
-    // multibot: live team map (port z OpenMausBot, GET /api/team-map)
+    // multibot: live team map (port z MultiBot, GET /api/team-map)
     if (method === "GET" && path === "/api/team-map") {
       const collaborations = groupStore
         .list()
@@ -4851,7 +4851,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { collaborations, queued: [], running: [] });
     }
 
-    // multibot: scout folderu → manifest zespołu (port z OpenMausBot #339)
+    // multibot: scout folderu → manifest zespołu (port z MultiBot #339)
     if (method === "GET" && path === "/api/teams/scout") {
       const cwd = url.searchParams.get("cwd") ?? "";
       if (!cwd || !isAbsolute(cwd)) return json(res, 400, { error: "cwd must be an absolute path" });
@@ -5275,7 +5275,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
-    // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
+    // everything, no dev proxy to die). MULTIBOT_STATIC_DIR is set by Electron.
     if ((method === "GET" || method === "HEAD") && !path.startsWith("/api/") && STATIC_DIR) {
       const root = resolve(STATIC_DIR);
       const requested = path === "/" ? "index.html" : decodeURIComponent(path).replace(/^[/\\]+/, "");
@@ -5464,7 +5464,7 @@ server.listen(PORT, HOST, () => {
   void refreshAddress(PORT).catch(() => {});
   setInterval(() => void refreshAddress(PORT).catch(() => {}), 10 * 60_000).unref?.();
   // A stale CLI is a dead bot: the API rejects the turn outright. Keep every
-  // installed harness current in the background — OMB_AUTO_UPDATE=0 opts out.
+  // installed harness current in the background — MULTIBOT_AUTO_UPDATE=0 opts out.
   scheduleHarnessUpdates(async () =>
     (await registry.describe())
       .filter((i) => i.snapshot.state === "available")

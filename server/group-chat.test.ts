@@ -75,11 +75,11 @@ const startHarness = async (extraEnv: Record<string, string>) => {
   chmodSync(FAKE_CLI, 0o755);
   const port = 18800 + Math.floor(Math.random() * 10_000);
   base = `https://127.0.0.1:${port}`;
-  home = mkdtempSync(join(tmpdir(), "omb-groupchat-"));
+  home = mkdtempSync(join(tmpdir(), "multibot-groupchat-"));
   stderr = "";
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({ instances: { atlas: ATLAS, research: RESEARCH } }),
   );
 
@@ -90,11 +90,11 @@ const startHarness = async (extraEnv: Record<string, string>) => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(port),
-      OMB_HOST: "127.0.0.1",
+      MULTIBOT_PORT: String(port),
+      MULTIBOT_HOST: "127.0.0.1",
       MULTIBOT_COMPUTER: "off",
-      OMB_ONBOARDING_TURN: "0",
-      OMB_TURN_DEBOUNCE_MS: "150",
+      MULTIBOT_ONBOARDING_TURN: "0",
+      MULTIBOT_TURN_DEBOUNCE_MS: "150",
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],

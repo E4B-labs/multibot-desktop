@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // multibot: styles.css niosło ~555 linii martwej animacji maskotki — pełny
-// silnik `maus-*` (bevel, orbity, wstążki, konfetti, dymki peer-chat) z czasów,
+// silnik maskotki (bevel, orbity, wstążki, konfetti, dymki peer-chat) z czasów,
 // gdy maskotka była rysowana CSS-em. Dziś rysuje ją inline SVG w BlobAvatar,
 // a peer-chat nie istnieje. Nikt tego nie zauważył, bo martwego CSS-a nic nie
 // pilnuje: nie ma go w typach, w testach, ani w buildzie.
@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 const src = fileURLToPath(new URL(".", import.meta.url));
 const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
-const DEAD_PREFIXES = ["maus-", "peer-chat"];
+const DEAD_PREFIXES = ["peer-chat"];
 
 /** Wszystkie pliki .ts/.tsx pod src/, płasko po katalogach. */
 function sources(dir: string): string[] {
@@ -44,6 +44,6 @@ describe("styles.css nie trzyma martwych klas maskotki", () => {
 
   it("czyta prawdziwy arkusz i prawdziwe źródła", () => {
     expect(css.length).toBeGreaterThan(1_000);
-    expect(code).toContain("MausAvatar");
+    expect(code).toContain("BotAvatar");
   });
 });

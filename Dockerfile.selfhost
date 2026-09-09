@@ -14,7 +14,7 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build \
  && pnpm build:server
-ENV HOME=/data OMB_HOST=0.0.0.0 OMB_PORT=8799
+ENV HOME=/data MULTIBOT_HOST=0.0.0.0 MULTIBOT_PORT=8799
 VOLUME ["/data"]
 EXPOSE 8799
 ENTRYPOINT ["bash", "/app/scripts/docker-entrypoint.sh"]

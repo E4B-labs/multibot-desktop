@@ -90,7 +90,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  delete process.env.OMB_AUTO_UPDATE;
+  delete process.env.MULTIBOT_AUTO_UPDATE;
   resetCliUpdateForTests();
 });
 
@@ -271,13 +271,13 @@ describe("staleCliNotice", () => {
 });
 
 describe("scheduleHarnessUpdates", () => {
-  it("arms a boot check and a daily one, and skips both on OMB_AUTO_UPDATE=0", () => {
+  it("arms a boot check and a daily one, and skips both on MULTIBOT_AUTO_UPDATE=0", () => {
     vi.useFakeTimers();
     scheduleHarnessUpdates(async () => []);
     expect(vi.getTimerCount()).toBe(2);
 
     vi.clearAllTimers();
-    process.env.OMB_AUTO_UPDATE = "0";
+    process.env.MULTIBOT_AUTO_UPDATE = "0";
     scheduleHarnessUpdates(async () => ["claude"]);
     expect(vi.getTimerCount()).toBe(0);
   });

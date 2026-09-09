@@ -12,8 +12,8 @@ import {
   type ReactNode,
 } from "react";
 import type { MascotShape } from "@/lib/mascotShapes";
-import type { MausColor, MausMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
-import { MAUS_COLORS } from "@/lib/mascot";
+import type { BotColor, BotMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
+import { BOT_COLORS } from "@/lib/mascot";
 import { authFetch, authenticatedEventSource } from "@/lib/auth";
 import { getLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
@@ -29,7 +29,7 @@ import {
 import { sortMessages } from "@/lib/messageOrder";
 import type { AutoVerifySettings } from "@/lib/autoVerifyTypes";
 
-export type { MausColor } from "@/lib/mascot";
+export type { BotColor } from "@/lib/mascot";
 
 const SELECTED_BOT_KEY = "multibot.selectedBot";
 // multibot: klient trzyma ostatnie pokoje współpracy dla wskaźnika aktywności;
@@ -101,7 +101,7 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
+  color: BotColor;
   mascotExpression?: string | null;
   mascotShape?: MascotShape;
   avatarUrl?: string | null;
@@ -112,7 +112,7 @@ export interface Bot {
   /** multibot: id pierwszej nieprzeczytanej wiadomości — nad nią rysujemy
    *  separator "NEW" (wyczyszczany przy otwarciu czatu / select). */
   firstUnreadId?: string | null;
-  /** multibot: sekcja sidebaru (port z OpenMausBot #296) — brak = lista główna. */
+  /** multibot: sekcja sidebaru (port z MultiBot #296) — brak = lista główna. */
   section?: string;
   chiefOfStaff?: boolean;
   composioAccounts?: Record<string, string>;
@@ -228,7 +228,7 @@ interface AppState {
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
   memoryOpen: boolean;
   skillsOpen: boolean;
-  // multibot: live team map (port z OpenMausBot)
+  // multibot: live team map (port z MultiBot)
   teamMapOpen: boolean;
   inspectorOpen: boolean;
   /** multibot: skille bieżącego bota — nazwy podświetlają się w treści
@@ -262,7 +262,7 @@ interface AppState {
   mascotMotion: {
     botId: string;
     nonce: number;
-    kind: Exclude<MausMotion, "none">;
+    kind: Exclude<BotMotion, "none">;
   } | null;
 }
 
@@ -303,7 +303,7 @@ type Action =
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
   | { type: "toggleMemory"; open?: boolean }
   | { type: "toggleSkills"; open?: boolean; skill?: string }
-  // multibot: team map (port z OpenMausBot)
+  // multibot: team map (port z MultiBot)
   | { type: "toggleTeamMap"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   /** multibot: nazwy skilli do podświetlania w treści wiadomości */
@@ -337,7 +337,7 @@ function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppStat
 function withMascotMotion(
   state: AppState,
   botId: string,
-  kind: Exclude<MausMotion, "none">,
+  kind: Exclude<BotMotion, "none">,
 ): AppState {
   return {
     ...state,
@@ -858,7 +858,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         title: `${botDisplayName(bot, lang)} ${reason === "attention" ? "needs your input" : "finished"}`,
         body: reason === "attention" ? (next.needsAttention ?? "") : last?.text?.slice(0, 180) ?? "New bot message",
         botId: bot.id,
-        icon: botNotificationIcon(MAUS_COLORS[bot.color]),
+        icon: botNotificationIcon(BOT_COLORS[bot.color]),
       });
     }
   }, [state.bots, state.selectedId]);
@@ -1098,7 +1098,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const payload = notifyFrame(frame, { enabled: readDesktopNotifications() });
           if (payload) {
             const bot = stateRef.current.bots.find((b) => b.id === payload.botId);
-            notify({ ...payload, icon: bot ? botNotificationIcon(MAUS_COLORS[bot.color]) : undefined });
+            notify({ ...payload, icon: bot ? botNotificationIcon(BOT_COLORS[bot.color]) : undefined });
           }
           break;
         }

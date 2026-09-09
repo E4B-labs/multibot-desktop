@@ -8,7 +8,7 @@ import { ArrowLeft, Loader2, MessagesSquare, X } from "lucide-react";
 import { useLanguage } from "@/lib/language";
 import { cn } from "@/lib/cn";
 import { formatTime, useStore, type Room } from "@/state/store";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { botDisplayName } from "@/lib/botNames";
 
@@ -75,7 +75,7 @@ export function RoomsPanel() {
               >
                 <span className="flex shrink-0 items-center -space-x-2">
                   {members.slice(0, 4).map((bot) => (
-                    <MausAvatar
+                    <BotAvatar
                       key={bot.id}
                       color={bot.color}
                       avatarUrl={bot.avatarUrl}

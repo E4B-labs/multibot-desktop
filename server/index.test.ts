@@ -62,7 +62,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => ttsServer.listen(0, "127.0.0.1", resolve));
   const ttsUrl = `http://127.0.0.1:${(ttsServer.address() as { port: number }).port}/v1/audio/speech`;
 
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = mkdtempSync(join(tmpdir(), "multibot-api-test-"));
   staticDir = join(home, "dist");
   mkdirSync(staticDir, { recursive: true });
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Multibot login</title>");
@@ -71,9 +71,9 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "sw.js"), "self.addEventListener('fetch', () => {})");
   mkdirSync(join(staticDir, "assets"));
   writeFileSync(join(staticDir, "assets", "app-abc123.js"), "console.log('fingerprinted')");
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({
       voice: { key: "tts-test-key" },
       instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } },
@@ -82,7 +82,7 @@ beforeAll(async () => {
   // Seed a terminal setup job so progress endpoint is covered without
   // launching real provisioning or package installation in this test.
   writeFileSync(
-    join(home, ".openmausbot", "setup-jobs.json"),
+    join(home, ".multibot", "setup-jobs.json"),
     JSON.stringify([
       {
         id: "done-job",
@@ -99,7 +99,7 @@ beforeAll(async () => {
     ]),
   );
   writeFileSync(
-    join(home, ".openmausbot", "groups.json"),
+    join(home, ".multibot", "groups.json"),
     JSON.stringify([{ id: "g-local", name: "1", bot_ids: [], createdAt: 1, messages: [] }]),
   );
 
@@ -110,20 +110,20 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
+      MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
       // Same reason as MULTIBOT_COMPUTER below: VITEST does not reach the
       // spawned harness, so the boot updater would run a REAL `claude update`
       // on the developer's machine while the suite is still up.
-      OMB_AUTO_UPDATE: "0",
+      MULTIBOT_AUTO_UPDATE: "0",
       // multibot (H2): a spawned harness gets a minimal env, so VITEST does not
       // reach it — without this the server would provision REAL containers for
       // every throwaway test bot.
       MULTIBOT_COMPUTER: "off",
       // Loopback keeps tests valid in restricted CI sandboxes; public access
       // is provided by the HTTPS tunnel/reverse proxy in real deployments.
-      OMB_HOST: "127.0.0.1",
-      OMB_STATIC_DIR: staticDir,
+      MULTIBOT_HOST: "127.0.0.1",
+      MULTIBOT_STATIC_DIR: staticDir,
       MULTIBOT_TTS_URL: ttsUrl,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -153,7 +153,7 @@ beforeAll(async () => {
   // moment a profile exists, so no later `it` could observe this state.
   // The setup token lives in the server's own setup.json — reading that file is
   // the actual permission, because loopback is not per-app on a phone.
-  const setupToken = (JSON.parse(readFileSync(join(home, ".openmausbot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
+  const setupToken = (JSON.parse(readFileSync(join(home, ".multibot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
   const withToken = { "x-multibot-setup": setupToken };
   setupValuesBehindProxy = (await fetch(`${BASE}/api/setup/values`, { headers: { ...withToken, "x-forwarded-for": "1.2.3.4" } })).status;
   setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
@@ -956,7 +956,7 @@ describe("harness HTTP API", () => {
     expect(setupFingerprint).toMatch(/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/);
     // beforeAll already registered the owner, so the route is closed for good.
     expect((await fetch(`${BASE}/api/setup/values`)).status).toBe(404);
-    expect(existsSync(join(home, ".openmausbot", "setup.json"))).toBe(false);
+    expect(existsSync(join(home, ".multibot", "setup.json"))).toBe(false);
     // …and the retired setup route is gone with it.
     expect((await api("POST", "/api/setup/server", { name: "nope" })).status).toBe(404);
   });

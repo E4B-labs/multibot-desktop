@@ -51,11 +51,11 @@ const waitFor = async (fn: () => Promise<boolean>, ms = 25_000, what = "conditio
 
 beforeAll(async () => {
   chmodSync(FAKE_CLI, 0o755);
-  home = mkdtempSync(join(tmpdir(), "omb-goals-test-"));
+  home = mkdtempSync(join(tmpdir(), "multibot-goals-test-"));
   counterFile = join(home, "goal-counter.txt");
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({
       instances: {
         grok: {
@@ -74,8 +74,8 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
+      MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
       MULTIBOT_COMPUTER: "off",
     },
     stdio: ["ignore", "pipe", "pipe"],

@@ -48,10 +48,10 @@ beforeAll(async () => {
     });
   });
   base = `https://127.0.0.1:${port}`;
-  home = mkdtempSync(join(tmpdir(), "omb-busy-test-"));
-  mkdirSafe(join(home, ".openmausbot"));
+  home = mkdtempSync(join(tmpdir(), "multibot-busy-test-"));
+  mkdirSafe(join(home, ".multibot"));
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({
       instances: { fake: { driver: "grokAgent", displayName: "Fake", config: { cli: FAKE_CLI, fullAuto: false } } },
     }),
@@ -64,12 +64,12 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(port),
-      OMB_ONBOARDING_TURN: "0",
+      MULTIBOT_PORT: String(port),
+      MULTIBOT_ONBOARDING_TURN: "0",
       MULTIBOT_COMPUTER: "off",
-      OMB_HOST: "127.0.0.1",
+      MULTIBOT_HOST: "127.0.0.1",
       // ten test pilnuje `busy` w trakcie tury, nie okna sklejania wiadomości
-      OMB_TURN_DEBOUNCE_MS: "0",
+      MULTIBOT_TURN_DEBOUNCE_MS: "0",
       FAKE_ACP_MODE: "hang",
     },
     stdio: ["ignore", "pipe", "pipe"],

@@ -15,11 +15,11 @@ import type { SendTurnInput } from "../contracts.ts";
 
 type Transcript = NonNullable<SendTurnInput["transcript"]>;
 
-/** Górny limit odtwarzanej historii w znakach (`OMB_HISTORY_MAX_CHARS`). */
+/** Górny limit odtwarzanej historii w znakach (`MULTIBOT_HISTORY_MAX_CHARS`). */
 export const DEFAULT_HISTORY_MAX_CHARS = 200_000;
 
 export function historyMaxChars(): number {
-  const raw = Number(process.env.OMB_HISTORY_MAX_CHARS);
+  const raw = Number(process.env.MULTIBOT_HISTORY_MAX_CHARS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_HISTORY_MAX_CHARS;
 }
 

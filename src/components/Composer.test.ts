@@ -132,11 +132,11 @@ const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("pasek nad composerem", () => {
   it("ma dokładnie jeden animowany awatar", () => {
-    // Pozostałe MausAvatar w pliku to ikonki wierszy palety „/" — stoją
+    // Pozostałe BotAvatar w pliku to ikonki wierszy palety „/" — stoją
     // nieruchomo (bez propa `animated`), więc liczy się właśnie ten prop.
     expect(composer.match(/^\s*animated\s*$/gm) ?? []).toHaveLength(1);
     const strip = composer.slice(composer.indexOf("{strip && ("));
-    expect(strip.slice(0, strip.indexOf("</div>")).match(/<MausAvatar/g) ?? []).toHaveLength(1);
+    expect(strip.slice(0, strip.indexOf("</div>")).match(/<BotAvatar/g) ?? []).toHaveLength(1);
   });
 
   it("nie renderuje już wskaźnika rozmów bot-bot", () => {

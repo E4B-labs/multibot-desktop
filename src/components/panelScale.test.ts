@@ -25,7 +25,7 @@ describe("skala prawego panelu i czatu", () => {
     expect(panel).toContain("aria-expanded={appearanceMode !== \"closed\"}");
     expect(panel).toContain('type AppearanceMode = "closed" | "bot" | "photo"');
     expect(panel).toContain("MASCOT_SHAPES.map");
-    expect(panel).toContain("MAUS_COLOR_NAMES.map");
+    expect(panel).toContain("BOT_COLOR_NAMES.map");
     expect(panel).toContain("Prześlij");
     expect(panel).not.toContain("Generate");
     expect(panel).not.toContain("Generuj");

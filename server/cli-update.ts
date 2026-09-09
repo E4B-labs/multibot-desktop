@@ -279,9 +279,9 @@ export function staleCliNotice(text: string): string {
   return `${text}\n\nMultiBot is updating Claude Code now, send the message again in a minute.`;
 }
 
-/** Boot + daily update of every installed harness, off under OMB_AUTO_UPDATE=0. */
+/** Boot + daily update of every installed harness, off under MULTIBOT_AUTO_UPDATE=0. */
 export function scheduleHarnessUpdates(installedTools: () => Promise<readonly string[]>): void {
-  if (process.env.OMB_AUTO_UPDATE === "0") return;
+  if (process.env.MULTIBOT_AUTO_UPDATE === "0") return;
   const tick = async () => {
     try {
       await updateAll(await installedTools());

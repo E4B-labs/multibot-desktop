@@ -7,7 +7,7 @@ import { Eye, Loader2, Users, X } from "lucide-react";
 import { useStore, formatTime, type Room } from "@/state/store";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { formatPeerEnvelope } from "@/lib/peerEnvelope";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
@@ -88,7 +88,7 @@ export function RoomPanel() {
               <span className="flex shrink-0 items-center -space-x-2">
                 {members.slice(0, 5).map((bot) => (
                   <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                    <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={24} animated={false} />
+                    <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={24} animated={false} />
                   </span>
                 ))}
               </span>
@@ -167,7 +167,7 @@ export function RoomPanel() {
                       >
                         {entryBot && (
                           <span className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                            <MausAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" state={stateForBot(entryBot)} size={28} animated={false} />
+                            <BotAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" state={stateForBot(entryBot)} size={28} animated={false} />
                           </span>
                         )}
                         <span className="text-[12.5px] font-semibold text-accent">{nameOf(entry.from)}</span>

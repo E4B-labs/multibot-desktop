@@ -1,5 +1,5 @@
 // Bot avatar — the Blob Studio "Blob" mascot (BlobAvatar.tsx), wrapped in the
-// app's historical MausAvatar API so no call site changes: per-bot color
+// app's historical BotAvatar API so no call site changes: per-bot color
 // becomes a body gradient, the app's one-shot motion beats borrow the
 // face/state for a moment, and the eyes follow the pointer. BlobAvatar owns
 // blinking, drift, body motion, effects and glyphs; nothing here re-draws them.
@@ -12,7 +12,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { BOT_COLORS, type BotColor, type BotMotion, type BotState } from "@/lib/mascot";
 import { mascotShape, type MascotShape } from "@/lib/mascotShapes";
 import { BlobAvatar, DEFAULT_GAZE, type BlobAvatarHandle } from "./BlobAvatar";
 
@@ -28,7 +28,7 @@ const STUDIO = {
 };
 
 /**
- * Legacy face-placement knobs from the Maus body era. The blob places its own
+ * Legacy face-placement knobs from the old mascot body era. The blob places its own
  * face; these remain only so the preview harness's sliders keep compiling —
  * the matching props are accepted and ignored.
  */
@@ -50,7 +50,7 @@ const FORWARD_GAZE = { x: 0, y: 0 };
  * per state, so borrowing the state for a beat moves body and face together.
  */
 const MOTION_FACE: Partial<
-  Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+  Record<Exclude<BotMotion, "none">, { state?: BotState; blink?: boolean; spin?: number }>
 > = {
   arrive: { state: "spawning", spin: 900 },
   switch: { state: "waking", spin: 620 },
@@ -89,29 +89,29 @@ function mix(hex: string, toward: string, t: number): string {
  * shadow), with the same light/dark spread as the pack's default blue
  * ["#A5D8FF", "#3B82F6", "#082b8c"].
  */
-const gradientFor = (color: MausColor): [string, string, string] => {
+const gradientFor = (color: BotColor): [string, string, string] => {
   // Czarny nie znosi tej formuly: rozjasnienie o 55% do bieli daje szarosc,
   // a przyciemnienie o 42% do czerni — plaska plame. Stad wlasny gradient,
   // ktory trzyma kontrast na ciemnym tle zamiast go gubic.
   if (color === "black") return ["#5A5A5A", "#2A2A2A", "#101010"];
-  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
+  const fill = BOT_COLORS[color] ?? BOT_COLORS.green;
   return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
 };
 
-export type MausAvatarHandle = BlobAvatarHandle;
+export type BotAvatarHandle = BlobAvatarHandle;
 
-export type MausAvatarProps = {
-  color: MausColor;
+export type BotAvatarProps = {
+  color: BotColor;
   shape?: MascotShape;
   /** Custom photo — circular, overrides mascot when present (FB/GrokBot style). */
   avatarUrl?: string | null;
   /** Named behaviour — drives the expression pool, its cadence and blinking. */
-  state?: MausState;
+  state?: BotState;
   /** Pin one of the faces and stop the state's own drift. */
   expression?: number;
   size?: number;
   label?: string;
-  motion?: MausMotion;
+  motion?: BotMotion;
   motionKey?: number;
   /** Head turn in degrees. */
   turn?: number;
@@ -133,14 +133,14 @@ export type MausAvatarProps = {
   trackPointerWhenPaused?: boolean;
   /** Run the animation. Off renders the state's resting face. */
   animated?: boolean;
-  /** Legacy Maus face-placement knobs — accepted, ignored. */
+  /** Legacy mascot face-placement knobs — accepted, ignored. */
   eyeSpacing?: number;
   faceX?: number;
   faceY?: number;
   faceScale?: number;
 };
 
-function MausAvatarComponent(
+function BotAvatarComponent(
   {
     color,
     shape = "blob",
@@ -162,8 +162,8 @@ function MausAvatarComponent(
     trackPointer = true,
     trackPointerWhenPaused = false,
     animated = true,
-  }: MausAvatarProps,
-  ref: React.Ref<MausAvatarHandle>,
+  }: BotAvatarProps,
+  ref: React.Ref<BotAvatarHandle>,
 ) {
   const inner = useRef<BlobAvatarHandle>(null);
   useImperativeHandle(ref, () => ({
@@ -173,7 +173,7 @@ function MausAvatarComponent(
   }));
 
   // A one-shot motion borrows the state for a moment, then hands it back.
-  const [motionState, setMotionState] = useState<MausState | null>(null);
+  const [motionState, setMotionState] = useState<BotState | null>(null);
   useEffect(() => {
     if (motion === "none" || !animated) {
       setMotionState(null);
@@ -260,7 +260,7 @@ function MausAvatarComponent(
   );
 }
 
-export const MausAvatar = memo(forwardRef(MausAvatarComponent));
+export const BotAvatar = memo(forwardRef(BotAvatarComponent));
 
 export function InitialsAvatar({
   initials,

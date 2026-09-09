@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CELEBRATE_MS,
-  MAUS_COLORS,
-  MAUS_COLOR_NAMES,
+  BOT_COLORS,
+  BOT_COLOR_NAMES,
   MODEL_LOAD_MS,
   pickerAvatarState,
   stripMascotState,
@@ -132,9 +132,9 @@ describe("stripMascotState — tabela stanów paska", () => {
 });
 
 describe("paleta maskotki", () => {
-  it("MAUS_COLORS pokrywa całą allowlistę nazw", () => {
-    expect(Object.keys(MAUS_COLORS).sort()).toEqual([...MAUS_COLOR_NAMES].sort());
-    for (const name of MAUS_COLOR_NAMES) expect(MAUS_COLORS[name]).toMatch(/^#[0-9A-Fa-f]{6}$/);
+  it("BOT_COLORS pokrywa całą allowlistę nazw", () => {
+    expect(Object.keys(BOT_COLORS).sort()).toEqual([...BOT_COLOR_NAMES].sort());
+    for (const name of BOT_COLOR_NAMES) expect(BOT_COLORS[name]).toMatch(/^#[0-9A-Fa-f]{6}$/);
   });
 });
 

@@ -149,10 +149,10 @@ beforeAll(async () => {
     env: {
       MULTIBOT_COMPUTER: "off",
       ...process.env,
-      OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
-      OMB_BOT_ID: "bot-asker",
-      OMB_COMMS_TOKEN: TOKEN,
-      OMB_TURN_DEPTH: "0",
+      MULTIBOT_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
+      MULTIBOT_BOT_ID: "bot-asker",
+      MULTIBOT_COMMS_TOKEN: TOKEN,
+      MULTIBOT_TURN_DEPTH: "0",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });

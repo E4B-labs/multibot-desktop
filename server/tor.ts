@@ -10,7 +10,7 @@
 // Termux, Linux, Windows and the packaged app. The lifetime coupling is the
 // correct one: an onion whose harness is down is a published dead address.
 //
-// `OMB_TOR=0` turns the whole thing off. No tor binary anywhere is not an
+// `MULTIBOT_TOR=0` turns the whole thing off. No tor binary anywhere is not an
 // error either: one line in the log and the address ladder simply has one rung
 // fewer.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -99,18 +99,18 @@ export function onionSuppressed(loopbackHost: boolean, tlsOff: boolean): string 
   // `install-server-windows.mjs` and every dev run bind 127.0.0.1 on purpose:
   // that server was never meant to be reachable from another machine, and an
   // onion would silently make it reachable from every machine.
-  if (loopbackHost) return "the server is bound to loopback, and an onion would publish a deliberately private install to the whole internet (set OMB_HOST=0.0.0.0 if that is what you want)";
+  if (loopbackHost) return "the server is bound to loopback, and an onion would publish a deliberately private install to the whole internet (set MULTIBOT_HOST=0.0.0.0 if that is what you want)";
   // With no certificate of ours there is no fingerprint, so `probeOnion` can
   // never confirm the onion — yet the ladder would still prefer it over every
-  // unverified rung. And OMB_TLS=off means a reverse proxy terminates TLS
+  // unverified rung. And MULTIBOT_TLS=off means a reverse proxy terminates TLS
   // somewhere else, so an onion straight to the harness walks around it.
-  if (tlsOff) return "OMB_TLS=off, so there is no certificate to verify an onion with and it would bypass the reverse proxy that terminates TLS";
+  if (tlsOff) return "MULTIBOT_TLS=off, so there is no certificate to verify an onion with and it would bypass the reverse proxy that terminates TLS";
   return null;
 }
 
-/** `OMB_TOR=0|off|false|no` — the same spelling `OMB_TLS` accepts. */
+/** `MULTIBOT_TOR=0|off|false|no` — the same spelling `MULTIBOT_TLS` accepts. */
 export function torEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !/^(0|off|false|no)$/i.test(env.OMB_TOR?.trim() ?? "");
+  return !/^(0|off|false|no)$/i.test(env.MULTIBOT_TOR?.trim() ?? "");
 }
 
 /**
@@ -122,10 +122,10 @@ export function torEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
  * Returns null rather than throwing: no tor is a missing rung, not a failure.
  */
 export function findTorBinary(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string | null {
-  const explicit = env.OMB_TOR_BIN?.trim();
+  const explicit = env.MULTIBOT_TOR_BIN?.trim();
   if (explicit) {
     if (existsSync(explicit)) return explicit;
-    console.warn(`[multibot] OMB_TOR_BIN=${explicit} does not exist — looking for tor on PATH instead`);
+    console.warn(`[multibot] MULTIBOT_TOR_BIN=${explicit} does not exist — looking for tor on PATH instead`);
   }
   const name = platform === "win32" ? "tor.exe" : "tor";
   for (const dir of (env.PATH ?? "").split(delimiter)) {
@@ -144,7 +144,7 @@ export function findTorBinary(env: NodeJS.ProcessEnv = process.env, platform = p
 
 /** `findTorBinary` with the answer remembered: the boot asks twice (once to
  * decide whether the built UI has to be served, once to start tor) and a
- * warning about a bad `OMB_TOR_BIN` is worth exactly one line. */
+ * warning about a bad `MULTIBOT_TOR_BIN` is worth exactly one line. */
 let cachedBinary: string | null | undefined;
 export function torBinary(): string | null {
   if (cachedBinary === undefined) cachedBinary = findTorBinary();
@@ -201,12 +201,12 @@ export type TorOptions = {
 
 export function startTor(options: TorOptions): Tor | null {
   if (!torEnabled()) {
-    console.log("[multibot] OMB_TOR=0 — no onion address on this server");
+    console.log("[multibot] MULTIBOT_TOR=0 — no onion address on this server");
     return null;
   }
   const binary = torBinary();
   if (!binary) {
-    console.log("[multibot] no `tor` found (PATH, OMB_TOR_BIN) — no onion address. Termux: `pkg install tor`; Debian/Ubuntu: `apt install tor`; macOS: `brew install tor`.");
+    console.log("[multibot] no `tor` found (PATH, MULTIBOT_TOR_BIN) — no onion address. Termux: `pkg install tor`; Debian/Ubuntu: `apt install tor`; macOS: `brew install tor`.");
     return null;
   }
 

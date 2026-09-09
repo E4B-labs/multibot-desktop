@@ -27,8 +27,8 @@ must(linux.includes('pnpm --dir "$ROOT" build:server'), "Linux installer omits s
 must(termux.includes("termux-services") && termux.includes(".termux/boot"), "Termux reboot persistence missing");
 must(termux.includes("termux-services/svlogger"), "Termux service logger missing");
 must(termux.includes('pnpm --dir "$ROOT" build:server'), "Termux installer omits server build");
-must(linux.includes("self-signed certificate") && linux.includes("OMB_TLS=off"), "Linux HTTPS guidance missing");
-must(termux.includes("self-signed certificate") && termux.includes("OMB_TLS=off"), "Termux HTTPS guidance missing");
+must(linux.includes("self-signed certificate") && linux.includes("MULTIBOT_TLS=off"), "Linux HTTPS guidance missing");
+must(termux.includes("self-signed certificate") && termux.includes("MULTIBOT_TLS=off"), "Termux HTTPS guidance missing");
 // TLS jest ZAWSZE: harness wystawia sobie certyfikat na pierwszym boocie i
 // słucha po HTTPS. Instalacja, która by o tym zapomniała, wypuszcza serwer na
 // świat gołym tekstem — stąd sprawdzenie strukturalne, nie tylko dokumentacja.
@@ -36,15 +36,15 @@ const indexTs = read("server/index.ts");
 must(existsSync(join(root, "server", "tls-cert.ts")), "self-signed certificate module missing");
 must(indexTs.includes("createHttpsServer({ key: TLS.keyPem, cert: TLS.certPem }"), "harness does not serve HTTPS");
 // Domyślny nasłuch to pętla zwrotna; wyjście do sieci wybiera instalator.
-must(indexTs.includes('const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1"'), "harness default bind is no longer loopback");
-must(linux.includes("OMB_HOST=0.0.0.0") && termux.includes("OMB_HOST=0.0.0.0"), "installers no longer expose the server on the network");
+must(indexTs.includes('const HOST = process.env.MULTIBOT_HOST?.trim() || "127.0.0.1"'), "harness default bind is no longer loopback");
+must(linux.includes("MULTIBOT_HOST=0.0.0.0") && termux.includes("MULTIBOT_HOST=0.0.0.0"), "installers no longer expose the server on the network");
 // Bez TLS-a wolno stać tylko za reverse proxy na loopbacku — i to ma być
 // odmowa startu, nie ostrzeżenie ginące w logu.
-must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("process.exit(1)"), "OMB_TLS=off is not restricted to loopback");
-// `listen(NaN)` picks a random free port, so a typo in OMB_PORT would start a
+must(indexTs.includes("if (TLS_OFF && !LOOPBACK_HOST)") && indexTs.includes("process.exit(1)"), "MULTIBOT_TLS=off is not restricted to loopback");
+// `listen(NaN)` picks a random free port, so a typo in MULTIBOT_PORT would start a
 // server nobody can find and report success. 8798 is the Tor ingress: sharing
 // it would put every direct client in the Tor rate-limit bucket.
-must(indexTs.includes("PORT > 65535 || PORT === TOR_INGRESS_PORT"), "OMB_PORT is not validated");
+must(indexTs.includes("PORT > 65535 || PORT === TOR_INGRESS_PORT"), "MULTIBOT_PORT is not validated");
 // Trzy wartości (adres, nazwa, hasło) są JEDYNĄ drogą do zalogowania się na
 // świeżym serwerze. Instalator, który ich nie pokaże, zostawia człowieka z
 // serwerem, do którego nikt nie wejdzie — plik z nimi jest 0600 i znika po

@@ -38,16 +38,16 @@ export function windowsServerPlan(env = process.env, packagedExe) {
     packagedExe: installedApp,
     host: "127.0.0.1",
     port: PORT,
-    // The harness writes its three values here on first boot (OMB_DATA_DIR is
+    // The harness writes its three values here on first boot (MULTIBOT_DATA_DIR is
     // not set for this task, so it is the default under the user profile).
-    dataDir: join(home, ".openmausbot"),
+    dataDir: join(home, ".multibot"),
     task: {
       command: "schtasks.exe",
       createArgs: ["/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK_NAME, "/TR", packagedAction],
       sourceCreateArgs: ["/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK_NAME, "/TR", sourceAction],
       runArgs: ["/Run", "/TN", TASK_NAME],
     },
-    publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs OMB_TLS=off on loopback",
+    publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs MULTIBOT_TLS=off on loopback",
   };
 }
 
@@ -132,9 +132,9 @@ function pnpmArgs(args) {
 
 function runnerText(plan) {
   const vars = {
-    OMB_HOST: plan.host,
-    OMB_PORT: String(plan.port),
-    OMB_STATIC_DIR: plan.staticDir,
+    MULTIBOT_HOST: plan.host,
+    MULTIBOT_PORT: String(plan.port),
+    MULTIBOT_STATIC_DIR: plan.staticDir,
     TMP: plan.tempDir,
     TEMP: plan.tempDir,
   };
@@ -167,7 +167,7 @@ async function install() {
     console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
     console.log(`HTTPS: ${plan.publicHttps}`);
     console.log("This service listens on loopback only, so the address below is https://127.0.0.1 —");
-    console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
+    console.log("to reach it from another device run it with MULTIBOT_HOST=0.0.0.0, or put a reverse proxy in front.");
     printSetupValues(plan);
     return;
   }
@@ -195,7 +195,7 @@ async function install() {
   console.log(`\nMultibot server: https://127.0.0.1:${plan.port}`);
   console.log(`HTTPS: ${plan.publicHttps}`);
   console.log("This service listens on loopback only, so the address below is https://127.0.0.1 —");
-  console.log("to reach it from another device run it with OMB_HOST=0.0.0.0, or put a reverse proxy in front.");
+  console.log("to reach it from another device run it with MULTIBOT_HOST=0.0.0.0, or put a reverse proxy in front.");
   printSetupValues(plan);
 }
 

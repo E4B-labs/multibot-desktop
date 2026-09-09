@@ -6,9 +6,9 @@
 # serverId matches the one this machine answers on loopback.
 set -eu
 
-DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}"
+DATA_DIR="${MULTIBOT_DATA_DIR:-$HOME/.multibot}"
 ENV_FILE="$DATA_DIR/relay.env"
-PORT="${OMB_PORT:-8799}"
+PORT="${MULTIBOT_PORT:-8799}"
 
 say() { printf '[relay] %s\n' "$*"; }
 die() { printf '[relay] %s\n' "$*" >&2; exit 1; }

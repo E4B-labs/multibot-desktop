@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Monitor, Users } from "lucide-react";
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { GROUP_AVATAR_STATE } from "@/lib/mascot";
 import { formatPeerEnvelope } from "@/lib/peerEnvelope";
 import { Composer } from "./Composer";
@@ -128,7 +128,7 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
           {members.length > 0 ? (
             <div className="flex -space-x-2 shrink-0">
               {members.slice(0, 3).map((bot) => (
-                <MausAvatar key={bot.id} color={bot.color} shape="blob" state={GROUP_AVATAR_STATE} size={28} animated={false} />
+                <BotAvatar key={bot.id} color={bot.color} shape="blob" state={GROUP_AVATAR_STATE} size={28} animated={false} />
               ))}
             </div>
           ) : (
@@ -195,7 +195,7 @@ export function GroupPanel({ group }: { group: EngineGroup }) {
               ) : (
                 <div key={entry.id} className="flex w-full justify-start gap-2.5">
                   {entryBot && (
-                    <MausAvatar color={entryBot.color} shape="blob" state={GROUP_AVATAR_STATE} size={28} animated={false} />
+                    <BotAvatar color={entryBot.color} shape="blob" state={GROUP_AVATAR_STATE} size={28} animated={false} />
                   )}
                   <div className="min-w-0 max-w-[90%]">
                     <div className="mb-0.5 flex flex-wrap items-baseline gap-2">

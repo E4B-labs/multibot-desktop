@@ -46,8 +46,8 @@ else
   mkdir -p "$SERVICE_DIR/log" "$BOOT_DIR"
   cat > "$SERVICE_DIR/run" <<EOF
 #!$PREFIX/bin/bash
-exec env HOME="$HOME" OMB_HOST=0.0.0.0 OMB_PORT=8799 \\
-  OMB_DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}" \\
+exec env HOME="$HOME" MULTIBOT_HOST=0.0.0.0 MULTIBOT_PORT=8799 \\
+  MULTIBOT_DATA_DIR="${MULTIBOT_DATA_DIR:-$HOME/.multibot}" \\
   "$ROOT/scripts/start-multibot.sh"
 EOF
   chmod +x "$SERVICE_DIR/run"
@@ -78,7 +78,7 @@ else
 fi
 
 say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
-say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
+say "Reverse proxy (optional): terminate TLS there and set MULTIBOT_TLS=off with MULTIBOT_HOST=127.0.0.1"
 say "Termux:Boot: install it from F-Droid and OPEN IT ONCE — that is what brings the server back after a reboot"
 say "Battery: Android settings > Apps > Termux > Battery > Unrestricted, or Android stops the server with the screen off"
 say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
@@ -86,7 +86,7 @@ say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
 # The server mints its three values on its first boot; runit has just started
 # it, so wait for the file rather than guessing an address from `hostname`.
 if (( DRY_RUN )); then
-  say "print the three values from \$HOME/.openmausbot/setup.json"
+  say "print the three values from \$HOME/.multibot/setup.json"
 else
   bash "$ROOT/scripts/print-setup-values.sh" 90 || true
 fi

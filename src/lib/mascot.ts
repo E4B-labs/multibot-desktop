@@ -3,12 +3,12 @@ import type { Bot } from "@/state/store";
 
 /** The mascot's behaviour vocabulary — BlobAvatar's 40 states, under the
  * app's historical names. */
-export type MausState = BlobState;
-export const MAUS_STATES = BLOB_STATES;
+export type BotState = BlobState;
+export const BOT_STATES = BLOB_STATES;
 
 /** BlobAvatar ships French group labels; the app shows these instead. The
  * memberships mirror its STATE_GROUPS exactly. */
-export const STATE_GROUPS: Record<string, MausState[]> = {
+export const STATE_GROUPS: Record<string, BotState[]> = {
   Lifecycle: ["sleeping", "waking", "idle", "listening", "thinking", "searching", "working"],
   Reactions: [
     "excited",
@@ -46,7 +46,7 @@ export const STATE_GROUPS: Record<string, MausState[]> = {
   ],
 };
 
-export const MAUS_COLOR_NAMES = [
+export const BOT_COLOR_NAMES = [
   "green",
   "blue",
   "red",
@@ -62,9 +62,9 @@ export const MAUS_COLOR_NAMES = [
   "black",
 ] as const;
 
-export type MausColor = (typeof MAUS_COLOR_NAMES)[number];
+export type BotColor = (typeof BOT_COLOR_NAMES)[number];
 
-export const MAUS_COLORS: Record<MausColor, string> = {
+export const BOT_COLORS: Record<BotColor, string> = {
   green: "#009957",
   blue: "#377FE6",
   red: "#D94B52",
@@ -78,7 +78,7 @@ export const MAUS_COLORS: Record<MausColor, string> = {
   black: "#1A1A1A",
 };
 
-export const MAUS_MOTIONS = [
+export const BOT_MOTIONS = [
   "arrive",
   "switch",
   "customize",
@@ -94,7 +94,7 @@ export const MAUS_MOTIONS = [
   "sending",
 ] as const;
 
-export type MausMotion = "none" | (typeof MAUS_MOTIONS)[number];
+export type BotMotion = "none" | (typeof BOT_MOTIONS)[number];
 
 /**
  * Awatar bota poza paskiem nad composerem: ZAWSZE nieruchomy — neutralny stan
@@ -107,7 +107,7 @@ export type MausMotion = "none" | (typeof MAUS_MOTIONS)[number];
  */
 export function sidebarAvatarProps(
   _bot: Bot,
-): { state: MausState; motion: MausMotion; animated: boolean; motionKey: number } {
+): { state: BotState; motion: BotMotion; animated: boolean; motionKey: number } {
   return { state: "idle", motion: "none", animated: false, motionKey: 0 };
 }
 
@@ -117,7 +117,7 @@ export function sidebarAvatarProps(
  * they are translated on read rather than migrated in place — a bot's stored
  * face should survive a downgrade too.
  */
-const LEGACY_STATES: Record<string, MausState> = {
+const LEGACY_STATES: Record<string, BotState> = {
   deadpan: "idle",
   friendly: "happy",
   focused: "working",
@@ -130,12 +130,12 @@ const LEGACY_STATES: Record<string, MausState> = {
   mischievous: "playful",
 };
 
-const KNOWN_STATES = new Set<string>(MAUS_STATES);
+const KNOWN_STATES = new Set<string>(BOT_STATES);
 
 /** Resolves any stored value — current, legacy or junk — to a real state. */
-export function normalizeState(value: string | null | undefined): MausState | null {
+export function normalizeState(value: string | null | undefined): BotState | null {
   if (!value) return null;
-  if (KNOWN_STATES.has(value)) return value as MausState;
+  if (KNOWN_STATES.has(value)) return value as BotState;
   return LEGACY_STATES[value] ?? null;
 }
 
@@ -152,7 +152,7 @@ export function normalizeState(value: string | null | undefined): MausState | nu
  * Across all 40 states there are only 11 distinct resting faces, so this is one
  * state per face, chosen for the clearest name. Every swatch looks different.
  */
-export const PICKABLE_STATES: MausState[] = [
+export const PICKABLE_STATES: BotState[] = [
   "idle", // expression 0
   "happy", // 2
   "curious", // 3
@@ -165,10 +165,10 @@ export const PICKABLE_STATES: MausState[] = [
   "proud", // 15
 ];
 
-const PICKABLE_STATE_SET = new Set<MausState>(PICKABLE_STATES);
+const PICKABLE_STATE_SET = new Set<BotState>(PICKABLE_STATES);
 
 /** Static face for group members, restricted to expressions offered by the picker. */
-export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState {
+export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): BotState {
   const state = normalizeState(bot.mascotExpression);
   return state && PICKABLE_STATE_SET.has(state) ? state : "happy";
 }
@@ -177,7 +177,7 @@ export function pickerAvatarState(bot: Pick<Bot, "mascotExpression">): MausState
  * The group reference face: one quiet resting expression for every member,
  * independent of the bot's live or saved expression state.
  */
-export const GROUP_AVATAR_STATE: MausState = "happy";
+export const GROUP_AVATAR_STATE: BotState = "happy";
 
 type MascotMessage = {
   kind: string;
@@ -244,7 +244,7 @@ export function stripMascotState(input: {
   /** okno aplikacji jest na wierzchu — wtedy „nieprzeczytane" nic nie znaczy */
   focused?: boolean;
   now?: number;
-}): MausState | null {
+}): BotState | null {
   const { bot, runtime = null, streaming = false, focused = false, now = Date.now() } = input;
   const last = bot.messages?.[bot.messages.length - 1];
   const attention = bot.needsAttention ?? null;
@@ -278,7 +278,7 @@ export function stripMascotState(input: {
  * The keyword groups deliberately overlap as little as possible so a bot's
  * visual identity stays stable while its title and description are edited.
  */
-export function stateForBot(bot: MascotBotProfile): MausState {
+export function stateForBot(bot: MascotBotProfile): BotState {
   const pinned = normalizeState(bot.mascotExpression);
   if (pinned) return pinned;
 

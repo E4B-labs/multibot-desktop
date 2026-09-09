@@ -62,10 +62,10 @@ describe("auto-steer podczas trwającej tury (atrapa codeksa)", () => {
 
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-steer-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "multibot-steer-test-"));
+    mkdirSync(join(home, ".multibot"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".multibot", "config.json"),
       JSON.stringify({
         instances: { steerable: { driver: "codex", displayName: "Steerable", config: { cli: FAKE_CLI, fullAuto: true } } },
       }),
@@ -78,11 +78,11 @@ describe("auto-steer podczas trwającej tury (atrapa codeksa)", () => {
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
-        OMB_HOST: "127.0.0.1",
+        MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
+        MULTIBOT_HOST: "127.0.0.1",
         MULTIBOT_COMPUTER: "off",
-        OMB_TURN_DEBOUNCE_MS: String(DEBOUNCE_MS),
+        MULTIBOT_TURN_DEBOUNCE_MS: String(DEBOUNCE_MS),
         FAKE_CODEX_MODE: "steer",
       },
       stdio: ["ignore", "pipe", "pipe"],

@@ -67,7 +67,7 @@ export function release(): Control {
 }
 
 /** Admit this bot's turn. Resolves at once while the fleet is under
- *  OMB_MAX_PARALLEL_TURNS — other bots are never waited for one by one. */
+ *  MULTIBOT_MAX_PARALLEL_TURNS — other bots are never waited for one by one. */
 export function acquireAgent(botId: string): Promise<void> {
   return turnGate.acquire(botId);
 }

@@ -958,7 +958,7 @@ export function rateLimitAddress(
  * `x-forwarded-proto` to zwykły nagłówek — obcy klient wpisze w nim, co zechce,
  * i wyprosi sobie ciasteczko `Secure` na gołym HTTP. Liczy się więc TYLKO od
  * peera z pętli zwrotnej, czyli od reverse proxy stojącego na tej maszynie
- * (jedyny wspierany układ z `OMB_TLS=off`). Świadomie sam adres gniazda, a nie
+ * (jedyny wspierany układ z `MULTIBOT_TLS=off`). Świadomie sam adres gniazda, a nie
  * `isLoopbackRequest`: każde proxy dokłada też `X-Forwarded-For`, po którym
  * `isLoopbackRequest` z definicji zwraca false — a wtedy sesja za proxy nigdy
  * nie dostałaby `Secure`. */

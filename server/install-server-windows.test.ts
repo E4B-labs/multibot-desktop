@@ -23,7 +23,7 @@ describe("Windows one-command server installer", () => {
       installDir: join(localAppData, "Multibot Server"),
       packagedExe,
       task: { command: "schtasks.exe" },
-      publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs OMB_TLS=off on loopback",
+      publicHttps: "built in (self-signed); a trusted reverse proxy is optional and needs MULTIBOT_TLS=off on loopback",
     });
     expect(plan.task.createArgs).toEqual(expect.arrayContaining(["/SC", "ONLOGON", "/RL", "LIMITED"]));
     expect(plan.task.createArgs.join(" ")).not.toMatch(/HIGHEST|\/RU\s+SYSTEM/i);
@@ -39,8 +39,8 @@ describe("Windows one-command server installer", () => {
     const auth = readFileSync(join(process.cwd(), "src", "lib", "auth.ts"), "utf8");
     const builder = readFileSync(join(process.cwd(), "electron-builder.yml"), "utf8");
     expect(main).toContain('process.argv.includes("--server-only")');
-    expect(main).toContain('OMB_HOST: "127.0.0.1"');
-    expect(main).toContain('OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : ""');
+    expect(main).toContain('MULTIBOT_HOST: "127.0.0.1"');
+    expect(main).toContain('MULTIBOT_SERVER_SERVICE: SERVER_ONLY ? "1" : ""');
     expect(main).toContain("json?.service === true");
     // Fragment z tokenem powstaje teraz ze sklejki (obok jedzie `join=<grant>`
     // powłoki), więc literału „#access_token=" już w kodzie nie ma.

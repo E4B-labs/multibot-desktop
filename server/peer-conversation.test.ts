@@ -53,9 +53,9 @@ async function boot(
 }> {
   chmodSync(FAKE_CLI, 0o755);
   chmodSync(FAKE_CODEX, 0o755);
-  const home = reuse?.home ?? mkdtempSync(join(tmpdir(), `omb-${prefix}-`));
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  if (!reuse) writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ instances }));
+  const home = reuse?.home ?? mkdtempSync(join(tmpdir(), `multibot-${prefix}-`));
+  mkdirSync(join(home, ".multibot"), { recursive: true });
+  if (!reuse) writeFileSync(join(home, ".multibot", "config.json"), JSON.stringify({ instances }));
 
   // Windows reserves whole bands inside the ephemeral range (`netsh interface
   // ipv4 show excludedportrange`), and a spawn that lands in one dies with
@@ -77,10 +77,10 @@ async function boot(
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(port),
-        OMB_HOST: "127.0.0.1",
+        MULTIBOT_PORT: String(port),
+        MULTIBOT_HOST: "127.0.0.1",
         MULTIBOT_COMPUTER: "off",
-        OMB_TURN_DEBOUNCE_MS: "150",
+        MULTIBOT_TURN_DEBOUNCE_MS: "150",
         ...env,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -243,14 +243,14 @@ describe("peer conversation: a message is a real turn", () => {
   let stop: () => Promise<void>;
 
   beforeAll(async () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-peer-map-"));
+    const home = mkdtempSync(join(tmpdir(), "multibot-peer-map-"));
     promptDump = join(home, "acp-prompts.ndjson");
     const booted = await boot(
       "peer",
       {
-        OMB_ONBOARDING_TURN: "0",
+        MULTIBOT_ONBOARDING_TURN: "0",
         FAKE_CODEX_MODE: "steer",
-        OMB_RELAY_HOME: home,
+        MULTIBOT_RELAY_HOME: home,
         // What actually reached a model. A peer envelope is no longer a chat
         // message, so this file is the only place it can be pinned.
         FAKE_ACP_PROMPT_DUMP: join(home, "acp-prompts.ndjson"),
@@ -656,12 +656,12 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
   let relayHome = "";
 
   beforeAll(async () => {
-    relayHome = mkdtempSync(join(tmpdir(), "omb-peer-budget-map-"));
+    relayHome = mkdtempSync(join(tmpdir(), "multibot-peer-budget-map-"));
     const booted = await boot(
       "peerbudget",
       // Onboarding stays ON here: a brand new bot must speak first by itself.
       // The watchdog ceiling is 70 s in production; no test waits that out.
-      { OMB_COLLAB_MAX_MESSAGES: "4", OMB_BUSY_WATCHDOG_MS: "5000" },
+      { MULTIBOT_COLLAB_MAX_MESSAGES: "4", MULTIBOT_BUSY_WATCHDOG_MS: "5000" },
       {
         happy: { driver: "grokAgent", environment: { FAKE_ACP_MODE: "happy" }, config: { cli: FAKE_CLI, fullAuto: true } },
         relay: relayInstance(relayHome),
@@ -726,7 +726,7 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
     90_000,
   );
   it(
-    "OMB_COLLAB_MAX_MESSAGES=4 stops a ring that would otherwise never stop",
+    "MULTIBOT_COLLAB_MAX_MESSAGES=4 stops a ring that would otherwise never stop",
     async () => {
       const a = await h.newBot("Loop A", "relay");
       const b = await h.newBot("Loop B", "relay");
@@ -767,7 +767,7 @@ describe("peer conversation: a quiet room still settles", () => {
   beforeAll(async () => {
     const booted = await boot(
       "peerclock",
-      { OMB_ONBOARDING_TURN: "0", OMB_COLLAB_MAX_MS: "3000" },
+      { MULTIBOT_ONBOARDING_TURN: "0", MULTIBOT_COLLAB_MAX_MS: "3000" },
       { happy: { driver: "grokAgent", environment: { FAKE_ACP_MODE: "happy" }, config: { cli: FAKE_CLI, fullAuto: true } } },
     );
     h = booted.harness;
@@ -811,7 +811,7 @@ describe("peer conversation: a restart resumes instead of failing", () => {
           config: { cli: FAKE_CLI, fullAuto: true },
         },
       };
-      const first = await boot("resume", { OMB_ONBOARDING_TURN: "0" }, instances);
+      const first = await boot("resume", { MULTIBOT_ONBOARDING_TURN: "0" }, instances);
       const h1 = first.harness;
       let sender = "";
       let busy = "";
@@ -836,7 +836,7 @@ describe("peer conversation: a restart resumes instead of failing", () => {
       await first.stop(true);
 
       // ...and the harness comes back on the same data dir.
-      const again = await boot("resume", { OMB_ONBOARDING_TURN: "0" }, instances, { home: h1.home });
+      const again = await boot("resume", { MULTIBOT_ONBOARDING_TURN: "0" }, instances, { home: h1.home });
       const h2 = again.harness;
       try {
         // The message really goes out again: B picks up a turn for it, which is

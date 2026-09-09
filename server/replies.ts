@@ -1,4 +1,4 @@
-// multibot: flat replies (port z OpenMausBot #437, server/replies.ts).
+// multibot: flat replies (port z MultiBot #437, server/replies.ts).
 // Cytat NIE zmienia historii wątku — to tylko adnotacja przy jednej
 // wiadomości + ogrodzony fragment w prompcie tury, żeby bot wiedział,
 // na co odpowiada. Cytowana treść jest treścią użytkownika, więc trafia

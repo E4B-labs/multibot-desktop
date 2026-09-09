@@ -10,8 +10,8 @@ import path from "node:path";
 /** Same resolution as server/config.ts, so the shell and the harness never
  * disagree about which directory is "the" data directory. */
 export function setupFilePath(env = process.env, home = os.homedir()) {
-  const explicit = typeof env.OMB_DATA_DIR === "string" ? env.OMB_DATA_DIR.trim() : "";
-  return path.join(explicit || path.join(home, ".openmausbot"), "setup.json");
+  const explicit = typeof env.MULTIBOT_DATA_DIR === "string" ? env.MULTIBOT_DATA_DIR.trim() : "";
+  return path.join(explicit || path.join(home, ".multibot"), "setup.json");
 }
 
 /** Pure. `null` for anything that is not a readable pending setup — a spent

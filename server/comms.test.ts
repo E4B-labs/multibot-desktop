@@ -95,10 +95,10 @@ describe("comms e2e (fake ACP fleet)", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
     chmodSync(FAKE_CODEX, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-comms-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "multibot-comms-test-"));
+    mkdirSync(join(home, ".multibot"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".multibot", "config.json"),
       JSON.stringify({
         instances: {
           grok: {
@@ -156,8 +156,8 @@ describe("comms e2e (fake ACP fleet)", () => {
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
+        MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
       // multibot (H2): a spawned harness gets a minimal env, so VITEST does not
       // reach it — without this the server would provision REAL containers for
       // every throwaway test bot.
@@ -166,7 +166,7 @@ describe("comms e2e (fake ACP fleet)", () => {
         // ask_bot dobija do sufitu rund. Produkcyjne 12 to w teście 24 tury —
         // trzy rundy wystarczą, żeby pokazać, że rozmowa idzie dalej, i przy
         // okazji przypinają samo nadpisanie sufitu z env.
-        OMB_COLLAB_MAX_ROUNDS: "3",
+        MULTIBOT_COLLAB_MAX_ROUNDS: "3",
         FAKE_CODEX_DUMP: join(home, "codex-dump.json"),
         // multibot: każdy prompt, jaki fake ACP dostało, ląduje w tym pliku —
         // jedyna droga, by w teście przypiąć treść WEJŚCIA tury bota (drivery

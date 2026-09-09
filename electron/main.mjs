@@ -229,10 +229,10 @@ async function startServerOn(port) {
   const proc = utilityProcess.fork(entry, [], {
     env: {
       ...process.env,
-      OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_HOST: "127.0.0.1", // desktop = klient sam dla siebie; sieć wpuszcza serwer stawiany świadomie
-      OMB_PORT: String(port),
-      OMB_SERVER_SERVICE: SERVER_ONLY ? "1" : "",
+      MULTIBOT_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+      MULTIBOT_HOST: "127.0.0.1", // desktop = klient sam dla siebie; sieć wpuszcza serwer stawiany świadomie
+      MULTIBOT_PORT: String(port),
+      MULTIBOT_SERVER_SERVICE: SERVER_ONLY ? "1" : "",
       // Packaged, package.json lives in the asar while the harness runs from
       // Resources/server — it cannot read its own version, so hand it over.
       MULTIBOT_VERSION: app.getVersion(),
@@ -1096,7 +1096,7 @@ app.whenReady().then(async () => {
   //
   // multibot: gdy aktywny jest host zdalny, harness NIE wstaje — ten komputer
   // jest wtedy wyłącznie klientem telefonu, a fork serwera zakładałby mu
-  // ~/.openmausbot i witał ekranem „server setup required". Tryb lokalny
+  // ~/.multibot i witał ekranem „server setup required". Tryb lokalny
   // zachowuje dotychczasową kolejność (serwer gotowy przed oknem).
   if (shouldStartLocalHarness({ isPackaged: app.isPackaged, mode: startupTargetMode() })) await ensureLocalHarness();
   const win = createWindow();

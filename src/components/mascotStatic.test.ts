@@ -2,13 +2,13 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// multibot: „max 1 animowany bot, wszedzie". `MausAvatar` domyslnie ma
+// multibot: „max 1 animowany bot, wszedzie". `BotAvatar` domyslnie ma
 // `animated=true` (Avatar.tsx), wiec KAZDE nowe uzycie zaczyna mrugac i
 // oddychac samo z siebie — tak wrocily animacje w karcie hovera sidebaru,
 // w panelu ustawien bota i w onboardingu. Jedyne animowane wystapienie ma byc
 // to na pasku nad composerem.
 //
-// Vitest chodzi w node bez jsdom, wiec czytamy zrodla: kazdy tag <MausAvatar
+// Vitest chodzi w node bez jsdom, wiec czytamy zrodla: kazdy tag <BotAvatar
 // poza Composerem musi jawnie wylaczyc animacje — wprost `animated={false}`
 // albo przez propsy z `sidebarAvatarProps`, ktore zwraca `animated: false`
 // dla kazdego bota (pilnuje tego Sidebar.test.ts).
@@ -17,11 +17,11 @@ const dir = fileURLToPath(new URL(".", import.meta.url));
 /** Wylaczona animacja: wprost, przez propsy helpera albo przez jego spread. */
 const STILL = /animated=\{(false|[\w.]+\.animated)\}|\{\.\.\.(sidebarAvatarProps|groupMemberAvatarProps)\(/;
 
-/** Kazdy tag <MausAvatar ...> z pliku, razem z jego propsami. */
+/** Kazdy tag <BotAvatar ...> z pliku, razem z jego propsami. */
 function avatarTags(source: string): string[] {
   const out: string[] = [];
-  // `<MausAvatar` z przylepiona litera to typ (`<MausAvatarHandle>`), nie tag.
-  for (const match of source.matchAll(/<MausAvatar(?![A-Za-z])[^>]*>/g)) out.push(match[0]);
+  // `<BotAvatar` z przylepiona litera to typ (`<BotAvatarHandle>`), nie tag.
+  for (const match of source.matchAll(/<BotAvatar(?![A-Za-z])[^>]*>/g)) out.push(match[0]);
   return out;
 }
 

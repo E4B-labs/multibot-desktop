@@ -59,7 +59,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-claude-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-claude-test-"));
   });
 
   afterEach(async () => {
@@ -186,7 +186,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
         agents: {
           command: process.execPath,
           args: ["/fake/agents-proxy.js"],
-          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" },
+          env: { MULTIBOT_HARNESS_URL: "http://127.0.0.1:1", MULTIBOT_BOT_ID: "b1", MULTIBOT_COMMS_TOKEN: "tok", MULTIBOT_TURN_DEPTH: "0" },
         },
       },
     });
@@ -196,7 +196,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const mcpConfig = JSON.parse(seen.argv[seen.argv.indexOf("--mcp-config") + 1]);
     expect(mcpConfig.mcpServers.agents).toMatchObject({
       args: ["/fake/agents-proxy.js"],
-      env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
+      env: { MULTIBOT_BOT_ID: "b1", MULTIBOT_COMMS_TOKEN: "tok" },
     });
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
@@ -538,7 +538,7 @@ describe("ClaudeDriver worker liveness (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-claude-live-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-claude-live-"));
     process.env.MULTIBOT_FIRST_EVENT_MS = "300";
     process.env.MULTIBOT_FIRST_EVENT_COLD_MS = "300";
   });

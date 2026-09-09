@@ -16,9 +16,9 @@
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
-//   OMB_HARNESS_URL  base URL of the harness (https://127.0.0.1:8799)
-//   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
-//   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
+//   MULTIBOT_HARNESS_URL  base URL of the harness (https://127.0.0.1:8799)
+//   MULTIBOT_BOT_ID       the calling bot's id (excluded from list_bots; sender)
+//   MULTIBOT_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 import readline from "node:readline";
 
 // Jedna lista ksztaltow dla schematu narzedzi i dla walidacji na serwerze —
@@ -27,9 +27,9 @@ import readline from "node:readline";
 import { BOT_SHAPES } from "../store.ts";
 import { harnessRequest } from "./harness-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "https://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const HARNESS = process.env.MULTIBOT_HARNESS_URL ?? "https://127.0.0.1:8799";
+const BOT_ID = process.env.MULTIBOT_BOT_ID ?? "";
+const TOKEN = process.env.MULTIBOT_COMMS_TOKEN ?? "";
 
 const BOT_COLORS = ["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral"];
 const BOT_PROFILE_PROPERTIES = {
