@@ -228,9 +228,15 @@ function pendingAsk(last: MascotMessage | undefined): boolean {
  * maskotki albo `null` — wtedy pasek jest pusty i nie ma czego animować.
  *
  * Kolejność wierszy jest tabelą priorytetów, pierwsze dopasowanie wygrywa:
- * pytanie > uwaga > narzędzie > myślenie > pisanie > zimny start > sukces >
- * nieprzeczytane. `bot.busy` samo w sobie NIE jest wyzwalaczem — pracujący bot,
- * o którym nic jeszcze nie wiadomo, nie zajmuje paska.
+ * 1-2 pytanie/uwaga > 3 narzędzie > 4 myślenie > 5 pisanie > 6 zimny start >
+ * 7 sukces > 8 ŻYWA TURA > 9 nieprzeczytane.
+ *
+ * `bot.busy` jest ostatnią deską ratunku, nie ozdobą: dopóki serwer trzyma turę
+ * otwartą, pasek MUSI stać i się ruszać, choćby nie przyszło ani jedno
+ * zdarzenie `runtime` (starszy serwer, strona przeładowana w środku tury, dziura
+ * między dwoma narzędziami). Gasi go wyłącznie realny koniec tury z serwera —
+ * `turn.completed`, `runtime.error` albo watchdog — bo każdy z nich zdejmuje
+ * `busy`. Dlatego żaden licznik w komponencie nie jest do tego potrzebny.
  *
  * Myślenie NIE ma pierścieni: `loading` (jedyny stan z pierścieniami na pasku)
  * zapala się wyłącznie przy zimnym starcie dostawcy, bo pierścienie znaczą
@@ -252,23 +258,31 @@ export function stripMascotState(input: {
   // 1-2: bot czeka na człowieka.
   if (pendingAsk(last) || attention?.trimEnd().endsWith("?")) return "confused";
   if (attention !== null) return "alerting";
-  // 3: narzędzie w locie — ale tylko przy żywej turze. Faza `runtime` nigdy się
-  // nie kasuje (store wyłącznie nadpisuje wpis kolejnym tickiem), a po turze
-  // ubitej w środku narzędzia „done" już nie przyjdzie; bez tej bramki pasek
-  // zostałby na „working" na zawsze. To samo dotyczy porzuconej aktywności.
+  // Faza `runtime` nigdy się nie kasuje — store wyłącznie nadpisuje wpis
+  // kolejnym tickiem — a tura ubita w środku (`runtime.error`, przerwanie,
+  // watchdog) nie dosyła już „done". Bez tej bramki OSTATNIA faza zamrożonej
+  // tury trzymałaby pasek w nieskończoność: kiedyś na „working", a odkąd
+  // skończone narzędzie wraca na `reasoning`, na „thinking". Wszystkie wiersze
+  // czytające `runtime` pytają więc najpierw, czy tura w ogóle żyje.
+  const live = bot.busy !== false;
+  // 3: narzędzie w locie. To samo dotyczy porzuconej aktywności.
   const toolInFlight =
-    bot.busy !== false &&
-    (runtime?.kind === "tool" || (last?.kind === "activity" && last.tool?.ok === undefined));
+    live && (runtime?.kind === "tool" || (last?.kind === "activity" && last.tool?.ok === undefined));
   if (toolInFlight) return "working";
   // 4: rozumuje albo tura ruszyła i nic jeszcze z niej nie wyszło.
-  if (runtime?.kind === "reasoning" || (runtime?.kind === "start" && now - runtime.at < MODEL_LOAD_MS)) {
+  if (live && (runtime?.kind === "reasoning" || (runtime?.kind === "start" && now - runtime.at < MODEL_LOAD_MS))) {
     return "thinking";
   }
   // 5: leci tekst — ciało rozpada się na trzy kropki (stan silnika, nie nakładka).
-  if (streaming || runtime?.kind === "text") return "thinking-dots";
+  if (live && (streaming || runtime?.kind === "text")) return "thinking-dots";
   // 6: dostawca milczy od MODEL_LOAD_MS — zimny start modelu albo procesu.
-  if (runtime?.kind === "start") return "loading";
+  if (live && runtime?.kind === "start") return "loading";
+  // 7: tura właśnie się skończyła — moment radości, już po `busy`.
   if (runtime?.kind === "done" && now - runtime.at < CELEBRATE_MS) return "celebrate";
+  // 8: tura wciąż otwarta, a nic bliższego o niej nie wiadomo — pasek zostaje na
+  // „working". To jedyny wiersz, który trzyma maskotkę przez całą turę, gdy
+  // dostawca nie sypie eventami; kończy go dopiero `busy:false` z serwera.
+  if (bot.busy === true) return "working";
   if (bot.unread && !focused) return "notifying";
   return null;
 }

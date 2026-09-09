@@ -1610,6 +1610,17 @@ bus.subscribe((event: RuntimeEvent) => {
   recordTurnEvent(event);
   if (event.type === "turn.completed" || event.type === "runtime.error") isolatedTurnBots.delete(event.threadId);
   if (!bot) return;
+  // multibot: watchdog mierzy CISZĘ dostawcy, nie długość tury — tak jak mówi
+  // jego własny komentarz. Zbrojony był jednak tylko na starcie tury i po
+  // steeringu, więc KAŻDA tura dłuższa niż 70 s (czyli każda z narzędziami)
+  // traciła `busy` w środku roboty: bot wracał do wolnych, composer się
+  // odblokowywał, a maskotka nad paskiem gasła, mimo że dostawca dalej mielił.
+  // Każde zdarzenie z żywej tury przezbraja go od nowa; przezbrajamy tylko już
+  // uzbrojonego (tura, którą sami wystartowaliśmy), a końce tury zdejmują go
+  // niżej.
+  if (bot.busy && busyWatchdog.has(bot.id) && event.type !== "turn.completed" && event.type !== "runtime.error") {
+    armBusyWatchdog(bot.id);
+  }
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
