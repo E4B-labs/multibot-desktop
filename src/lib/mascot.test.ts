@@ -63,8 +63,9 @@ describe("stripMascotState — tabela stanów paska", () => {
   it("3. narzędzie w locie → working, od razu i bez pierścieni", () => {
     expect(strip({}, { runtime: { at: NOW, kind: "tool" } })).toBe("working");
     expect(strip({ busy: true, messages: [activity(NOW)] })).toBe("working");
-    // rozstrzygnięte narzędzie już nie leci
-    expect(strip({ busy: true, messages: [activity(NOW, true)] })).toBeNull();
+    // rozstrzygnięte narzędzie już nie leci — ale tura trwa, więc pasek NIE
+    // gaśnie, tylko spada na wiersz 8 (żywa tura)
+    expect(strip({ busy: true, messages: [activity(NOW, true)] })).toBe("working");
     // porzucona tura nie może trzymać paska na „working" na zawsze — ani przez
     // wiadomość, ani przez fazę `runtime`, której nikt nie kasuje
     expect(strip({ busy: false, messages: [activity(NOW)] })).toBeNull();
@@ -108,7 +109,7 @@ describe("stripMascotState — tabela stanów paska", () => {
     expect(strip({}, { runtime: { at: NOW - 1_200, kind: "done" } })).toBeNull();
   });
 
-  it("8. nieprzeczytane liczy się tylko przy oknie w tle", () => {
+  it("9. nieprzeczytane liczy się tylko przy oknie w tle", () => {
     expect(strip({ unread: true }, { focused: false })).toBe("notifying");
     expect(strip({ unread: true }, { focused: true })).toBeNull();
   });
@@ -125,9 +126,59 @@ describe("stripMascotState — tabela stanów paska", () => {
     expect(ringed(strip({}, { runtime: { at: NOW - MODEL_LOAD_MS, kind: "start" } }))).toBe(true);
   });
 
-  it("sam `busy` nie zajmuje paska", () => {
-    expect(strip({ busy: true })).toBeNull();
+  // Faza `runtime` przeżywa turę, więc KAŻDY wiersz, który ją czyta, musi
+  // najpierw sprawdzić, czy tura żyje. Tura ubita w środku (runtime.error,
+  // przerwanie, watchdog) zostawia ostatnią fazę na zawsze — a odkąd skończone
+  // narzędzie wraca na `reasoning`, tą zamrożoną fazą bywa właśnie `reasoning`.
+  it("martwa tura nie trzyma paska na żadnej ze swoich faz", () => {
+    for (const kind of ["tool", "reasoning", "text", "start"] as const) {
+      expect(strip({ busy: false }, { runtime: { at: NOW, kind } })).toBeNull();
+    }
+    expect(strip({ busy: false }, { streaming: true })).toBeNull();
+    // ta sama faza przy żywej turze wciąż zajmuje pasek
+    for (const kind of ["tool", "reasoning", "text", "start"] as const) {
+      expect(strip({ busy: true }, { runtime: { at: NOW, kind } })).not.toBeNull();
+    }
+  });
+
+  // Skarga właściciela (19:30): „bot mieli narzędzia, a maskotki nad paskiem nie
+  // ma". Wiersz 8 jest odpowiedzią — dopóki serwer trzyma turę otwartą, pasek
+  // stoi, choćby nie było ani jednego eventu `runtime`.
+  it("8. żywa tura zawsze zajmuje pasek, nawet bez zdarzeń runtime", () => {
+    expect(strip({ busy: true })).toBe("working");
+    expect(strip({ busy: true }, { runtime: null })).toBe("working");
+    // koniec tury bierze się WYŁĄCZNIE z serwera (`busy:false`)
+    expect(strip({ busy: false })).toBeNull();
     expect(strip({})).toBeNull();
+  });
+
+  it("tabela: narzędzie → working, tekst → thinking-dots, sama tura → working", () => {
+    const cases: Array<[string, ReturnType<typeof strip>, string | null]> = [
+      ["narzędzie w locie", strip({ busy: true }, { runtime: { at: NOW, kind: "tool" } }), "working"],
+      ["pisze (strumień)", strip({ busy: true }, { streaming: true }), "thinking-dots"],
+      ["pisze (faza text)", strip({ busy: true }, { runtime: { at: NOW, kind: "text" } }), "thinking-dots"],
+      ["myśli", strip({ busy: true }, { runtime: { at: NOW, kind: "reasoning" } }), "thinking"],
+      ["między narzędziami", strip({ busy: true }, { runtime: { at: NOW, kind: "reasoning" } }), "thinking"],
+      ["tura bez zdarzeń", strip({ busy: true }), "working"],
+      ["po końcu tury", strip({ busy: false }, { runtime: { at: NOW - 2 * CELEBRATE_MS, kind: "done" } }), null],
+    ];
+    for (const [name, got, want] of cases) expect([name, got]).toEqual([name, want]);
+  });
+
+  // Odmontowanie maskotki zabija sprężynę silnika, więc każda dziura w tej
+  // sekwencji to widoczny przeskok. Pasek ma NIE gasnąć aż do końca tury.
+  it("przez całą turę pasek ani razu nie gaśnie", () => {
+    const live: Array<Parameters<typeof strip>[1]> = [
+      { runtime: { at: NOW, kind: "start" } },
+      { runtime: { at: NOW, kind: "reasoning" } },
+      { runtime: { at: NOW, kind: "text" }, streaming: true },
+      { runtime: { at: NOW, kind: "text" } }, // blok wypłukany, strumień zamknięty
+      { runtime: { at: NOW, kind: "tool" } },
+      { runtime: { at: NOW, kind: "reasoning" } }, // narzędzie oddało wynik
+      { runtime: { at: NOW, kind: "tool" } },
+      {}, // dziura: dostawca milczy, nie przyszedł żaden event
+    ];
+    for (const extra of live) expect(strip({ busy: true }, extra)).not.toBeNull();
   });
 });
 

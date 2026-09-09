@@ -6,7 +6,7 @@ import { api, useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { BotAvatar } from "./Avatar";
-import { normalizeState, stripMascotState } from "@/lib/mascot";
+import { CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { parseSchedule, type PresetOrUnknown } from "@/lib/routineSchedule";
@@ -331,13 +331,16 @@ export function Composer({
   // wybiera czysta `stripMascotState`; `null` znaczy „pasek pusty".
   const runtime = state.runtime[bot.threadId] ?? null;
   // Wiersze zależne od czasu (loading po 10 s, celebrate gaśnie po 1 s) nie mają
-  // własnego eventu, więc przy żywej turze przeliczamy je co pół sekundy.
+  // własnego eventu, więc przy żywej turze przeliczamy je co pół sekundy. Faza
+  // `runtime` nigdy się nie kasuje, więc warunkiem NIE może być samo jej
+  // istnienie — inaczej zegar tykał do końca życia aplikacji.
   const [clock, setClock] = useState(() => Date.now());
+  const celebrating = runtime?.kind === "done" && clock - runtime.at < CELEBRATE_MS;
   useEffect(() => {
-    if (!bot.busy && !runtime) return;
+    if (!bot.busy && !celebrating) return;
     const timer = setInterval(() => setClock(Date.now()), 500);
     return () => clearInterval(timer);
-  }, [bot.busy, runtime]);
+  }, [bot.busy, celebrating]);
   const strip = stripMascotState({
     bot,
     runtime,
@@ -345,6 +348,12 @@ export function Composer({
     focused: typeof document === "undefined" || document.hasFocus(),
     now: clock,
   });
+  // Pusty pasek znika przenikaniem, więc przez te 200 ms jest jeszcze widoczny.
+  // Gdyby dostał wtedy „idle", ciało przeskoczyłoby twardo do innej geometrii w
+  // tej samej klatce, w której się zatrzymuje — dokładnie ten przeskok, którego
+  // pozbywamy się przy wejściu. Gaśnie więc na ostatniej minie, jaką miał.
+  const lastStrip = useRef<NonNullable<typeof strip>>("idle");
+  if (strip) lastStrip.current = strip;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const filesRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef(new Set<string>());
@@ -980,19 +989,29 @@ export function Composer({
             (Kacper). Zwinięte pigułki są teraz kwadratami 32 px jak mikrofon
             i spinacz, więc cały rząd trzyma jeden rytm. */}
         <div data-composer-row className="relative flex min-h-12 items-center gap-1.5 rounded-2xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2.5">
-        {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać. */}
-        {strip && (
-          <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center md:flex" title={botDisplayName(bot, polish ? "pl" : "en")}>
-            <BotAvatar
-              color={bot.color}
-              avatarUrl={bot.avatarUrl}
-              shape={bot.mascotShape}
-              state={strip}
-              size={40}
-              animated
-            />
-          </div>
-        )}
+        {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać.
+            Maskotka NIE odmontowuje się między stanami — silnik przechodzi
+            między nimi sprężyną, a odmontowanie zabijałoby ten przebieg i dawało
+            twarde przeskoki. Pojawienie się i zniknięcie to więc przenikanie
+            (`opacity`), a nie wejście/wyjście z drzewa. Pusty pasek stoi
+            zapauzowany (`animated={false}`), więc nie rysuje kolejnych klatek. */}
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center transition-opacity duration-200 md:flex",
+            strip ? "opacity-100" : "opacity-0",
+          )}
+          title={botDisplayName(bot, polish ? "pl" : "en")}
+        >
+          <BotAvatar
+            color={bot.color}
+            avatarUrl={bot.avatarUrl}
+            shape={bot.mascotShape}
+            state={strip ?? lastStrip.current}
+            size={40}
+            animated={strip !== null}
+          />
+        </div>
         {/* Czat grupowy nie ma jednego wlasciciela pliku, a `onSend` niesie sam
             tekst - lepiej nie pokazywac spinacza niz zzerac zalacznik. */}
         {!onSend && (

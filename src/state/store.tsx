@@ -1145,6 +1145,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // multibot: bot odpala narzędzie — pasek pokazuje „working" (bez
             // pierścieni). Pierścienie zostają wyłącznie na zimny start.
             rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "tool" });
+          } else if (
+            event.type === "item.completed" &&
+            event.itemType === "tool" &&
+            stateRef.current.runtime[event.threadId]?.kind === "tool"
+          ) {
+            // multibot: narzędzie oddało wynik — do następnego zdarzenia bot
+            // znowu myśli. Bez tego faza zostawała na „tool" i pasek stał na
+            // „working" także w przerwach MIĘDZY narzędziami.
+            //
+            // Cofamy WYŁĄCZNIE fazę „tool": ACP przeplata `item.completed`
+            // narzędzia ze strumieniem tekstu (drivers/acp/core.ts), więc bez
+            // tego warunku settlujące się narzędzie zrywało trzy kropki w
+            // środku widocznej odpowiedzi i podmieniało je na „thinking".
+            rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "reasoning" });
           } else if (event.type === "content.delta" && event.streamKind === "reasoning_text") {
             rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "reasoning" });
           } else if (event.type === "content.delta" && event.streamKind === "assistant_text") {

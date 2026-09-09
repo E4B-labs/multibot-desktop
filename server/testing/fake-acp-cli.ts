@@ -5,7 +5,7 @@
 // session/prompt, and streams session/update notifications for a scripted
 // turn. Failure modes mirror how real ACP agents misbehave:
 //
-//   FAKE_ACP_MODE   happy (default) | exit-early | crash-mid-turn | hang | no-auth | permission
+//   FAKE_ACP_MODE   happy (default) | exit-early | crash-mid-turn | hang | slow | no-auth | permission
 //                   | notify-user/request-connection (call the matching agents tool once
 //                     and finish the turn — neither of them waits for the human)
 //                   | ask-peer/send-mail (spawn the injected "agents" MCP server from
@@ -211,6 +211,25 @@ function handle(msg: any) {
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);
+        return;
+      }
+      if (mode === "slow") {
+        // Prawdziwa tura agentowa: mieli DŁUŻEJ niż watchdog, ale cały czas
+        // gada. Watchdog ma mierzyć CISZĘ dostawcy, nie długość tury, więc taka
+        // tura musi dojść do końca z `busy` zapalonym przez cały czas.
+        const beats = Number(process.env.FAKE_ACP_SLOW_BEATS ?? 6);
+        const every = Number(process.env.FAKE_ACP_SLOW_EVERY_MS ?? 400);
+        let left = beats;
+        const timer = setInterval(() => {
+          out({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "tick " } } },
+          });
+          if (--left > 0) return;
+          clearInterval(timer);
+          complete();
+        }, every);
         return;
       }
       if (mode === "error-mid-turn") {
