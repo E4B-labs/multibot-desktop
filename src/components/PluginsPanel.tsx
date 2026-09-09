@@ -7,6 +7,8 @@
 // tylko podkładem pod <img> — na telefonie interfejs jedzie z paczki
 // aplikacji i żądanie na obcy host potrafi wisieć bez `onError`, a wtedy
 // karta zostawała pusta zamiast pokazać literę.
+// Znaki z bundla są PEŁNOKOLOROWE (cały <svg>, nie samo `d`) i renderują się
+// własnymi barwami marki — patrz komentarz przy ServiceIcon.
 // multibot (F7): ten sam katalog niesie też własne serwery MCP użytkownika
 // (source === "custom") — renderowane w sekcji "Custom connectors" niżej,
 // obsługiwane trasami harnessa /api/connectors/custom/:id (działają bez
@@ -30,15 +32,22 @@ interface ToolkitCard {
 }
 interface ConnectedAccount { id: string; alias?: string; status: string }
 
+// Kafelek pod znakiem: JASNY w każdym motywie, nie `bg-raised` — `--color-raised`
+// jest ciemne w motywach ciemnych, a wtedy czarne marki (GitHub, X, OpenAI,
+// Vercel) znikają. Tak samo trzyma katalog Composio i Zapier.
+const TILE =
+  "grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-white p-1.5 " +
+  "shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)] [&>svg]:size-full";
+
 function ServiceIcon({ card }: { card: ToolkitCard }) {
   const [logoFailed, setLogoFailed] = useState(false);
   const mark = APP_ICONS[card.slug];
   if (mark) {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-8 shrink-0 rounded-md bg-raised p-1.5 fill-ink">
-        <path d={mark} />
-      </svg>
-    );
+    // Znak wjeżdża jako gotowy <svg> z własnymi kolorami marki, więc NIC tu
+    // nie może go przemalować — żadnego `fill-*`, `text-*` ani `fill-current`
+    // na kafelku. innerHTML jest bezpieczny: treść to stała z bundla
+    // (`@/lib/appIcons`), nigdy nic z sieci ani od użytkownika.
+    return <span aria-hidden="true" className={TILE} dangerouslySetInnerHTML={{ __html: mark }} />;
   }
   return (
     <div className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-raised text-[13px] font-semibold text-ink-secondary">

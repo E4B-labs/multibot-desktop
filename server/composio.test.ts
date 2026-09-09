@@ -7,12 +7,6 @@ import { describe, expect, it } from "vitest";
 import { CURATED_SLUGS } from "./composio.ts";
 import { APP_ICONS } from "../src/lib/appIcons.ts";
 
-// Marki, których simple-icons nie ma wcale — te karty świadomie lecą na monogram.
-const MONOGRAM_ONLY = new Set([
-  "monday", "microsoft_teams", "outlook", "exa", "firecrawl", "apify",
-  "groqcloud", "higgsfield_mcp", "runway",
-]);
-
 describe("curated catalog", () => {
   it("has no duplicates and only composio-shaped slugs", () => {
     expect(new Set(CURATED_SLUGS).size).toBe(CURATED_SLUGS.length);
@@ -30,7 +24,9 @@ describe("curated catalog", () => {
     expect(CURATED_SLUGS.length).toBeGreaterThan(60);
   });
 
-  it("has a bundled icon for every app that has a brand mark", () => {
-    expect(CURATED_SLUGS.filter((s) => !APP_ICONS[s] && !MONOGRAM_ONLY.has(s))).toEqual([]);
+  it("has a bundled brand mark for every app, no monogram fallbacks left", () => {
+    // Monogram zostaje tylko dla własnych konektorów MCP użytkownika —
+    // katalog kuratorowany ma komplet prawdziwych logotypów.
+    expect(CURATED_SLUGS.filter((s) => !APP_ICONS[s])).toEqual([]);
   });
 });
