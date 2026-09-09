@@ -3,13 +3,7 @@ export function groupRowTitle(memberNames: string[]): string {
   return memberNames.join(", ");
 }
 
-/** Kafelek grupy w stylu komunikatora: skos z dwóch awatarów, a przy większym
- *  składzie przedni awatar zastępuje kółko „+N" (N = wszyscy oprócz tylnego).
- *  Jeden członek — jeden awatar, bez skosu. */
-export function groupAvatarStack<T>(
-  members: T[],
-  total = members.length,
-): { shown: T[]; plus: number } {
-  if (total > 2) return { shown: members.slice(0, 1), plus: total - 1 };
-  return { shown: members.slice(0, 2), plus: 0 };
+/** Kafelek grupy pokazuje wszystkie znane awatary w jednym poziomym stosie. */
+export function groupAvatarStack<T>(members: T[]): { shown: T[] } {
+  return { shown: members };
 }

@@ -54,21 +54,20 @@ describe("GroupMembersPanel", () => {
 });
 
 describe("wiersz grupy w Sidebarze", () => {
-  it("układa awatary w skos i zastępuje przedni kółkiem +N", () => {
+  it("pokazuje wszystkie znane awatary w jednym poziomym stosie", () => {
     const start = sidebar.indexOf("groupAvatarStack(members");
     const end = sidebar.indexOf("function GroupCreateForm", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
-    // kafelek 48 px jak awatar bota, tylny mniejszy w lewym górnym rogu
-    expect(row).toContain("relative size-12 shrink-0");
-    expect(row).toContain("absolute left-0 top-0");
-    expect(row).toContain("size={28}");
-    // przedni w prawym dolnym rogu, z obwódką w kolorze tła wiersza
-    expect(row).toContain("absolute bottom-0 right-0");
+    expect(row).toContain('"relative flex shrink-0 items-center"');
+    expect(row).toContain("shown.map((member)");
+    expect(row).toContain("size={solo ? 48 : 32}");
+    expect(row).not.toContain("absolute left-0 top-0");
+    expect(row).not.toContain("absolute bottom-0 right-0");
     expect(row).toContain("ring-2 ring-panel");
-    expect(row).toContain("+{plus}");
+    expect(row).not.toContain("+{plus}");
     // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
-    expect(row).toContain("{...groupMemberAvatarProps(shown[0])}");
+    expect(row).toContain("{...groupMemberAvatarProps(member)}");
   });
 });

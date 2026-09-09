@@ -830,9 +830,10 @@ function GroupRow({
   const members = g.bot_ids
     .map((id) => bots.find((b) => "mb-" + b.threadId === id))
     .filter((b): b is Bot => b != null);
-  const { shown, plus } = groupAvatarStack(members, g.bot_ids.length);
-  // sam członek nie ma z czym się krzyżować, więc siada na środku kafelka
-  const solo = shown.length === 1 && plus === 0;
+  const { shown } = groupAvatarStack(members);
+  // Jeden członek zachowuje rozmiar awatara bota; większy skład jest poziomym
+  // stosem wszystkich znanych awatarów, bez skosu i bez licznika +N.
+  const solo = shown.length === 1;
   const last = g.messages?.[g.messages.length - 1];
   const attention = members.find((b) => b.needsAttention != null)?.needsAttention;
 
@@ -873,30 +874,12 @@ function GroupRow({
       )}
     >
       {members.length > 0 ? (
-        // multibot: wiersz grupy 1:1 jak w komunikatorze — skos z dwóch awatarów
-        // (tylny w lewym górnym rogu, przedni w prawym dolnym z obwódką w kolorze
-        // tła wiersza). Powyżej dwóch członków przedni awatar zastępuje zielone
-        // kółko „+N". Kafelek ma 48 px, tyle co awatar bota, żeby wysokość
-        // wiersza i wcięcie tekstu były wspólne dla botów i grup.
-        <span className="relative size-12 shrink-0">
-          {solo ? (
-            <MausAvatar color={shown[0].color} size={48} {...groupMemberAvatarProps(shown[0])} />
-          ) : (
-            <>
-              <span className="absolute left-0 top-0 flex">
-                <MausAvatar color={shown[0].color} size={28} {...groupMemberAvatarProps(shown[0])} />
-              </span>
-              {plus > 0 ? (
-                <span className="absolute bottom-0 right-0 flex size-8 items-center justify-center rounded-full bg-success text-[12px] font-semibold leading-none text-app ring-2 ring-panel">
-                  +{plus}
-                </span>
-              ) : (
-                <span className="absolute bottom-0 right-0 flex rounded-full ring-2 ring-panel">
-                  <MausAvatar color={shown[1].color} size={32} {...groupMemberAvatarProps(shown[1])} />
-                </span>
-              )}
-            </>
-          )}
+        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "gap-1")}>
+          {shown.map((member) => (
+            <span key={member.id} className={cn("flex rounded-full", !solo && "ring-2 ring-panel")}>
+              <MausAvatar color={member.color} size={solo ? 48 : 32} {...groupMemberAvatarProps(member)} />
+            </span>
+          ))}
           {attention && (
             <span
               title={attention}

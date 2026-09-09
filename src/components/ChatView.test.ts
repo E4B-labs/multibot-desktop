@@ -161,7 +161,8 @@ describe("pigułka pokoju: napisał(a) / odpisał(a)", () => {
 // multibot: karta rozmowy bot↔bot to DRZWI do pokoju, nie szuflada. Wersja
 // z 07.09 (kierunkowa aktywność) zamieniła kliknięcie na rozwijanie w dół
 // listy członków, przez co do pokoju nie dało się wejść w ogóle. Kierunkowy
-// opis i awatary zostają, klikniecie ma znowu otwierać transkrypt.
+// opis i awatary zostają, klikniecie ma znowu otwierać transkrypt. Sam link
+// nie jest jednak pigułką, a status pokoju nie jest dopisywany do tekstu.
 describe("karta bot↔bot otwiera pokój", () => {
   const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
 
@@ -170,6 +171,12 @@ describe("karta bot↔bot otwiera pokój", () => {
     expect(card).toContain('disabled={opening}');
     expect(card).toContain('aria-busy={opening}');
     expect(card).toContain("active:scale-[0.97]");
+    expect(card).toContain("focus-visible:outline");
+    expect(card).not.toContain("rounded-2xl border border-hairline/40 bg-panel");
+    expect(card).not.toContain("statusLabel");
+    for (const status of ["Completed", "Failed", "Working", "Ukończone", "Błąd", "W toku"]) {
+      expect(card, `status nadal jest renderowany: ${status}`).not.toContain(status);
+    }
     for (const drawer of ["setExpanded", "aria-expanded", "ChevronDown"]) {
       expect(card, `karta znowu rozwija się w dół: ${drawer}`).not.toContain(drawer);
     }

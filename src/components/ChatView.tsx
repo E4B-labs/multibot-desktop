@@ -294,8 +294,6 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
       ? (polish ? `Napisano do ${names[0] ?? room.bot_ids[1] ?? "agenta"}` : `Messaged ${names[0] ?? room.bot_ids[1] ?? "agent"}`)
       : (polish ? `Napisano do ${peers.length} agentów` : `Messaged ${peers.length} agents`)
     : (polish ? `Wiadomość od ${actorName}` : `Message from ${actorName}`);
-  const status = state.rooms.find((candidate) => candidate.id === room.id)?.status ?? room.status;
-  const statusLabel = status === "done" ? (polish ? "Ukończone" : "Completed") : status === "failed" ? (polish ? "Błąd" : "Failed") : (polish ? "W toku" : "Working");
   const avatars = sent ? [actor, ...peers] : [actor];
   const content = (
     <span className="flex min-w-0 items-center gap-2">
@@ -320,10 +318,10 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
         disabled={opening}
         aria-busy={opening}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
-        className="mx-auto flex max-w-full cursor-pointer items-center gap-2 rounded-2xl border border-hairline/40 bg-panel px-3 py-2 text-[13px] text-ink-secondary transition-[background-color,color,transform] duration-150 hover:bg-raised hover:text-ink active:scale-[0.97] active:bg-raised-hover disabled:cursor-wait disabled:scale-[0.98] disabled:bg-raised"
+        className="flex w-full min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md py-1 text-[13px] text-ink-secondary transition-[color,outline-color,transform] duration-150 hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-ink/25 focus-visible:outline-offset-2 active:scale-[0.97] active:text-ink disabled:cursor-wait disabled:scale-[0.98] disabled:text-ink"
       >
         {content}
-        {opening ? <Spinner size={13} className="shrink-0" /> : <span className="shrink-0 text-[12px]">{statusLabel}</span>}
+        {opening && <Spinner size={13} className="shrink-0" />}
       </button>
     </div>
   );

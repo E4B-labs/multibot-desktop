@@ -119,6 +119,13 @@ describe("zakładka Admin zależy od roli", () => {
     expect(ids("unknown")).not.toContain("admin");
   });
 
+  it("nie renderuje skeletonu w miejscu admina podczas ładowania roli", () => {
+    const start = panel.indexOf("{settingsTabs.map");
+    const nav = panel.slice(start, panel.indexOf("</nav>", start));
+    expect(nav).not.toContain('role === "loading"');
+    expect(nav).not.toContain("<Skeleton");
+  });
+
   it("reszta szyny zostaje nietknięta dla każdego", () => {
     expect(ids("member")).toEqual(["general", "other", "update"]);
     expect(ids("owner")).toEqual(["general", "other", "admin", "update"]);

@@ -948,7 +948,7 @@ export function AppSettingsPanel() {
         >
           {settingsTabs.map(({ id, Icon, pl, en }) => {
             // Admin needs /api/auth/me: hold its slot instead of popping in late.
-            if (id === "admin" && role !== "owner") return role === "loading" ? <Skeleton key={id} className="size-10" /> : null;
+            if (id === "admin" && role !== "owner") return null;
             const label = polish ? pl : en;
             const active = tab === id;
             return (
