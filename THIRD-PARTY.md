@@ -89,15 +89,29 @@ macOS and Linux use a `tor` installed by the system package manager
 (`brew install tor`, `apt install tor`), so no Tor binary is redistributed with
 those builds.
 
-## simple-icons — ikony katalogu wtyczek
+## Logotypy katalogu wtyczek
 
-`src/lib/appIcons.ts` niesie dane ścieżek SVG (viewBox 24×24) wzięte
-z projektu [simple-icons](https://github.com/simple-icons/simple-icons),
-wydanego na **CC0-1.0** (domena publiczna, atrybucja nieobowiązkowa —
-podajemy ją, bo tak wypada). Ścieżki są wklejone do repo, a nie ściągane
-z sieci: interfejs na telefonie jedzie w paczce aplikacji i nie ma jak
-pobrać ikony z CDN-u.
+`src/lib/appIcons.ts` (i jego kopia w repo mobilnym, `webui/src/lib/appIcons.ts`)
+niesie po jednym zminifikowanym, pełnokolorowym `<svg>` na każdą aplikację
+z katalogu. Znaki są wklejone do repo, a nie ściągane z sieci: interfejs na
+telefonie jedzie w paczce aplikacji i nie ma jak pobrać ikony z CDN-u.
 
-Znaki towarowe pozostają własnością odpowiednich firm. MultiBot używa ich
-wyłącznie do nazwania usługi, którą użytkownik sam podłącza — nie sugerują
-żadnego związku ani poparcia.
+Źródła, z których pochodzą poszczególne znaki:
+
+| Źródło | Licencja | Czego dotyczy |
+| --- | --- | --- |
+| [gilbarbara/logos](https://github.com/gilbarbara/logos) (przez `@iconify-json/logos`) | **CC0-1.0** | większość znaków wielokolorowych — Gmail, Slack, Figma, GitLab, Airtable, Trello i pozostałe |
+| [svgl](https://github.com/pheralb/svgl) | **MIT** | Outlook, Google Sheets, Canva, Instagram, Webflow, OpenRouter, Groq, Replicate, Firecrawl, Gemini, Hugging Face, Runway |
+| [vectorlogo.zone](https://www.vectorlogo.zone/) | znaki publikowane do użytku nominatywnego | Salesforce, HubSpot, Intercom, BigQuery |
+| oficjalne pliki marek | — | Apify (`apify.com`), Higgsfield (`higgsfield.ai`) |
+| [simple-icons](https://github.com/simple-icons/simple-icons) | **CC0-1.0** | marki jednokolorowe — Google Docs, Calendly, Make, Mixpanel, Stripe; ścieżka dostaje firmowy hex podawany przez simple-icons |
+
+CC0-1.0 to domena publiczna i atrybucja jest nieobowiązkowa — podajemy ją,
+bo tak wypada.
+
+**Znaki towarowe pozostają własnością odpowiednich firm.** Żadna z powyższych
+licencji nie dotyczy samych znaków towarowych, tylko plików SVG. MultiBot
+używa logotypów wyłącznie nominatywnie: żeby nazwać i pokazać usługę, którą
+użytkownik sam podłącza. Nie sugerują one żadnego związku, sponsoringu ani
+poparcia ze strony właścicieli marek. Właściciel marki, który sobie tego nie
+życzy, może to zgłosić — znak zostanie zastąpiony monogramem.
