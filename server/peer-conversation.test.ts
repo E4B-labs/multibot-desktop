@@ -551,6 +551,7 @@ describe("peer conversation: a message is a real turn", () => {
   it(
     "a question and its answer end the conversation by silence, not by a limit",
     async () => {
+      const dumpBefore = prompts().length;
       const asker = await h.newBot("Silent Asker", "quiet");
       const peer = await h.newBot("Role Peer", "answerer");
 
@@ -564,6 +565,7 @@ describe("peer conversation: a message is a real turn", () => {
       // the question and the answer: nothing after them
       expect(room.transcript.length).toBeLessThanOrEqual(4);
       expect(room.transcript.some((m: any) => m.text.includes("I run the release checks."))).toBe(true);
+      expect(prompts().slice(dumpBefore)).toContain("Every message from a peer must get a reply");
       // silence is never written down as a message
       expect(room.transcript.some((m: any) => m.text.includes("[NO REPLY]"))).toBe(false);
       // and the owner is not told the conversation hit a budget

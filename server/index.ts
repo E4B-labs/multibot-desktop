@@ -815,7 +815,7 @@ function conversationLanguage(fromBotId: string, text: string): "Polish" | "Engl
  * Brackets and newlines come out; the id below the name stays authoritative. */
 function peerEnvelope(from: BotRecord, text: string, language: string): string {
   const name = from.name.replace(/[[\]\r\n]+/g, " ").trim().slice(0, 120) || from.id;
-  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn: answer them, or reply with exactly [NO REPLY] once you have what you need and have nothing new to add. Do not thank, confirm or restate - this conversation ends by silence, not by a closing message. Reply in ${language}.]\n\n${text}`;
+  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn. Every message from a peer must get a reply: answer it now, even if it is only "hej". Do not use [NO REPLY] or [TASK COMPLETE] in response to a peer message. Do not thank, confirm or restate - this conversation ends by silence, not by a closing message. Reply in ${language}.]\n\n${text}`;
 }
 
 /** Consecutive acknowledgements in a room. Two in a row means the two bots are
