@@ -59,7 +59,7 @@ describe("agentMayAct", () => {
 });
 
 describe("shared computer turn queue", () => {
-  afterEach(() => { delete process.env.OMB_MAX_PARALLEL_TURNS; resetAgentQueue(); });
+  afterEach(() => { delete process.env.MULTIBOT_MAX_PARALLEL_TURNS; resetAgentQueue(); });
 
   it("a second bot does NOT wait for the first one to finish", async () => {
     await acquireAgent("alpha");
@@ -69,8 +69,8 @@ describe("shared computer turn queue", () => {
     expect(control().agentQueue).toBeUndefined();
   });
 
-  it("queues in FIFO order only above OMB_MAX_PARALLEL_TURNS", async () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "1";
+  it("queues in FIFO order only above MULTIBOT_MAX_PARALLEL_TURNS", async () => {
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "1";
     await acquireAgent("alpha");
     let betaStarted = false;
     const beta = acquireAgent("beta").then(() => { betaStarted = true; });

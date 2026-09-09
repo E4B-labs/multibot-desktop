@@ -63,7 +63,7 @@ describe("OpenCode model catalog", () => {
   });
 
   it("uses cache within 12 hours and keeps it after fetch failure", async () => {
-    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-catalog-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-opencode-catalog-"));
     const cachePath = join(scratch, "opencode-models.json");
     let calls = 0;
     const fetcher: typeof fetch = async (url) => {
@@ -87,7 +87,7 @@ describe("OpenCode model catalog", () => {
   });
 
   it("falls back to bundled free models when first fetch fails", async () => {
-    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-catalog-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-opencode-catalog-"));
     const store = new OpenCodeCatalogStore(async () => response({}, false), join(scratch, "missing.json"));
     await store.refresh(true);
     expect(store.go.options.map((option) => option.id)).toContain("opencode-go/gpt-6-astra");

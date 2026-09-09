@@ -1,8 +1,8 @@
 import { ChevronLeft, ImagePlus, Pencil, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useStore, type Bot } from "@/state/store";
-import { MausAvatar } from "./Avatar";
-import { MAUS_COLORS, MAUS_COLOR_NAMES, pickerAvatarState } from "@/lib/mascot";
+import { BotAvatar } from "./Avatar";
+import { BOT_COLORS, BOT_COLOR_NAMES, pickerAvatarState } from "@/lib/mascot";
 import { MASCOT_SHAPES } from "@/lib/mascotShapes";
 import { ModelPicker } from "./ModelPicker";
 import { EngineAutonomy } from "./EngineAutonomy";
@@ -217,7 +217,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             aria-label={polish ? "Zmień wygląd bota" : "Change bot appearance"}
             className="group relative rounded-full ring-offset-4 ring-offset-panel transition hover:opacity-90 focus:outline-none"
           >
-            <MausAvatar
+            <BotAvatar
               color={bot.color}
               shape={bot.mascotShape}
               avatarUrl={bot.avatarUrl}
@@ -292,7 +292,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                         title={shape}
                         aria-label={`${polish ? "Użyj kształtu ikony" : "Use"} ${shape}`}
                       >
-                        <MausAvatar color={bot.color} shape={shape} avatarUrl={null} state={activeState} size={32} animated={false} trackPointer={false} showFace={false} />
+                        <BotAvatar color={bot.color} shape={shape} avatarUrl={null} state={activeState} size={32} animated={false} trackPointer={false} showFace={false} />
                       </button>
                     ))}
                   </div>
@@ -301,7 +301,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                     {polish ? "Kolor" : "Color"}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {MAUS_COLOR_NAMES.map((color) => (
+                    {BOT_COLOR_NAMES.map((color) => (
                       <button
                         type="button"
                         key={color}
@@ -310,7 +310,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                           "size-7 rounded-full border-2 border-transparent transition-transform hover:scale-110",
                           bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                         )}
-                        style={{ backgroundColor: MAUS_COLORS[color] }}
+                        style={{ backgroundColor: BOT_COLORS[color] }}
                         title={color}
                         aria-label={`${polish ? "Użyj koloru awatara" : "Use mascot color"}: ${color}`}
                       />

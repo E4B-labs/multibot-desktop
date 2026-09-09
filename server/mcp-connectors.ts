@@ -6,7 +6,7 @@
 // Ten sam kształt API co `composio.ts` — katalog / lista / podłącz / odłącz —
 // żeby trasy `/api/connectors/*` w `index.ts` wyglądały tak samo dla obu źródeł.
 //
-// STORE: `~/.openmausbot/config.json`, klucz `mcpConnectors` (mapa po id). Jeden
+// STORE: `~/.multibot/config.json`, klucz `mcpConnectors` (mapa po id). Jeden
 // store, ten sam, w którym leżą klucze API użytkownika — tokeny konektorów
 // (`env`, `headers`) są dokładnie tej samej klasy sekretem i nie ma powodu
 // zakładać im drugiego pliku.

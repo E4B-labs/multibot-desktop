@@ -8,7 +8,7 @@ najszybciej.
 
 Dwa osobne procesy ustawione w linię:
 
-1. **Harness (Node)** — słucha na `:8799` (`OMB_PORT`, historycznie `OGB_PORT`).
+1. **Harness (Node)** — słucha na `:8799` (`MULTIBOT_PORT`).
    To jedyna granica sieciowa całego produktu: wszystko za nią chodzi po
    loopbacku. Wszystko przed nią wymaga tokenu Bearer.
 2. **UI (React + Vite, PWA)** — gada wyłącznie z `/api` harnessu. Klient nie ma
@@ -48,8 +48,9 @@ dokumentacja, w tym ten plik.
 ## 3. Dane
 
 Nie ma bazy danych, nie ma ORM, nie ma migracji. Stan leży w plikach JSON w
-katalogu danych wyznaczanym przez `server/config.ts`: `OMB_DATA_DIR`, a w braku
-zmiennej `~/.openmausbot` (ze ścieżką migracyjną ze starego `~/.opengrokbot`).
+katalogu danych wyznaczanym przez `server/config.ts`: `MULTIBOT_DATA_DIR`, a w braku
+zmiennej `~/.multibot` (ze ścieżką migracyjną ze starszych katalogów danych —
+patrz `migrateLegacyDataDir()`).
 Katalog i `config.json` dostają zawężone uprawnienia.
 
 Konsekwencja dla pracy: **nie ma bramki migracyjnej do przejścia** — nie ma

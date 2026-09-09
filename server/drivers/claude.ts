@@ -177,7 +177,7 @@ export function permissionSocketPath(threadId: string) {
   // pipe instead, same API on both ends. The pipe namespace is global and
   // flat (DATA_DIR does not isolate it), so the pid keeps concurrent
   // harnesses off each other's names.
-  if (process.platform === "win32") return `\\\\.\\pipe\\omb-perm-${process.pid}-${tag}`;
+  if (process.platform === "win32") return `\\\\.\\pipe\\multibot-perm-${process.pid}-${tag}`;
   return join(DATA_DIR, `perm-${tag}.sock`);
 }
 

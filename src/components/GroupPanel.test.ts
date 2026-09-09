@@ -26,7 +26,7 @@ describe("GroupPanel", () => {
 
   it("awatary w grupie są statyczne", () => {
     for (const source of [panel, members]) {
-      const tags = source.match(/<MausAvatar[^>]*>/gs) ?? [];
+      const tags = source.match(/<BotAvatar[^>]*>/gs) ?? [];
       expect(tags.length).toBeGreaterThan(0);
       for (const tag of tags) expect(tag).toContain("animated={false}");
     }

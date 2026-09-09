@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye, FileText, GraduationCap, Link2, ListTodo, MessageSquare, Monitor, Plus, Puzzle, Search, Settings, SlidersHorizontal, Users, Wand2, Wrench } from "lucide-react";
 import { useStore } from "@/state/store";
 import { LoadingRow } from "./Loading";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
@@ -196,7 +196,7 @@ export function CmdK() {
             ? (polish ? "Bieżący" : "Current bot")
             : (polish ? "Przełącz" : "Switch to bot"),
         icon: (
-          <MausAvatar color={b.color} avatarUrl={b.avatarUrl} shape={b.mascotShape} state={normalizeState(b.mascotExpression) ?? "happy"} size={22} animated={false} />
+          <BotAvatar color={b.color} avatarUrl={b.avatarUrl} shape={b.mascotShape} state={normalizeState(b.mascotExpression) ?? "happy"} size={22} animated={false} />
         ),
         run: close(() => {
           if (hiddenMode) dispatch({ type: "updateBot", botId: b.id, patch: { hidden: false } });
@@ -396,7 +396,7 @@ export function CmdK() {
             }
             const bot = row.botId ? state.bots.find((item) => item.id === row.botId) : undefined;
             return <button key={row.id} onClick={() => openResult(row)} onMouseEnter={() => setHighlight(i)} className={cn("flex w-full items-center gap-2.5 px-4 py-2 text-left", i === highlight ? "bg-raised-hover" : "")}>
-              <span className="flex size-6 shrink-0 items-center justify-center text-ink-secondary">{bot ? <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={normalizeState(bot.mascotExpression) ?? "happy"} size={22} animated={false} /> : resultIcon(row.kind)}</span>
+              <span className="flex size-6 shrink-0 items-center justify-center text-ink-secondary">{bot ? <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={normalizeState(bot.mascotExpression) ?? "happy"} size={22} animated={false} /> : resultIcon(row.kind)}</span>
               <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-medium text-ink">{row.title}</span><span className="block truncate text-[11px] text-ink-secondary">{row.subtitle}</span></span>
               <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-[10px] text-ink-secondary">{resultType(row.kind, polish)}</span>
               {row.at ? <span className="shrink-0 text-[10px] text-ink-secondary">{new Date(row.at).toLocaleDateString(polish ? "pl-PL" : "en-US")}</span> : null}

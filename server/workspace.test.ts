@@ -7,7 +7,7 @@ import { WorkspaceStore } from "./workspace.ts";
 
 const roots: string[] = [];
 const make = () => {
-  const root = mkdtempSync(join(tmpdir(), "omb-workspace-"));
+  const root = mkdtempSync(join(tmpdir(), "multibot-workspace-"));
   roots.push(root);
   const file = join(root, "workspace.json");
   return { file, store: new WorkspaceStore(file) };

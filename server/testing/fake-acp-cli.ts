@@ -336,7 +336,7 @@ function handle(msg: any) {
       if (mode === "relay") {
         const chunk = (text: string) =>
           out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } } });
-        const self = (agentsMcp?.env ?? []).find((e) => e.name === "OMB_BOT_ID")?.value ?? "";
+        const self = (agentsMcp?.env ?? []).find((e) => e.name === "MULTIBOT_BOT_ID")?.value ?? "";
         const mapFile = process.env.FAKE_ACP_RELAY_MAP ?? "";
         let hops: string[] = [];
         let turn = 0;

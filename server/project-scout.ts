@@ -1,4 +1,4 @@
-// multibot: project scout (port z OpenMausBot #339, server/project-scout.ts).
+// multibot: project scout (port z MultiBot #339, server/project-scout.ts).
 // Deterministyczny skan pliku na podstawie package.json / pyproject / README i
 // listy katalogów. Bez żadnych zgadywania — tylko zapisane dowody. Sugeruje
 // manifest zespołu (lead + specjaliści), który import-side tworzy boty przez

@@ -109,7 +109,7 @@ function Shell() {
             {/* multibot: routines are harness-owned and available for every driver. */}
             {state.routinesOpen && bot && <RoutinesPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
             {state.skillsOpen && bot && <SkillsPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
-            {/* multibot: live team map (port z OpenMausBot) — globalny overlay */}
+            {/* multibot: live team map (port z MultiBot) — globalny overlay */}
             {state.teamMapOpen && (
               <TeamMapPanel onClose={() => dispatch({ type: "toggleTeamMap", open: false })} />
             )}

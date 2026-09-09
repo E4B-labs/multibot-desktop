@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { Spinner } from "./Loading";
 import { ArrowLeft, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { authFetch, setSessionToken, setV2AuthToken, takeJoinGrant } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { canRemember, copyText, forgetRemembered, isOnionHost, isReactNativeShell, joinLocalHarness, rememberedEntry, rememberProfile, resolveHost, signInRemembered, type RememberedEntry } from "@/lib/shell";
@@ -553,7 +553,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === "choice" && (
           <div className="flex flex-col">
-            <MausAvatar color="green" state="happy" size={72} animated={false} />
+            <BotAvatar color="green" state="happy" size={72} animated={false} />
             <h1 className="mt-4 text-[20px] font-semibold text-ink">MultiBot</h1>
             <p className="mt-1.5 text-[14px] text-ink-secondary">{polish ? "Zacznij od jednej z dwóch rzeczy." : "Start with one of two things."}</p>
             <button onClick={() => { setPath("setup"); setStep(isElectron ? nextStep("setup", "choice") : "credentials"); }} className="mt-6 rounded-xl bg-raised p-4 text-left text-ink hover:bg-raised-hover">
@@ -619,7 +619,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   {polish
                     ? "Hasło serwera istnieje w jawnej postaci tylko w pliku setup.json na urządzeniu serwera — przeglądarka nie ma jak go przeczytać. Otwórz tam ten plik i przepisz z niego nazwę i hasło."
                     : "The server password only exists in the clear in setup.json on the server device — a browser tab has no way to read a file. Open it there and copy the name and password out of it."}
-                  <code className="mt-1 block select-all break-all text-ink">{setupPath ?? (polish ? "katalog danych MultiBota (~/.openmausbot)" : "the MultiBot data folder (~/.openmausbot)")}</code>
+                  <code className="mt-1 block select-all break-all text-ink">{setupPath ?? (polish ? "katalog danych MultiBota (~/.multibot)" : "the MultiBot data folder (~/.multibot)")}</code>
                 </div>
                 <button onClick={() => { setPath("join"); setStep("signin"); }} className="mt-4 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
                   {polish ? "Mam te wartości — zaloguj się" : "I have those values — sign in"}

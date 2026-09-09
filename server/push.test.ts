@@ -71,7 +71,7 @@ describe("push na telefon (fake ACP fleet)", () => {
   /** Urządzenia zapisane w configu serwera; pusto, gdy trafimy w moment zapisu. */
   const pushDevices = (): Record<string, { token?: string }> => {
     try {
-      return JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8")).pushDevices ?? {};
+      return JSON.parse(readFileSync(join(home, ".multibot", "config.json"), "utf8")).pushDevices ?? {};
     } catch {
       return {};
     }
@@ -117,10 +117,10 @@ describe("push na telefon (fake ACP fleet)", () => {
       });
     });
 
-    home = mkdtempSync(join(tmpdir(), "omb-push-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "multibot-push-test-"));
+    mkdirSync(join(home, ".multibot"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".multibot", "config.json"),
       JSON.stringify({
         instances: {
           happy: { driver: "grokAgent", config: { cli: FAKE_CLI, fullAuto: true } },
@@ -160,8 +160,8 @@ describe("push na telefon (fake ACP fleet)", () => {
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(port),
-        OMB_ONBOARDING_TURN: "0",
+        MULTIBOT_PORT: String(port),
+        MULTIBOT_ONBOARDING_TURN: "0",
         MULTIBOT_COMPUTER: "off",
         MULTIBOT_EXPO_PUSH_URL: `http://127.0.0.1:${pushPort}/push`,
       },

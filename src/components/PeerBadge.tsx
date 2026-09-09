@@ -14,7 +14,7 @@ import { useLanguage } from "@/lib/language";
 import { normalizeState } from "@/lib/mascot";
 import { botDisplayName } from "@/lib/botNames";
 import { cn } from "@/lib/cn";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 
 type ChipBot = ReturnType<typeof useStore>["state"]["bots"][number];
 
@@ -28,7 +28,7 @@ export function BotChip({ bot, className }: { bot: ChipBot; className?: string }
   const polish = useLanguage() === "pl";
   return (
     <span className={cn(BOT_CHIP_CLASS, className)}>
-      <MausAvatar
+      <BotAvatar
         color={bot.color}
         avatarUrl={bot.avatarUrl}
         shape={bot.mascotShape}

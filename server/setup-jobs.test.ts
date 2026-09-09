@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function tempFile() {
-  const dir = mkdtempSync(join(tmpdir(), "omb-setup-jobs-"));
+  const dir = mkdtempSync(join(tmpdir(), "multibot-setup-jobs-"));
   scratch.push(dir);
   return join(dir, "jobs.json");
 }

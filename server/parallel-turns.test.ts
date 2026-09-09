@@ -76,10 +76,10 @@ describe("parallel turns + coalesced user messages (fake ACP fleet)", () => {
 
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-parallel-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "multibot-parallel-test-"));
+    mkdirSync(join(home, ".multibot"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".multibot", "config.json"),
       JSON.stringify({
         instances: {
           slow: { driver: "grokAgent", environment: { FAKE_ACP_MODE: "busy" }, config: { cli: FAKE_CLI, fullAuto: true } },
@@ -94,12 +94,12 @@ describe("parallel turns + coalesced user messages (fake ACP fleet)", () => {
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
-        OMB_HOST: "127.0.0.1",
+        MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
+        MULTIBOT_HOST: "127.0.0.1",
         MULTIBOT_COMPUTER: "off",
         // krótkie okno sklejania — test nie ma czekać domyślnych 1,5 s na turę
-        OMB_TURN_DEBOUNCE_MS: String(DEBOUNCE_MS),
+        MULTIBOT_TURN_DEBOUNCE_MS: String(DEBOUNCE_MS),
         FAKE_ACP_TURN_MS: String(TURN_MS),
         FAKE_ACP_PROMPT_DUMP: join(home, "acp-prompts.ndjson"),
       },

@@ -1,4 +1,4 @@
-// multibot: live team map (port z OpenMausBot, TeamMapPage → Panel).
+// multibot: live team map (port z MultiBot, TeamMapPage → Panel).
 // Polls GET /api/team-map co 3s; krawędzie live z snapshotu, sekcje z rostra
 // botów. Droga awaryjna, gdy backend nie ma delegacji: pokazuje same sekcje.
 import { useEffect, useState } from "react";
@@ -7,7 +7,7 @@ import { useStore } from "@/state/store";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { Skeleton } from "./Loading";
 import {
@@ -116,7 +116,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
                             className="flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-2 py-1 text-[12px] text-ink"
                             title={s.label}
                           >
-                            <MausAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={20} animated={false} />
+                            <BotAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={20} animated={false} />
                             {botDisplayName(bot, polish ? "pl" : "en")} <span className={`size-1.5 rounded-full ${s.tone === "success" ? "bg-emerald-500" : s.tone === "warning" ? "bg-warning" : s.tone === "danger" ? "bg-danger" : "bg-ink-secondary/50"}`} />
                           </span>
                         );
@@ -133,7 +133,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
                         className="flex items-center gap-1.5 rounded-full bg-raised px-2 py-1 text-[12px] text-ink"
                         title={s.label}
                       >
-                        <MausAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={18} animated={false} />
+                        <BotAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={18} animated={false} />
                         {botDisplayName(bot, polish ? "pl" : "en")}
                       </span>
                     );

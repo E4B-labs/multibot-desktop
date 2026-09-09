@@ -159,7 +159,7 @@ export function resolveActiveTarget(config) {
 
 /** Czy zapakowana apka ma w ogóle podnieść lokalny harness. Aktywny host
  * zdalny znaczy „ten komputer jest tylko klientem" — forkowanie serwera
- * tworzyłoby wtedy ~/.openmausbot (server/config.ts) i wrzucało użytkownika
+ * tworzyłoby wtedy ~/.multibot (server/config.ts) i wrzucało użytkownika
  * na ekran zakładania serwera, którego nie chciał. W trybie dev harness i tak
  * nie wstaje z Electrona, więc `isPackaged=false` zawsze daje false. */
 export function shouldStartLocalHarness({ isPackaged, mode }) {

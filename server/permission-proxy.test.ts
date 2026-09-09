@@ -121,7 +121,7 @@ const posix = process.platform !== "win32";
 
 describe.skipIf(!posix)("permission-proxy", () => {
   it("reconnects after the broker of a finished turn goes away", async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-proxy-"));
+    home = mkdtempSync(join(tmpdir(), "multibot-proxy-"));
     const socketPath = join(home, "perm-test.sock");
 
     server = await broker(socketPath);
@@ -140,7 +140,7 @@ describe.skipIf(!posix)("permission-proxy", () => {
   }, 30_000);
 
   it("denies instead of hanging when no broker is listening at all", async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-proxy-"));
+    home = mkdtempSync(join(tmpdir(), "multibot-proxy-"));
     child = spawn(process.execPath, [PROXY, join(home, "nie-ma.sock")], { stdio: ["pipe", "pipe", "pipe"] });
     expect(await approve(child, 1)).toContain("broker unavailable");
   }, 30_000);

@@ -50,7 +50,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   beforeEach(() => {
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-codex-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-codex-test-"));
   });
 
   afterEach(async () => {
@@ -297,7 +297,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CODEX_DUMP = dump;
-    process.env.OMB_HISTORY_MAX_CHARS = "40";
+    process.env.MULTIBOT_HISTORY_MAX_CHARS = "40";
     try {
       await instance.adapter.sendTurn({
         threadId: "t-budget",
@@ -309,7 +309,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       });
       await recorder.until((e) => e.type === "turn.completed");
     } finally {
-      delete process.env.OMB_HISTORY_MAX_CHARS;
+      delete process.env.MULTIBOT_HISTORY_MAX_CHARS;
     }
 
     const calls = JSON.parse(readFileSync(dump, "utf8")).calls;

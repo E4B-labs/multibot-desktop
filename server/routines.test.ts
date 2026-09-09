@@ -8,7 +8,7 @@ import { HarnessRoutines, nextRun, oneShotAt, routineTurnText, verifyWebhookSign
 
 const roots: string[] = [];
 const file = () => {
-  const root = mkdtempSync(join(tmpdir(), "omb-routines-"));
+  const root = mkdtempSync(join(tmpdir(), "multibot-routines-"));
   roots.push(root);
   return join(root, "routines.json");
 };

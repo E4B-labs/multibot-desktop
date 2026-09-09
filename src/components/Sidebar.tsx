@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
 import { Skeleton } from "./Loading";
-import { MausAvatar, InitialsAvatar } from "./Avatar";
+import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
 import { GROUP_AVATAR_STATE, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
@@ -152,7 +152,7 @@ function BotContextMenu({
 }: {
   menu: MenuState;
   onClose: () => void;
-  /** multibot: sekcje sidebaru (port z OpenMausBot #296) */
+  /** multibot: sekcje sidebaru (port z MultiBot #296) */
   onMoveToSection?: (botId: string) => void;
 }) {
   const { state, dispatch } = useStore();
@@ -253,7 +253,7 @@ function BotContextMenu({
 // — obcy tekst czy link nie ma prawa udawać wiersza ani sekcji.
 const SIDEBAR_DRAG_TYPES = ["text/mb-section", "text/mb-group-id", "text/mb-bot-id"] as const;
 
-// multibot: nagłówek sekcji na liście (port z OpenMausBot #296). Wysokość i
+// multibot: nagłówek sekcji na liście (port z MultiBot #296). Wysokość i
 // marginesy są STAŁE (`h-9`, zero paddingu pionowego) — wcześniej `pt-3 pb-1`
 // dawało inny odstęp nad pierwszą sekcją niż między kolejnymi, więc kilka
 // zwiniętych nagłówków obok siebie wyglądało na krzywo poukładane. Odstępy
@@ -514,7 +514,7 @@ function BotHoverCard({ bot, top, left }: { bot: Bot; top: number; left: number 
       className="pointer-events-none fixed z-50 w-72 rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
     >
       <div className="flex items-center gap-2">
-        <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={28} animated={false} />
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={28} animated={false} />
         {/* godzina na wysokości nazwy; flex-1 na nazwie trzyma ją przy prawej
             krawędzi kafelka (ta sama oś X co wcześniej) */}
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{botDisplayName(bot, lang)}</span>
@@ -574,7 +574,7 @@ function BotListItem({
         selected ? "bg-raised" : "hover:bg-raised/50",
       )}
     >
-      <MausAvatar
+      <BotAvatar
         color={bot.color} avatarUrl={bot.avatarUrl}
         shape={bot.mascotShape}
         state={avatar.state}
@@ -638,7 +638,7 @@ function GroupContextMenu({ menu, onClose }: { menu: GroupMenuState; onClose: ()
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [busy, setBusy] = useState(false);
-  // multibot: zmiana nazwy grupy (port z OpenMausBot #343) — inline input
+  // multibot: zmiana nazwy grupy (port z MultiBot #343) — inline input
   // w menu, Enter zapisuje (IME-safe), Escape wraca do pozycji menu.
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(menu.group.name || "");
@@ -877,7 +877,7 @@ function GroupRow({
       {members.length > 0 ? (
         <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "-space-x-1")}>
           {shown.map((member) => (
-            <MausAvatar key={member.id} color={member.color} size={solo ? 48 : 20} {...groupMemberAvatarProps(member)} />
+            <BotAvatar key={member.id} color={member.color} size={solo ? 48 : 20} {...groupMemberAvatarProps(member)} />
           ))}
           {attention && (
             <span
@@ -1139,7 +1139,7 @@ export function Sidebar() {
   const visibleBots = state.bots
     .filter((b) => !b.hidden)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
-  // multibot: sekcje sidebaru (port z OpenMausBot #296) — przypięte zostają na
+  // multibot: sekcje sidebaru (port z MultiBot #296) — przypięte zostają na
   // górze bez podziałów; reszta dzieli się na „bez sekcji" i sekcje w
   // kolejności zapisanej na serwerze. W zwiniętej szynie podziałów nie rysujemy.
   const [sectionPicker, setSectionPicker] = useState<{ botId: string; x: number; y: number } | null>(null);
@@ -1417,7 +1417,7 @@ export function Sidebar() {
                       isSelected ? "bg-raised" : "hover:bg-raised/50",
                     )}
                   >
-                    <MausAvatar
+                    <BotAvatar
                       color={b.color} avatarUrl={b.avatarUrl}
                       shape={b.mascotShape}
                       size={avatarSize}

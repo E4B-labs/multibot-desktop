@@ -5,25 +5,25 @@ import {
   FACE_SCALE,
   FACE_X,
   FACE_Y,
-  MausAvatar,
+  BotAvatar,
   MOUTH_WEIGHT,
-  type MausAvatarHandle,
+  type BotAvatarHandle,
 } from "@/components/Avatar";
 import {
-  MAUS_COLOR_NAMES,
-  MAUS_COLORS,
-  MAUS_MOTIONS,
+  BOT_COLOR_NAMES,
+  BOT_COLORS,
+  BOT_MOTIONS,
   PICKABLE_STATES,
   STATE_GROUPS,
-  type MausColor,
-  type MausMotion,
-  type MausState,
+  type BotColor,
+  type BotMotion,
+  type BotState,
 } from "@/lib/mascot";
 import { EXPRESSION_COUNT } from "@/components/BlobAvatar";
 import "./styles.css";
 import "./mascot-preview.css";
 
-const SCENARIOS: Partial<Record<MausState, string>> = {
+const SCENARIOS: Partial<Record<BotState, string>> = {
   idle: "General / admin",
   happy: "Support / guide",
   curious: "Awaiting input",
@@ -36,7 +36,7 @@ const SCENARIOS: Partial<Record<MausState, string>> = {
   proud: "Task completed",
 };
 
-const MOTION_SCENARIOS: Record<Exclude<MausMotion, "none">, string> = {
+const MOTION_SCENARIOS: Record<Exclude<BotMotion, "none">, string> = {
   arrive: "New bot created",
   switch: "Active bot changed",
   customize: "Appearance updated",
@@ -52,7 +52,7 @@ const MOTION_SCENARIOS: Record<Exclude<MausMotion, "none">, string> = {
   sending: "Sending message",
 };
 
-const MOTION_COLORS: MausColor[] = [
+const MOTION_COLORS: BotColor[] = [
   "green", "blue", "purple", "red", "cyan", "orange",
   "teal", "green", "pink", "yellow", "coral", "red",
 ];
@@ -110,16 +110,16 @@ function Tuner({
 }: {
   tuning: Tuning;
   setTuning: (t: Tuning) => void;
-  state: MausState;
-  setState: (s: MausState) => void;
+  state: BotState;
+  setState: (s: BotState) => void;
   expression: number | undefined;
   setExpression: (e: number | undefined) => void;
-  color: MausColor;
-  setColor: (c: MausColor) => void;
+  color: BotColor;
+  setColor: (c: BotColor) => void;
   forward: boolean;
   setForward: (v: boolean) => void;
 }) {
-  const handle = useRef<MausAvatarHandle>(null);
+  const handle = useRef<BotAvatarHandle>(null);
   const changed = (Object.keys(DEFAULTS) as (keyof Tuning)[]).filter(
     (k) => tuning[k] !== DEFAULTS[k],
   );
@@ -127,13 +127,13 @@ function Tuner({
   return (
     <section className="tuner">
       <div className="tuner-stage">
-        <MausAvatar
+        <BotAvatar
           ref={handle}
           color={color}
           state={state}
           expression={expression}
           size={300}
-          label={`${state} maus`}
+          label={`${state} bot`}
           faceX={tuning.faceX}
           faceY={tuning.faceY}
           faceScale={tuning.faceScale}
@@ -195,14 +195,14 @@ function Tuner({
 
           <h3>Colour</h3>
           <div className="chips">
-            {MAUS_COLOR_NAMES.map((c) => (
+            {BOT_COLOR_NAMES.map((c) => (
               <button
                 key={c}
                 type="button"
                 className={c === color ? "on" : ""}
                 onClick={() => setColor(c)}
               >
-                <span className="swatch" style={{ background: MAUS_COLORS[c] }} />
+                <span className="swatch" style={{ background: BOT_COLORS[c] }} />
                 {c}
               </button>
             ))}
@@ -261,17 +261,17 @@ function MotionCard({
   replayAll,
   color,
 }: {
-  motion: Exclude<MausMotion, "none">;
+  motion: Exclude<BotMotion, "none">;
   index: number;
   replayAll: number;
-  color: MausColor;
+  color: BotColor;
 }) {
   const [replayOne, setReplayOne] = useState(0);
 
   return (
     <article className="motion-card">
       <div className="motion-stage">
-        <MausAvatar
+        <BotAvatar
           color={color ?? MOTION_COLORS[index]}
           state="idle"
           size={172}
@@ -297,9 +297,9 @@ function MotionCard({
 function Preview() {
   const [replayAll, setReplayAll] = useState(0);
   const [tuning, setTuning] = useState<Tuning>(DEFAULTS);
-  const [state, setState] = useState<MausState>("idle");
+  const [state, setState] = useState<BotState>("idle");
   const [expression, setExpression] = useState<number | undefined>(undefined);
-  const [color, setColor] = useState<MausColor>("green");
+  const [color, setColor] = useState<BotColor>("green");
   const [forward, setForward] = useState(true);
 
   useEffect(() => {
@@ -312,7 +312,7 @@ function Preview() {
       <header className="preview-header">
         <div>
           <p className="eyebrow">Morphing face engine · 25 expressions · 39 states</p>
-          <h1>Maus motion library</h1>
+          <h1>Mascot motion library</h1>
           <p className="intro">
             The app&rsquo;s lit body with the face engine behind it. Expressions morph on a
             spring, blink on each state&rsquo;s own rhythm, and the eyes wrap around an implied
@@ -339,7 +339,7 @@ function Preview() {
       />
 
       <section className="motion-grid" aria-label="Mascot motion library">
-        {MAUS_MOTIONS.map((motion, index) => (
+        {BOT_MOTIONS.map((motion, index) => (
           <MotionCard
             key={motion}
             motion={motion}
@@ -356,7 +356,7 @@ function Preview() {
             <p className="eyebrow">Identity system · 100 combinations</p>
             <h2 id="expression-heading">Colors and states</h2>
           </div>
-          <p>Move your pointer over any Maus to test the responsive eyes.</p>
+          <p>Move your pointer over any Bot to test the responsive eyes.</p>
         </div>
 
         <div className="matrix-wrap">
@@ -369,16 +369,16 @@ function Preview() {
               </div>
             ))}
 
-            {MAUS_COLOR_NAMES.map((c) => (
+            {BOT_COLOR_NAMES.map((c) => (
               <div className="matrix-row" key={c}>
                 <div className="row-label">
-                  <span className="swatch" style={{ background: MAUS_COLORS[c] }} />
+                  <span className="swatch" style={{ background: BOT_COLORS[c] }} />
                   <strong>{c}</strong>
-                  <code>{MAUS_COLORS[c]}</code>
+                  <code>{BOT_COLORS[c]}</code>
                 </div>
                 {PICKABLE_STATES.map((s) => (
                   <div className="mascot-cell" key={`${c}-${s}`}>
-                    <MausAvatar color={c} state={s} size={86} label={`${c} ${s} maus`} />
+                    <BotAvatar color={c} state={s} size={86} label={`${c} ${s} bot`} />
                   </div>
                 ))}
               </div>

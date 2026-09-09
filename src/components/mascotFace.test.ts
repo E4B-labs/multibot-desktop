@@ -43,7 +43,7 @@ describe("statyczna maskotka ma twarz", () => {
   it("nikt poza podgladem ksztaltu w ustawieniach nie gasi twarzy", () => {
     const files = readdirSync(dir).filter((name) => name.endsWith(".tsx"));
     const off = files.filter((name) =>
-      /<MausAvatar(?![A-Za-z])[^>]*showFace=\{false\}/.test(readFileSync(`${dir}${name}`, "utf8")),
+      /<BotAvatar(?![A-Za-z])[^>]*showFace=\{false\}/.test(readFileSync(`${dir}${name}`, "utf8")),
     );
     expect(off).toEqual(["SettingsPanel.tsx"]);
   });

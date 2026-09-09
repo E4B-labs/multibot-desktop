@@ -1,4 +1,4 @@
-// multibot: scout folderu → manifest zespołu (port z OpenMausBot #339)
+// multibot: scout folderu → manifest zespołu (port z MultiBot #339)
 // Modal wpisuje ścieżkę, pokazuje propozycję zespołu, import tworzy boty.
 import { useState } from "react";
 import { Check, Folder, Loader2 } from "lucide-react";

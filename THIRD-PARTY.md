@@ -3,6 +3,12 @@
 MultiBot itself is licensed under the terms in [LICENSE](LICENSE). The Windows
 desktop installer additionally ships the binaries listed below, unmodified.
 
+## Upstream
+
+Based on OpenMausBot (MIT). The MIT license requires the original copyright
+notice to travel with the code, so it stays verbatim in [LICENSE](LICENSE);
+this is the only place the upstream name is kept.
+
 ## Tor
 
 `tor.exe` comes from the **Tor Expert Bundle 15.0.21** (tor 0.4.9.11),

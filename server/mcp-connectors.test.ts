@@ -1,5 +1,5 @@
 // multibot (F7): rejestr własnych serwerów MCP + wspólny montaż mcpServers.
-// Store to `~/.openmausbot/config.json` — testowy HOME jest jednorazowy
+// Store to `~/.multibot/config.json` — testowy HOME jest jednorazowy
 // (server/testing/setup.ts), więc round-trip idzie po PRAWDZIWYM pliku.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

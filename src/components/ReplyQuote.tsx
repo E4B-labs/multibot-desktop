@@ -1,4 +1,4 @@
-// multibot: flat replies (port z OpenMausBot #437, ReplyQuote.tsx)
+// multibot: flat replies (port z MultiBot #437, ReplyQuote.tsx)
 import { X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { getLanguage } from "@/lib/language";

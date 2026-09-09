@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import { newId, type AttachmentMeta, type ModelSelection, type ThreadId } from "./contracts.ts";
 
-export type MausColor =
+export type BotColor =
   | "green"
   | "blue"
   | "red"
@@ -26,7 +26,7 @@ export type MausColor =
  * string rather than a union: bots saved under the app's earlier ten-face
  * vocabulary still carry those names, and the client resolves both on read.
  */
-export type MausExpression = string;
+export type BotExpression = string;
 export type MascotShape = string;
 
 /** Konektory, o które bot może poprosić kartą — zamknięty zbiór, bo każdy
@@ -107,8 +107,8 @@ export interface BotRecord {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
-  mascotExpression?: MausExpression | null;
+  color: BotColor;
+  mascotExpression?: BotExpression | null;
   /** Optional silhouette from the built-in mascot icon set. */
   mascotShape?: MascotShape;
   /** Custom avatar photo (data URL or /api/bots/:id/avatar URL). Circular crop. */
@@ -200,7 +200,7 @@ export function sortMessages<T extends { id: string; at: number; order?: number 
 
 /** Rotacja kolorow dla nowych botow — czarnego celowo nie ma, dostaje go
  *  tylko bot, ktoremu ktos go ustawi. */
-const COLORS: MausColor[] = [
+const COLORS: BotColor[] = [
   "green",
   "blue",
   "red",
@@ -215,7 +215,7 @@ const COLORS: MausColor[] = [
 
 /** Kazdy kolor, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota) i dla PATCH /api/bots/:id (UI). */
-export const BOT_COLORS: MausColor[] = [...COLORS, "black"];
+export const BOT_COLORS: BotColor[] = [...COLORS, "black"];
 
 /** Kazdy ksztalt maskotki, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota), PATCH /api/bots/:id (UI) i schematu
@@ -249,8 +249,8 @@ export function managedBotPatch(input: unknown, options: { temporary?: boolean }
     patch[key] = value[key];
   }
   if (value.color !== undefined) {
-    if (!BOT_COLORS.includes(value.color as MausColor)) throw new Error(`color must be one of: ${BOT_COLORS.join(", ")}`);
-    patch.color = value.color as MausColor;
+    if (!BOT_COLORS.includes(value.color as BotColor)) throw new Error(`color must be one of: ${BOT_COLORS.join(", ")}`);
+    patch.color = value.color as BotColor;
   }
   if (value.mascotShape !== undefined) {
     if (typeof value.mascotShape !== "string" || !BOT_SHAPES.includes(value.mascotShape)) {
@@ -295,7 +295,7 @@ export function managedBotPatch(input: unknown, options: { temporary?: boolean }
 
 // multibot (F9): głębokość łańcucha ask_bot. Wołający DEKLARUJE ją w ciele
 // żądania (proxy dostaje ją w env przy spawnie), ale deklaracja bywa nieaktualna:
-// bot silnika ma agents zamontowane na stałe w profilu, więc jego `OMB_TURN_DEPTH`
+// bot silnika ma agents zamontowane na stałe w profilu, więc jego `MULTIBOT_TURN_DEPTH`
 // zamarza na 0 i każdy hop resetowałby licznik — A→B→A→… bez dna. Harness zna
 // prawdziwą głębokość tury, która u wołającego TERAZ trwa, i to ona wygrywa.
 /** Głębokość łańcucha dla żądania ask_bot: większa z deklarowanej i faktycznej.

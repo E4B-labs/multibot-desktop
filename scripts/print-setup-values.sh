@@ -17,9 +17,9 @@
 # server was slow to write one file.
 set -uo pipefail
 
-DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}"
+DATA_DIR="${MULTIBOT_DATA_DIR:-$HOME/.multibot}"
 FILE="$DATA_DIR/setup.json"
-PORT="${OMB_PORT:-8799}"
+PORT="${MULTIBOT_PORT:-8799}"
 DEADLINE=$(( SECONDS + ${1:-90} ))
 
 # node is installed by every path that calls this (Termux pkg, the Linux
@@ -50,7 +50,7 @@ console.log(`  They stay in ${file} until the first profile is created.\n`);
 # works on this Wi-Fi. On a box without tor nothing is coming and we print at
 # once; the deadline caps the wait either way.
 WANT_ONION=0
-if command -v tor >/dev/null 2>&1 && [[ ! "${OMB_TOR:-1}" =~ ^(0|off|false|no)$ ]]; then WANT_ONION=1; fi
+if command -v tor >/dev/null 2>&1 && [[ ! "${MULTIBOT_TOR:-1}" =~ ^(0|off|false|no)$ ]]; then WANT_ONION=1; fi
 has_onion() { grep -qE '"address": *"https?://[a-z2-7]{56}\.onion:' "$FILE" 2>/dev/null; }
 
 ANNOUNCED=0

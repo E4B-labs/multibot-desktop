@@ -68,7 +68,7 @@ describe("szerokość dymków czatu", () => {
 });
 
 // multibot: awatar w pasku nad rozmową ma stać nieruchomo, gdy bot nie
-// pracuje. Wcześniej MausAvatar size 40 dostawał gołe `animated` plus
+// pracuje. Wcześniej BotAvatar size 40 dostawał gołe `animated` plus
 // jednorazowy beat z `state.mascotMotion`, więc bezczynny bot mrugał
 // i oddychał, choć ten sam bot w pasku bocznym już stał.
 describe("awatar w nagłówku czatu", () => {
