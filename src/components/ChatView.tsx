@@ -300,7 +300,7 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
       <span className="flex shrink-0 -space-x-1">
         {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
           <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-            <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={20} animated={false} />
+            <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={20} animated={false} />
           </span>
         ))}
       </span>
@@ -380,7 +380,7 @@ function RoomChip({ message }: { message: Message }) {
         {opening && <Spinner size={13} />}
         <span className="flex items-center gap-1 font-medium text-ink">
           {owner && (
-            <MausAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape={owner.mascotShape} state={stateForBot(owner)} size={18} animated={false} />
+            <MausAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" state={stateForBot(owner)} size={18} animated={false} />
           )}
           {owner ? botDisplayName(owner, polish ? "pl" : "en") : room.ownerBotId}
         </span>
@@ -389,7 +389,7 @@ function RoomChip({ message }: { message: Message }) {
         </span>
         {peers.map((peer) => (
           <span key={peer.id} className="flex items-center gap-1 font-medium text-ink">
-            <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={stateForBot(peer)} size={18} animated={false} />
+            <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" state={stateForBot(peer)} size={18} animated={false} />
             {botDisplayName(peer, polish ? "pl" : "en")}
           </span>
         ))}

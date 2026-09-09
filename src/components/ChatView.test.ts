@@ -214,9 +214,11 @@ describe("małe awatary rozmów botów", () => {
   it("oddziela stos avatarów w karcie aktywności", () => {
     const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
     expect(card).toContain("bg-app ring-2 ring-app");
+    expect(card).toContain('shape="blob"');
   });
 
   it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
     expect(roomPanel).toContain("bg-app ring-2 ring-app");
+    expect(roomPanel).toContain('shape="blob"');
   });
 });

@@ -88,7 +88,7 @@ export function RoomPanel() {
               <span className="flex shrink-0 items-center -space-x-2">
                 {members.slice(0, 5).map((bot) => (
                   <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                    <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={24} animated={false} />
+                    <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" state={stateForBot(bot)} size={24} animated={false} />
                   </span>
                 ))}
               </span>
@@ -167,7 +167,7 @@ export function RoomPanel() {
                       >
                         {entryBot && (
                           <span className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-                            <MausAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape={entryBot.mascotShape} state={stateForBot(entryBot)} size={28} animated={false} />
+                            <MausAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" state={stateForBot(entryBot)} size={28} animated={false} />
                           </span>
                         )}
                         <span className="text-[12.5px] font-semibold text-accent">{nameOf(entry.from)}</span>
