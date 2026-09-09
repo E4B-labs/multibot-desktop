@@ -1,7 +1,7 @@
 {
   "platform": "android",
   "version": "0.5.2",
-  "versionCode": 29,
-  "apkUrl": "https://expo.dev/artifacts/eas/D-q92HwT5wPZkXa_4yRMhtK9l75fkSh0N7pXMo16aEA.apk",
-  "notes": "Opening the app no longer waits out Tor's first circuit before anything appears: the native client returns once its SOCKS port is open, so the WebView and the bundled UI come up alongside the bootstrap instead of after it. Tor also keeps its state file again (AvoidDiskWrites is gone), so a cold start reuses its entry guards. Runtime 1.6.0."
+  "versionCode": 30,
+  "apkUrl": "https://expo.dev/artifacts/eas/2hu56tt-kf9ImPqlIvAyC3g8cHDncWWNL-SeLViVsTQ.apk",
+  "notes": "Fixes the crash that met every launch of build 29. The bundled UI had grown to 11.7 MB, and handing a string that size to the Android WebView makes Chromium base64-encode it into an allocation the app cannot fit in its heap. The UI is 3.0 MB now — code highlighting ships the languages a chat actually shows instead of all 220 — and this build also asks Android for a large heap, so the same mistake cannot kill it outright. Runtime 1.6.0."
 }
