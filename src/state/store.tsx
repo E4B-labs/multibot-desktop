@@ -188,6 +188,10 @@ export interface Room {
   transcript: Array<{ id: string; from: string; text: string; at: number }>;
   status: "running" | "done" | "failed";
   activeBotId?: string | null;
+  /** Bot handed the next turn that has not started it yet. The server keeps it
+   * so a crash mid-conversation can be resumed; the UI reads it because it is
+   * the only signal that spans the gap between two bots' turns. */
+  pendingTo?: string | null;
   /** Group chat this room mirrors, when it is a group conversation. */
   groupId?: string;
 }

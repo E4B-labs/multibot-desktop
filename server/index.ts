@@ -576,6 +576,16 @@ function closeRoom(roomId: string, status: "done" | "failed"): void {
   if (settled) broadcast({ kind: "room", room: settled });
 }
 
+/** Hand a room's turn debt over — and TELL the clients. `pendingTo` is the only
+ * signal that covers the gap between one bot finishing and the next one
+ * starting: in that gap NEITHER side is `busy`, so without a frame every client
+ * reads a live bot-to-bot exchange as "nobody is doing anything" and the mascot
+ * above the composer blinks out in the middle of the conversation. */
+function setRoomPending(roomId: string, to: string | null): void {
+  const room = rooms.setPending(roomId, to);
+  if (room) broadcast({ kind: "room", room });
+}
+
 /** The wall clock only ever fired when somebody tried to send. A conversation
  * that simply went quiet stayed "running" forever: an open room in the UI, a
  * live budget, and no report to its owner. */
@@ -984,14 +994,14 @@ async function deliverPeerMessage(
   peerTurn.set(toBotId, [...(peerTurn.get(toBotId) ?? []), answer]);
   // Persisted BEFORE delivery: a crash between here and the recipient's turn
   // is exactly the case boot-time resume has to repair.
-  rooms.setPending(room.id, toBotId);
+  setRoomPending(room.id, toBotId);
   const status = await deliverToActiveTurnOrQueue(toBotId, envelope, "bot", { attachments: [], origin: "bot" });
   // Steering puts the text INSIDE the running turn, so that turn does answer
   // it — and its `startTurn` is long past, so clear the debt here or a restart
   // would deliver a message the bot has already read.
   if (status === "steered") {
     answer.deferred = false;
-    rooms.setPending(room.id, null);
+    setRoomPending(room.id, null);
   }
   return { status, roomId: room.id, note: "" };
 }
@@ -2454,7 +2464,7 @@ opts?: {
     // running now, so a restart from here on is a dead turn, not a lost one.
     // Only OUR debt is cleared — the same room may still owe somebody else.
     for (const entry of peerTurn.get(bot.id) ?? []) {
-      if (rooms.get(entry.roomId)?.pendingTo === bot.id) rooms.setPending(entry.roomId, null);
+      if (rooms.get(entry.roomId)?.pendingTo === bot.id) setRoomPending(entry.roomId, null);
     }
     const origin: TurnOrigin = opts?.origin ?? "user";
     // Whatever a user- or routine-started turn answers, the user is owed the

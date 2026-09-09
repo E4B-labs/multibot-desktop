@@ -63,11 +63,25 @@ beforeAll(async () => {
   });
   base = `https://127.0.0.1:${port}`;
   home = mkdtempSync(join(tmpdir(), "omb-watchdog-test-"));
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({
-      instances: { fake: { driver: "grokAgent", displayName: "Fake", config: { cli: FAKE_CLI, fullAuto: true } } },
+      instances: {
+        fake: {
+          driver: "grokAgent",
+          displayName: "Fake",
+          // Na instancji, nie w env serwera: sterownik startuje CLI z wlasnym
+          // srodowiskiem, wiec tryb podany procesowi serwera nigdy do niego nie
+          // docieral i atrapa milczala przez cala ture.
+          environment: {
+            FAKE_ACP_MODE: "slow",
+            FAKE_ACP_SLOW_BEATS: String(BEATS),
+            FAKE_ACP_SLOW_EVERY_MS: String(EVERY_MS),
+          },
+          config: { cli: FAKE_CLI, fullAuto: true },
+        },
+      },
     }),
   );
 
@@ -78,15 +92,12 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(port),
-      OMB_ONBOARDING_TURN: "0",
+      MULTIBOT_PORT: String(port),
+      MULTIBOT_ONBOARDING_TURN: "0",
       MULTIBOT_COMPUTER: "off",
-      OMB_HOST: "127.0.0.1",
-      OMB_TURN_DEBOUNCE_MS: "0",
-      OMB_BUSY_WATCHDOG_MS: String(WATCHDOG_MS),
-      FAKE_ACP_MODE: "slow",
-      FAKE_ACP_SLOW_BEATS: String(BEATS),
-      FAKE_ACP_SLOW_EVERY_MS: String(EVERY_MS),
+      MULTIBOT_HOST: "127.0.0.1",
+      MULTIBOT_TURN_DEBOUNCE_MS: "0",
+      MULTIBOT_BUSY_WATCHDOG_MS: String(WATCHDOG_MS),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -130,6 +141,10 @@ describe("busy watchdog", () => {
       const created = await api("POST", "/api/bots");
       expect(created.status).toBe(201);
       const id = created.body.bot.id;
+      // Bez tego bot rusza na domyslnym dostawcy, ktorego na maszynie testowej
+      // nie ma: `busy` zapala sie, atrapa nie odzywa sie ani razu i watchdog
+      // gasi ture, ktora nigdy nie ruszyla.
+      expect((await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "fake", model: "fake-model" } })).status).toBe(200);
 
       const sent = await api("POST", `/api/bots/${id}/messages`, { text: "grind on this" });
       expect(sent.status).toBe(202);
