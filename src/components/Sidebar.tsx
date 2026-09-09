@@ -874,11 +874,9 @@ function GroupRow({
       )}
     >
       {members.length > 0 ? (
-        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "gap-1")}>
+        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "-space-x-1")}>
           {shown.map((member) => (
-            <span key={member.id} className={cn("flex rounded-full", !solo && "ring-2 ring-panel")}>
-              <MausAvatar color={member.color} size={solo ? 48 : 32} {...groupMemberAvatarProps(member)} />
-            </span>
+            <MausAvatar key={member.id} color={member.color} size={solo ? 48 : 20} {...groupMemberAvatarProps(member)} />
           ))}
           {attention && (
             <span

@@ -61,11 +61,14 @@ describe("wiersz grupy w Sidebarze", () => {
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
     expect(row).toContain('"relative flex shrink-0 items-center"');
+    expect(row).toContain('solo ? "size-12 justify-center" : "-space-x-1"');
     expect(row).toContain("shown.map((member)");
-    expect(row).toContain("size={solo ? 48 : 32}");
+    expect(row).toContain("size={solo ? 48 : 20}");
     expect(row).not.toContain("absolute left-0 top-0");
     expect(row).not.toContain("absolute bottom-0 right-0");
-    expect(row).toContain("ring-2 ring-panel");
+    const avatars = row.slice(row.indexOf("{shown.map"), row.indexOf("{attention"));
+    expect(avatars).not.toContain("ring-");
+    expect(avatars).not.toContain("rounded-full");
     expect(row).not.toContain("+{plus}");
     // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
     expect(row).toContain("{...groupMemberAvatarProps(member)}");
