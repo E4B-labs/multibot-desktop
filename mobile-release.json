@@ -1,7 +1,7 @@
 {
   "platform": "android",
   "version": "0.5.2",
-  "versionCode": 26,
-  "apkUrl": "https://expo.dev/artifacts/eas/V-OqWRY67j2WmPMmxzjg2kr0EYAFu61xh1fX9yvWINc.apk",
-  "notes": "Fixes the \"Can't reach this server\" screen that met every host on a cold start: the WebView engine is now started before the phone points it at (or off) Tor. Runtime 1.6.0."
+  "versionCode": 29,
+  "apkUrl": "https://expo.dev/artifacts/eas/D-q92HwT5wPZkXa_4yRMhtK9l75fkSh0N7pXMo16aEA.apk",
+  "notes": "Opening the app no longer waits out Tor's first circuit before anything appears: the native client returns once its SOCKS port is open, so the WebView and the bundled UI come up alongside the bootstrap instead of after it. Tor also keeps its state file again (AvoidDiskWrites is gone), so a cold start reuses its entry guards. Runtime 1.6.0."
 }
