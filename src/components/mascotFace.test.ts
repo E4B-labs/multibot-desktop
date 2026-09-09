@@ -29,6 +29,12 @@ describe("statyczna maskotka ma twarz", () => {
     expect(avatar).toMatch(/showFace\s*=\s*true/);
   });
 
+  it("awatar domyslnie patrzy prosto na uzytkownika", () => {
+    expect(avatar).toMatch(/forward\s*=\s*true/);
+    expect(avatar).toMatch(/const FORWARD_GAZE\s*=\s*\{\s*x:\s*0,\s*y:\s*0\s*\}/);
+    expect(avatar).toMatch(/const restingGaze = forward \? FORWARD_GAZE : DEFAULT_GAZE/);
+  });
+
   it("oczy i usta wisza pod przelacznikiem showFace", () => {
     expect(blob).toMatch(/\{showFace\s*&&\s*\(/);
     expect(blob).toMatch(/\{showMouth\s*&&\s*\(/);

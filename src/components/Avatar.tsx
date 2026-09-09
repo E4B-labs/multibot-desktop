@@ -43,6 +43,7 @@ export const MOUTH_WEIGHT = 11;
  * safe; with the expressions' authored gaze they already start off-centre.
  */
 const POINTER_GAZE = { forward: 1, authored: 0.25 };
+const FORWARD_GAZE = { x: 0, y: 0 };
 
 /**
  * What a one-shot motion does while it plays: BlobAvatar animates the body
@@ -155,7 +156,7 @@ function MausAvatarComponent(
     showFace = true,
     showMouth,
     mouthStroke,
-    forward = false,
+    forward = true,
     trackPointer = true,
     animated = true,
   }: MausAvatarProps,
@@ -189,6 +190,7 @@ function MausAvatarComponent(
   }, [motion, motionKey, animated]);
 
   const shown = motionState ?? state;
+  const restingGaze = forward ? FORWARD_GAZE : DEFAULT_GAZE;
 
   // Pointer-follow gaze, composed with any gaze the caller pins.
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
@@ -239,8 +241,8 @@ function MausAvatarComponent(
         title={label ?? null}
         lookAround={forward ? 0 : STUDIO.lookAround}
         gaze={{
-          x: (gaze?.x ?? DEFAULT_GAZE.x) + pointer.x,
-          y: (gaze?.y ?? DEFAULT_GAZE.y) + pointer.y,
+          x: (gaze?.x ?? restingGaze.x) + pointer.x,
+          y: (gaze?.y ?? restingGaze.y) + pointer.y,
         }}
         turn={turn}
         spring={spring}
