@@ -27,7 +27,9 @@ describe("wspólny znak wczytywania", () => {
     expect(source.indexOf("searching")).toBeLessThan(source.indexOf("No results"));
   });
 
-  it("czat pokazuje kropki, zanim przyjdzie pierwszy token", () => {
-    expect(read("ChatView.tsx")).toContain("bot.busy ? <TypingBubble />");
+  // multibot: pracujacego bota pokazuje TYLKO pasek maskotki nad composerem.
+  // Bombelek z kropkami w transkrypcie byl drugim, zbednym sygnalem.
+  it("czat nie dubluje sygnalu pracy bombelkiem z kropkami", () => {
+    expect(read("ChatView.tsx")).not.toContain("TypingBubble");
   });
 });

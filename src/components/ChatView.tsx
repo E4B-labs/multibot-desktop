@@ -423,29 +423,6 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
   );
 }
 
-/** Bot is thinking but nothing has streamed yet — three dots in a bubble the
- * size of the real one, so the transcript does not jump when text arrives. */
-function TypingBubble() {
-  const polish = useLanguage() === "pl";
-  return (
-    <div className="flex w-full justify-start">
-      <div
-        role="status"
-        aria-label={polish ? "Bot pisze…" : "Bot is typing…"}
-        className="flex items-center gap-1 rounded-2xl bg-card px-3 py-[9px]"
-      >
-        {[0, 150, 300].map((delay) => (
-          <span
-            key={delay}
-            className="size-[5px] animate-pulse rounded-full bg-ink-secondary"
-            style={{ animationDelay: `${delay}ms` }}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function StreamingBubble({ text }: { text: string }) {
   return (
     <div className="flex w-full justify-start">
@@ -815,7 +792,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               </div>
             </div>
           )}
-          {streaming ? <StreamingBubble text={streaming} /> : bot.busy ? <TypingBubble /> : null}
+          {streaming ? <StreamingBubble text={streaming} /> : null}
         </div>
         </div>
         {/* desktop drag&drop overlay — any file dropped onto chat becomes an attachment */}
