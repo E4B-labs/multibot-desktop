@@ -982,7 +982,7 @@ export function Composer({
         <div data-composer-row className="relative flex min-h-12 items-center gap-1.5 rounded-2xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2.5">
         {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać. */}
         {strip && (
-          <div className="pointer-events-auto absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center md:flex" title={botDisplayName(bot, polish ? "pl" : "en")}>
+          <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center md:flex" title={botDisplayName(bot, polish ? "pl" : "en")}>
             <MausAvatar
               color={bot.color}
               avatarUrl={bot.avatarUrl}

@@ -196,7 +196,7 @@ function MausAvatarComponent(
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (!trackPointer) return;
+    if (!trackPointer || !animated) return;
     const rect = event.currentTarget.getBoundingClientRect();
     setPointer({
       x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
@@ -204,18 +204,6 @@ function MausAvatarComponent(
     });
   };
   const onPointerLeave = () => setPointer({ x: 0, y: 0 });
-  const onPointerDown = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (!trackPointer) return;
-    onPointerMove(event);
-    if (event.pointerType !== "mouse") event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-  const onPointerUp = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (event.pointerType !== "mouse" && event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-    }
-    onPointerLeave();
-  };
-  const onLostPointerCapture = () => onPointerLeave();
 
   // custom photo — circular, FB/GrokBot style, overrides mascot shape. The
   // thinking dots are the one exception: they are the engine's own body coming
@@ -240,12 +228,8 @@ function MausAvatarComponent(
     <span
       className="relative inline-flex shrink-0"
       style={{ width: size, height: size }}
-      onPointerDown={trackPointer ? onPointerDown : undefined}
-      onPointerMove={trackPointer ? onPointerMove : undefined}
-      onPointerUp={trackPointer ? onPointerUp : undefined}
-      onPointerCancel={trackPointer ? onPointerUp : undefined}
-      onLostPointerCapture={trackPointer ? onLostPointerCapture : undefined}
-      onPointerLeave={trackPointer ? onPointerLeave : undefined}
+      onPointerMove={trackPointer && animated ? onPointerMove : undefined}
+      onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
     >
       <BlobAvatar
         ref={inner}

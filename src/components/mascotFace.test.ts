@@ -35,16 +35,6 @@ describe("statyczna maskotka ma twarz", () => {
     expect(avatar).toMatch(/const restingGaze = forward \? FORWARD_GAZE : DEFAULT_GAZE/);
   });
 
-  it("sledzi kursor rowniez jako nieruchomy awatar", () => {
-    expect(avatar).toMatch(/if \(!trackPointer\) return/);
-    expect(avatar).toMatch(/onPointerDown=\{trackPointer \? onPointerDown : undefined\}/);
-    expect(avatar).toMatch(/onPointerMove=\{trackPointer \? onPointerMove : undefined\}/);
-    expect(avatar).toMatch(/onPointerUp=\{trackPointer \? onPointerUp : undefined\}/);
-    expect(avatar).toMatch(/onPointerCancel=\{trackPointer \? onPointerUp : undefined\}/);
-    expect(avatar).toMatch(/onLostPointerCapture=\{trackPointer \? onLostPointerCapture : undefined\}/);
-    expect(avatar).toMatch(/onPointerLeave=\{trackPointer \? onPointerLeave : undefined\}/);
-  });
-
   it("oczy i usta wisza pod przelacznikiem showFace", () => {
     expect(blob).toMatch(/\{showFace\s*&&\s*\(/);
     expect(blob).toMatch(/\{showMouth\s*&&\s*\(/);
