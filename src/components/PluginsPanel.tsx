@@ -41,7 +41,11 @@ const TILE =
 
 function ServiceIcon({ card }: { card: ToolkitCard }) {
   const [logoFailed, setLogoFailed] = useState(false);
-  const mark = APP_ICONS[card.slug];
+  // `hasOwn`, a nie samo APP_ICONS[slug]: slug bywa z API Composio, nie tylko
+  // z naszej listy, a toolkit nazwany „constructor" albo „toString" trafiłby
+  // w prototyp. Zwrócona funkcja jest prawdziwa, więc przeszłaby `if (mark)`
+  // i poniższy innerHTML wstrzyknąłby jej źródło zamiast logo.
+  const mark = Object.hasOwn(APP_ICONS, card.slug) ? APP_ICONS[card.slug] : undefined;
   if (mark) {
     // Znak wjeżdża jako gotowy <svg> z własnymi kolorami marki, więc NIC tu
     // nie może go przemalować — żadnego `fill-*`, `text-*` ani `fill-current`

@@ -20,7 +20,9 @@ describe("APP_ICONS", () => {
       expect(slug, `${slug} must be a composio-shaped slug`).toMatch(/^[a-z0-9][a-z0-9_]*$/);
       expect(svg.startsWith("<svg "), `${slug} must be a full svg element`).toBe(true);
       expect(svg.endsWith("</svg>"), `${slug} must close its svg`).toBe(true);
-      expect(svg, `${slug} needs a viewBox to scale into the tile`).toMatch(/viewBox="[-\d. ]+"/);
+      expect(svg, `${slug} needs a viewBox to scale into the tile`).toMatch(
+        /viewBox="[-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+"/,
+      );
       expect(svg.length, `${slug} looks truncated`).toBeGreaterThan(60);
       // pojedynczy cudzysłów rozwaliłby literał w appIcons.ts
       expect(svg).not.toContain("'");
@@ -32,11 +34,27 @@ describe("APP_ICONS", () => {
       // `currentColor` dziedziczy kolor tekstu, czyli robi z loga
       // jednokolorową klaksę — dokładnie to, co ta zmiana usuwa.
       expect(svg, `${slug} must not inherit the text colour`).not.toMatch(/currentColor/i);
-      // kolor bywa atrybutem (fill="#fff") albo deklaracją w style=
-      // ("fill:url(#outlook0)") — Outlook wozi cały gradient w style
-      expect(svg, `${slug} must name a colour of its own`).toMatch(
-        /(?:fill|stop-color|stroke)\s*[:=]\s*"?(?:#|url\(|[a-z])/,
-      );
+      // Kolor bywa atrybutem (fill="#fff") albo deklaracją w style=
+      // ("stop-color:#20a7fa") — Outlook wozi cały gradient w style.
+      // Liczy się TYLKO konkretny kolor: `none`/`url(…)` przechodziłyby, a
+      // znak wypełniony samym `none` jest niewidoczny.
+      const painted = [...svg.matchAll(/(?:fill|stop-color|stroke)\s*[:=]\s*"?(#[0-9a-f]{3,8}|[a-z]+)/gi)]
+        .map((m) => m[1].toLowerCase())
+        .filter((c) => !["none", "transparent", "inherit", "url"].includes(c));
+      expect(painted.length, `${slug} names no real colour of its own`).toBeGreaterThan(0);
+    }
+  });
+
+  it("carries nothing but drawing, because it lands in innerHTML", () => {
+    // To jest JEDYNA bariera między wklejonym SVG od trzeciej strony
+    // a `dangerouslySetInnerHTML` w ServiceIcon. Dane są dziś czyste —
+    // asercja ma je takimi utrzymać, gdy ktoś dołoży kolejną markę.
+    for (const [slug, svg] of Object.entries(APP_ICONS)) {
+      expect(svg, `${slug} must not script`).not.toMatch(/<script|<foreignObject|javascript:/i);
+      // atrybut zdarzeniowy: " onload=", " onclick=" itd.
+      expect(svg, `${slug} must not carry an event handler`).not.toMatch(/\son[a-z]+\s*=/i);
+      // <style> i <image> wnoszą kolejno kaskadę i zewnętrzny zasób
+      expect(svg, `${slug} must not embed a stylesheet or a raster`).not.toMatch(/<style|<image/i);
     }
   });
 
@@ -82,8 +100,23 @@ describe("PluginsPanel", () => {
     expect(panel).toContain("absolute inset-0");
   });
 
+  it("looks the mark up with hasOwn, not a bare index", () => {
+    // katalog potrafi przyjść z API Composio, więc slug nie musi być z naszej
+    // listy; `APP_ICONS["constructor"]` zwraca funkcję z prototypu, ta przejdzie
+    // `if (mark)` i wyląduje w innerHTML jako "function Object() {…}"
+    expect(panel).toContain("Object.hasOwn(APP_ICONS, card.slug)");
+  });
+
   it("never recolours the brand mark", () => {
-    const tile = panel.slice(panel.indexOf("const TILE"), panel.indexOf("function ServiceIcon"));
+    // Wycinek to stała TILE PLUS cała gałąź `if (mark)` — klasa dopisana
+    // inline na <span> ominęłaby test o dokładnie tej nazwie. Kończy się na
+    // `return (` monogramu, bo tamta gałąź używa `text-ink-secondary` na
+    // literę i ma pełne prawo do koloru tekstu.
+    const tile = panel
+      .slice(panel.indexOf("const TILE"), panel.indexOf("  return (", panel.indexOf("function ServiceIcon")))
+      // bez komentarzy, bo tuż obok stoi wyjaśnienie wymieniające te klasy
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(tile, "slice must cover the branded branch").toContain("dangerouslySetInnerHTML");
     // te klasy przemalowałyby pełnokolorowe logo na jeden kolor
     expect(tile).not.toMatch(/fill-current|fill-ink|\btext-ink\b/);
     // kafelek musi zostać jasny w KAŻDYM motywie, inaczej czarne marki
