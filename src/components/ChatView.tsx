@@ -301,7 +301,9 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
     <span className="flex min-w-0 items-center gap-2">
       <span className="flex shrink-0 -space-x-1">
         {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
-          <MausAvatar key={bot.id} color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={20} animated={false} />
+          <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
+            <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={20} animated={false} />
+          </span>
         ))}
       </span>
       <span className="truncate">{label}</span>

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 // w StreamingBubble, ale nikt jej nie pilnował: przy poszerzaniu dymków
 // 29.08 (35% → 90%) drugie miejsce zostało w tyle. Stąd ten test.
 const chat = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8");
+const roomPanel = readFileSync(new URL("./RoomPanel.tsx", import.meta.url), "utf8");
 
 // Vitest działa tu bez DOM, więc integrację ChatView → Composer sprawdzamy na
 // źródle; sama reguła aktualizacji mapy ma test wykonawczy w Composer.test.ts.
@@ -189,5 +190,16 @@ describe("karta bot↔bot otwiera pokój", () => {
   it("obie karty wchodzą do pokoju tym samym helperem", () => {
     expect(chat).toContain('dispatch({ type: "toggleRoom", room: full })');
     expect((chat.match(/openRoom\(room\.id, dispatch\)/g) ?? []).length).toBe(2);
+  });
+});
+
+describe("małe awatary rozmów botów", () => {
+  it("oddziela stos avatarów w karcie aktywności", () => {
+    const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
+    expect(card).toContain("bg-app ring-2 ring-app");
+  });
+
+  it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
+    expect(roomPanel).toContain("bg-app ring-2 ring-app");
   });
 });
