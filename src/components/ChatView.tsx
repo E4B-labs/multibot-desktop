@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
 import { Spinner } from "./Loading";
@@ -17,7 +17,7 @@ import { formatPeerEnvelope, parsePeerEnvelope } from "@/lib/peerEnvelope";
 import { PeerBadge } from "./PeerBadge";
 import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSessions";
 import { BotAvatar } from "./Avatar";
-import { sidebarAvatarProps } from "@/lib/mascot";
+import { BOT_COLORS, sidebarAvatarProps } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CopyMessageButton } from "./CopyMessageButton";
 import { OptionCard } from "./OptionCard";
@@ -275,7 +275,9 @@ function openRoom(roomId: string, dispatch: ReturnType<typeof useStore>["dispatc
 
 /** A bot-to-bot card is a door, not a drawer: tapping it swaps the chat for the
  * room's read-only transcript (see RoomPanel). Between 07.09 and this fix the
- * card only expanded downwards into a member list and the room was unreachable. */
+ * card only expanded downwards into a member list and the room was unreachable.
+ * The peer's chip inside the sentence is a second door: it opens that bot's own
+ * chat instead of the room. */
 function PeerActivity({ messages, currentBotId }: { messages: Message[]; currentBotId: string }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
@@ -285,26 +287,52 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
   if (!room?.event) return null;
   const sent = room.event === "texted" && room.ownerBotId === currentBotId;
   const actor = state.bots.find((bot) => bot.id === room.ownerBotId);
-  const peerIds = [...new Set(messages.flatMap((message) => message.room?.bot_ids ?? []).filter((id) => id !== room.ownerBotId))];
+  const peerIds = [...new Set(messages.flatMap((message) => message.room?.bot_ids ?? []).filter((id) => id !== room.ownerBotId && id !== currentBotId))];
   const peers = peerIds.map((id) => state.bots.find((bot) => bot.id === id)).filter((bot): bot is Bot => Boolean(bot));
-  const names = peers.map((bot) => botDisplayName(bot, polish ? "pl" : "en"));
-  const actorName = actor ? botDisplayName(actor, polish ? "pl" : "en") : room.ownerBotId;
-  const label = sent
-    ? peers.length === 1
-      ? (polish ? `Napisano do ${names[0] ?? room.bot_ids[1] ?? "agenta"}` : `Messaged ${names[0] ?? room.bot_ids[1] ?? "agent"}`)
-      : (polish ? `Napisano do ${peers.length} agentów` : `Messaged ${peers.length} agents`)
-    : (polish ? `Wiadomość od ${actorName}` : `Message from ${actorName}`);
-  const avatars = sent ? [actor, ...peers] : [actor];
-  const content = (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="flex shrink-0 -space-x-1">
-        {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
-          <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
-            <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...sidebarAvatarProps(bot)} />
-          </span>
-        ))}
+  const chip = (bot: Bot | undefined, fallback: string) => {
+    if (!bot) return <span className="truncate">{fallback}</span>;
+    const name = botDisplayName(bot, polish ? "pl" : "en");
+    // multibot: nigdy nie pokazujemy awatara bota, którego czat jest właśnie
+    // otwarty; bot ukryty nie ma wiersza w pasku, więc też nie jest linkiem.
+    if (bot.id === currentBotId || bot.hidden) return <span className="truncate">{name}</span>;
+    const activate = (event: MouseEvent | ReactKeyboardEvent) => {
+      if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatch({ type: "select", id: bot.id });
+    };
+    return (
+      <span
+        role="link"
+        tabIndex={0}
+        title={polish ? "Otwórz czat z tym botem" : "Open this bot's chat"}
+        onClick={activate}
+        onKeyDown={activate}
+        // multibot: `bot.color` to NAZWA z allowlisty, nie kolor CSS — bez
+        // BOT_COLORS obwódka brałaby słowo kluczowe CSS (`green` = #008000).
+        style={{ "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green } as CSSProperties}
+        className="inline-flex items-center gap-1 rounded-full min-w-0 px-1.5 py-0.5 hover:[box-shadow:0_0_0_1px_var(--bot)] hover:bg-[color-mix(in_srgb,var(--bot)_14%,transparent)] hover:text-ink focus-visible:[box-shadow:0_0_0_1px_var(--bot)] focus-visible:bg-[color-mix(in_srgb,var(--bot)_14%,transparent)] focus-visible:text-ink transition-[box-shadow,background-color] duration-150"
+      >
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...sidebarAvatarProps(bot)} />
+        <span className="truncate">{name}</span>
       </span>
-      <span className="truncate">{label}</span>
+    );
+  };
+  const visiblePeers = peers.slice(0, 3);
+  const extraPeers = peers.length - visiblePeers.length;
+  // multibot: opis to jeden rząd flexa, nie zdanie z chipami wklejonymi w tekst.
+  // Chip jest `inline-flex`, więc w toku tekstu bierze linię bazową z awatara i
+  // tekst obok siada 2,2 px niżej (zmierzone) — `items-center` to kasuje.
+  // `p-1 -m-1` daje `overflow-hidden` zapas na 1 px obwódki hovera.
+  const content = (
+    <span className="flex min-w-0 items-center gap-1 overflow-hidden p-1 -m-1">
+      <span className="shrink-0">{sent ? (polish ? "Napisano do" : "Messaged") : (polish ? "Wiadomość od" : "Message from")}</span>
+      {sent
+        ? visiblePeers.length
+          ? visiblePeers.map((bot) => <Fragment key={bot.id}>{chip(bot, bot.id)}</Fragment>)
+          : <span className="truncate">{room.bot_ids[1] ?? (polish ? "agenta" : "agent")}</span>
+        : chip(actor, room.ownerBotId)}
+      {sent && extraPeers > 0 && <span className="shrink-0">{`+${extraPeers}`}</span>}
     </span>
   );
   return (
