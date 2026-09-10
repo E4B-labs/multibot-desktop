@@ -274,6 +274,22 @@ describe("małe awatary rozmów botów", () => {
     expect(card).not.toContain("state={stateForBot(bot)}");
   });
 
+  it("chip ma wypełnienie i tekst w kolorze bota już w spoczynku", () => {
+    const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
+    // spoczynek: obwódka + wypełnienie + tekst, nie tylko wariant `hover:`
+    expect(card).toContain("[box-shadow:0_0_0_1px_var(--bot-ink)]");
+    expect(card).toContain("text-[var(--bot-ink)]");
+    expect(card).toContain("bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))]");
+    expect(card).toContain("hover:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))]");
+    expect(card).not.toContain("hover:[box-shadow:0_0_0_1px_var(--bot)]");
+    // tekst zostaje w kolorze bota także pod kursorem (przycisk karty ma
+    // własne `hover:text-ink` — patrzymy tylko w blok chipa)
+    const chipBlock = card.slice(card.indexOf("const chip ="), card.indexOf("const visiblePeers ="));
+    expect(chipBlock).not.toContain("text-ink");
+    // atrament miesza się ze skórką, inaczej yellow/white/black toplo w tle
+    expect(card).toContain('"--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))"');
+  });
+
   it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
     expect(roomPanel).toContain("bg-app ring-2 ring-app");
     expect(roomPanel).toContain('shape="blob"');
