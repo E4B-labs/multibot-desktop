@@ -3103,10 +3103,20 @@ async function deleteBotRecord(bot: BotRecord): Promise<void> {
   broadcast({ kind: "bot.deleted", botId: bot.id, visibility: bot.visibility, ownerId: bot.ownerId, allowedUserIds: bot.allowedUserIds });
 }
 
+// Ten sam limit stoi w src/lib/groupRow.ts — serwer nie może importować z src/
+// (tsconfig.server.build.json wypuszcza wyłącznie server/), więc są dwie stałe.
+const MAX_GROUP_MEMBERS = 12;
+
 // multibot: grupa mieszka w harnessie — rozmowa grupowa idzie przez
 // deliverPeerMessage/askBotAndWait, a skład i transkrypt trzyma groupStore.
 async function createGroupRecord(name: string, memberIds: string[], section?: string): Promise<{ status: number; body: unknown }> {
-  const group = groupStore.upsert({ name, bot_ids: memberIds, section });
+  // Bez dedupu ten sam bot policzyłby się do limitu wiele razy, a sidebar
+  // dostałby dwa wiersze awatara z tym samym kluczem Reacta.
+  const unique = [...new Set(memberIds)];
+  if (unique.length > MAX_GROUP_MEMBERS) {
+    return { status: 400, body: { error: `group has at most ${MAX_GROUP_MEMBERS} bots` } };
+  }
+  const group = groupStore.upsert({ name, bot_ids: unique, section });
   broadcast({ kind: "group", group });
   return { status: 201, body: group };
 }
@@ -3118,6 +3128,9 @@ async function addGroupMemberRecord(id: string, botId: string): Promise<{ status
   if (!group || !bot) return { status: 404, body: { error: "no such group or bot" } };
   const memberId = groupMemberId(bot.threadId);
   if (group.bot_ids.includes(memberId)) return { status: 200, body: group };
+  if (group.bot_ids.length >= MAX_GROUP_MEMBERS) {
+    return { status: 400, body: { error: `group has at most ${MAX_GROUP_MEMBERS} bots` } };
+  }
   const updated = groupStore.upsert({ id: group.id, name: group.name, bot_ids: [...group.bot_ids, memberId] });
   broadcast({ kind: "group", group: updated });
   return { status: 200, body: updated };
