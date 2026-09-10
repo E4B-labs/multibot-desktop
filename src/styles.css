@@ -78,10 +78,19 @@ body {
       plus 8 px przerwy = 114 px). Zasłoniłyby nagłówek tego panelu, który
       akurat stoi przy prawej krawędzi — a stoi tam za każdym razem inny:
       czat, grupa, pokój, ustawienia aplikacji, skille, rutyny, komputer,
-      inspektor. `:last-child` wybiera go sam, więc żaden z nich nie musi
-      o tym wiedzieć ani dostawać propa. Overlaye na całą powłokę (mapa
-      zespołu, konektory) to `div`, nie `main`/`aside` — celowo poza regułą,
-      bo i tak zasłaniają nagłówek pod spodem. */
+      inspektor, lista pokojów. Reguła wybiera go sama, więc żaden z nich nie
+      musi dostawać propa — musi tylko wystawić `data-shell-header` na swoim
+      bezpośrednim dziecku, bo w to celuje reguła. Panel bez tego atrybutu
+      jest dla niej niewidzialny i po cichu zostaje bez odstępu.
+
+      „Ostatni" znaczy: ostatni `main`/`aside`, a NIE ostatnie dziecko.
+      Nakładki na całą powłokę (konektory, mapa zespołu) to `div` doklejone
+      za panelami — przy `:last-child` sama ich obecność zdejmowała odstęp
+      panelowi pod spodem i jego ikony wjeżdżały pod minimalizuj/
+      maksymalizuj/zamknij. Nakładka jest półprzezroczysta (`bg-black/40`),
+      więc widać to jako zlepek ikon w prawym górnym rogu — dokładnie na to
+      Kacper się skarżył przy otwartym oknie wtyczek (0.5.33). Wcześniejszy
+      komentarz zakładał, że nakładka nagłówek ZASŁANIA; nie zasłania. */
 .multibot-frameless [data-shell-header] { -webkit-app-region: drag; }
 /* 3. Jedna linia na całej górze okna. Rząd nagłówka czatu ma 72 px (awatar
       bota), nagłówki paneli same z siebie 50 px — ich przyciski stały o 11 px
@@ -109,8 +118,8 @@ body {
 }
 .multibot-frameless [data-shell-rail-search] { padding-top: 4px; }
 
-.multibot-frameless > .relative > main:last-child > [data-shell-header],
-.multibot-frameless > .relative > aside:last-child > [data-shell-header] {
+/* „nie ma po sobie żadnego innego panelu" — nakładki (`div`) się nie liczą */
+.multibot-frameless > .relative > :is(main, aside):not(:has(~ :is(main, aside))) > [data-shell-header] {
   padding-right: 114px;
 }
 
