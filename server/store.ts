@@ -204,6 +204,46 @@ export function sortMessages<T extends { id: string; at: number; order?: number 
   return [...messages].sort((a, b) => a.at - b.at || (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
 }
 
+/** A group turn from 0.5.27 and earlier was stored on the member's own thread
+ * VISIBLE: the envelope as a user bubble, the reply as a bot bubble, plus a
+ * group room chip. Those records carry no marker to filter on, so reading
+ * reconstructs the turn from its shape — the envelope opens it, and everything
+ * the bot wrote after it belonged to that turn until the next human message.
+ * New group turns are stored `hidden` and post no chip, so this only ever
+ * matches data written by an older server. */
+/** Both halves of the header `groupEnvelope` builds, so a human who happens to
+ * open a message with `[Group chat "` does not erase their own turn. */
+const isLegacyGroupEnvelope = (m: Message) =>
+  m.role === "user" && m.kind === "text" && !!m.text
+  && m.text.startsWith('[Group chat "') && m.text.includes("The user writes to the whole group.");
+const isGroupChip = (m: Message) => m.kind === "room" && !!m.room?.groupId;
+
+export function withoutLegacyGroupLeak(messages: readonly Message[]): Message[] {
+  // A current server writes the envelope `hidden` and posts no group chip, so
+  // a thread with nothing visible to match leaves here without a copy or a
+  // sort — which is every thread, on every `GET /api/bots`, once the old
+  // records are gone.
+  if (!messages.some((m) => !m.hidden && (isLegacyGroupEnvelope(m) || isGroupChip(m)))) return messages as Message[];
+  const drop = new Set<string>();
+  let inGroupTurn = false;
+  for (const m of sortMessages(messages)) {
+    // Hidden records are the CURRENT shape and are filtered by `hidden` alone;
+    // a hidden envelope must not open a window over the visible messages that
+    // follow it (an approval card, or the answer to a private message the same
+    // turn also carried).
+    if (m.hidden) continue;
+    if (m.role === "user") {
+      inGroupTurn = isLegacyGroupEnvelope(m);
+      if (inGroupTurn) drop.add(m.id);
+      continue;
+    }
+    // A group chip never belongs in a private chat, old or new: the group is a
+    // chat of its own and the user opens it from the sidebar.
+    if (inGroupTurn || isGroupChip(m)) drop.add(m.id);
+  }
+  return messages.filter((m) => !drop.has(m.id));
+}
+
 /** Rotacja kolorow dla nowych botow — czarnego celowo nie ma, dostaje go
  *  tylko bot, ktoremu ktos go ustawi. */
 const COLORS: BotColor[] = [

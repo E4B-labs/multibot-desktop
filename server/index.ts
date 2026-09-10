@@ -80,7 +80,7 @@ import { budgetLeft, isAcknowledgement, isDuplicateOfLast, RoomStore, ROOM_DONE_
 import { GoalStore, GOAL_DONE_MARKER, goalThreadId, parseGoalCommand, type GoalRecord } from "./goals.ts";
 import { jobProgress, SetupJobs } from "./setup-jobs.ts";
 import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): wyliczenie narzędzi tury w prompcie
-import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
+import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, withoutLegacyGroupLeak, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
 import { WorkspaceStore } from "./workspace.ts";
@@ -352,8 +352,10 @@ function armBusyWatchdog(botId: string): void {
       // wczorajszemu nadawcy, a kolejka stała bez drenażu.
       peerTurn.delete(botId);
       groupTurn.get(botId)?.done(""); // wiszący dostawca nie trzyma czatu grupy
+      forgetSettledGroupTurn(botId);
       turnAssistantText.delete(b.threadId);
       turnUsedTool.delete(b.threadId);
+      turnPushedVisible.delete(b.threadId);
       turnUserText.delete(b.threadId);
       releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
       broadcast({ kind: "bot", bot: store.bot(botId) });
@@ -512,8 +514,10 @@ const IDLE_ROUNDS_LIMIT = 30;
 
 /** What a CLIENT may see of a thread. Peer envelopes and the answers a bot
  * writes to a colleague live on the thread for the transcript replay only;
- * the chat shows a room chip instead. */
-const chatMessages = (threadId: string) => store.messagesFor(threadId).filter((m) => !m.hidden);
+ * the chat shows a room chip instead. A GROUP turn shows nothing at all — a
+ * private thread is the user and this one bot, never the group's traffic. */
+const chatMessages = (threadId: string) =>
+  withoutLegacyGroupLeak(store.messagesFor(threadId)).filter((m) => !m.hidden);
 
 /**
  * Clickable "X texted Y" / "Y replied" pill on a bot's own thread, pointing at
@@ -527,6 +531,10 @@ function postRoomChip(
   room: RoomRecord,
   chip?: { from: string; to?: string; event: "texted" | "received" | "replied" },
 ) {
+  // A group room is the user's own chat and has a row of its own. Nothing that
+  // happens inside it — not a member's turn, not a handoff between two members
+  // — leaves a mark in anybody's private chat.
+  if (room.groupId) return;
   const owner = store.bot(threadBotId);
   if (!owner) return;
   const message = store.appendMessage(owner.threadId, {
@@ -539,7 +547,6 @@ function postRoomChip(
       ownerBotId: chip?.from ?? threadBotId,
       status: room.status,
       ...(chip ? { event: chip.event } : {}),
-      ...(room.groupId ? { groupId: room.groupId } : {}),
     },
   });
   broadcast({ kind: "message", threadId: owner.threadId, message });
@@ -742,9 +749,28 @@ interface GroupAnswer {
    * finishes next was not answering us, so its text is not the group answer —
    * exactly the `PeerAnswer.deferred` rule, for the same reason. */
   deferred: boolean;
+  /** The group stopped WAITING for this answer — silence, or the per-member
+   * ceiling ran out — but the provider may still be writing. The entry lives on
+   * until the turn really ends, or that late text would surface in the member's
+   * private chat, which is the one thing this whole path exists to prevent. */
+  settled?: boolean;
   done: (text: string) => void;
 }
 const groupTurn = new Map<string, GroupAnswer>();
+/** This bot's running turn belongs to a GROUP: everything it produces goes to
+ * the group ledger and nothing of it to the member's private chat — not the
+ * envelope, not the reply, not a tool pill, not a screenshot. `deferred` means
+ * the turn now running is a private one the envelope merely queued behind, and
+ * a turn the user also wrote into is partly his: both stay visible. */
+const isGroupOnlyTurn = (botId: string, threadId: string): boolean => {
+  const entry = groupTurn.get(botId);
+  return !!entry && !entry.deferred && !turnUserText.has(threadId);
+};
+/** Drop a group turn whose answer is already settled. Called from the four
+ * places that tear a turn down, because `settled` alone must not outlive it. */
+const forgetSettledGroupTurn = (botId: string) => {
+  if (groupTurn.get(botId)?.settled) groupTurn.delete(botId);
+};
 /** Last text each sender→recipient pair carried inside a room. Repeating it
  * verbatim is a loop, not a contribution. Keyed per pair so a fan-out to a
  * group (same text, several recipients) is not mistaken for one. */
@@ -789,6 +815,11 @@ const turnUsedTool = new Set<string>();
  * answer is for them, so it stays a visible bubble even when a colleague also
  * happens to be waiting on the same turn. */
 const turnUserText = new Set<string>();
+/** Threads whose current turn put at least one VISIBLE message in the chat.
+ * The unread dot is read off this at the end of the turn: a group turn, a peer
+ * turn or a turn that only said `[NO REPLY]` changes nothing the user can look
+ * at, and a dot pointing at an unchanged chat is worse than no dot. */
+const turnPushedVisible = new Set<string>();
 
 type PeerDelivery = "steered" | "queued" | "refused";
 
@@ -1062,6 +1093,10 @@ async function routePeerReply(
     if (author) {
       const kept = store.appendMessage(author.threadId, { role: "bot", kind: "text", text: visible });
       broadcast({ kind: "message", threadId: author.threadId, message: kept });
+      // This runs AFTER `turn.completed` settled the dot on "nothing visible".
+      // The bubble it just put back is visible, so the dot has to come back too.
+      store.patchBot(botId, { unread: true });
+      broadcast({ kind: "bot", bot: store.bot(botId) });
     }
   }
 }
@@ -1100,14 +1135,21 @@ async function askGroupMember(target: BotRecord, answer: Omit<GroupAnswer, "done
   // One group turn per bot at a time. Two groups sharing a member would share
   // the single slot, and the second would collect the first one's text.
   if (groupTurn.has(target.id)) return "";
-  const bubble = store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope });
-  broadcast({ kind: "message", threadId: target.threadId, message: bubble });
+  // STORED, never SHOWN — exactly like a peer envelope. The transcript replay
+  // walks the thread, so the bot has to keep reading what the group asked it;
+  // the user's private chat with this bot is not where the group's traffic
+  // belongs, and a raw envelope bubble there is what it looked like before.
+  store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope, hidden: true });
   return await new Promise<string>((resolve) => {
     let settled = false;
     const finish = (text: string) => {
       if (settled) return;
       settled = true;
-      if (groupTurn.get(target.id)?.done === finish) groupTurn.delete(target.id);
+      // MARKED, not deleted: the 4-minute ceiling below stops the group waiting
+      // for this member, it does not make the provider stop writing. Deleting
+      // here put that late text back in the private chat.
+      const entry = groupTurn.get(target.id);
+      if (entry?.done === finish) entry.settled = true;
       resolve(text);
     };
     // A turn already running has not read this envelope, so its completion is
@@ -1142,9 +1184,6 @@ async function runGroupChat(
     if (handedOver.has(target.id)) continue;
     const current = rooms.get(room.id);
     if (!current || current.status !== "running" || budgetLeft(current, max) <= 0) break;
-    // The trace the owner asked for: a clickable pill in the member's own chat
-    // saying it was pulled into this group, one per member per group turn.
-    postRoomChip(target.id, current);
     const raw = await askGroupMember(target, { group, roomId: room.id, members }, groupEnvelope(group.name, roster, current));
     const visible = raw.replace(DONE_MARKER_AT_END, "").trim();
     if (!visible || visible === NO_REPLY_MARKER) continue;
@@ -1196,7 +1235,9 @@ function queueUserTurn(botId: string, turnText: string, opts: QueuedTurnOptions)
   // kompozytor blokuje się od razu i nie ma sekundy, w której czat wygląda,
   // jakby wiadomość przepadła.
   if (!store.bot(botId)?.busy) {
-    store.patchBot(botId, { busy: true, unread: false });
+    // Only a HUMAN opening the chat marks it read. A group envelope or a peer
+    // message arriving used to clear the dot on an answer the user never saw.
+    store.patchBot(botId, opts.origin === "bot" ? { busy: true } : { busy: true, unread: false });
     broadcast({ kind: "bot", bot: store.bot(botId) });
   }
   const previous = queuedTurnOptions.get(botId);
@@ -1275,6 +1316,7 @@ function drainQueuedUserMessages(botId: string) {
     queuedUserMessages.take(botId);
     queuedTurnOptions.delete(botId);
     groupTurn.get(botId)?.done("");
+    forgetSettledGroupTurn(botId);
     return;
   }
   // Tura już chodzi: nic nie zabieramy z kolejki, jej koniec zawoła nas znowu.
@@ -1298,6 +1340,7 @@ function drainQueuedUserMessages(botId: string) {
     // Tura nie ruszyła (bot zniknął, dostawca padł) — `busy` już zgasło wyżej,
     // ale UI wciąż widzi zapalone z chwili przyjęcia wiadomości.
     groupTurn.get(botId)?.done("");
+    forgetSettledGroupTurn(botId);
     broadcast({ kind: "bot", bot: store.bot(botId) });
   });
 }
@@ -1634,6 +1677,11 @@ bus.subscribe((event: RuntimeEvent) => {
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
+    // `unread` means "there is something new in this chat". After a group or
+    // peer turn there usually is not — the text went to a room — so the dot is
+    // decided by whether anything actually reached the user, not by what kind
+    // of turn it was.
+    turnPushedVisible.add(event.threadId);
     broadcast({ kind: "message", threadId: event.threadId, message });
     return message;
   };
@@ -1679,7 +1727,18 @@ bus.subscribe((event: RuntimeEvent) => {
         const answeringPeer = (peerTurn.get(bot.id) ?? []).some((entry) => !entry.deferred && !entry.replied)
           && !turnUserText.has(event.threadId)
           && canUseIntegration(bot.threadId, "delegation");
-        if ((event.text.trim() !== NO_REPLY_MARKER && !answeringPeer) || pending?.length) {
+        // A GROUP turn is the same story with no exclusions left: `runGroupChat`
+        // is waiting for this text and appends it to the group ledger, so it is
+        // never invisible, and delegation has no say — the reply does not travel
+        // through a peer. Kacper: the user writes in the group, the members work
+        // in the group, and the private chat stays user↔bot.
+        // ponytail: an answer whose room closed under it (budget, or the member
+        // ceiling) is dropped rather than shown, because that rule is absolute.
+        // Rescue it into the room the way `routePeerReply` does if a group ever
+        // loses answers often enough to notice.
+        const answeringGroup = isGroupOnlyTurn(bot.id, event.threadId);
+        const roomOnly = answeringPeer || answeringGroup;
+        if ((event.text.trim() !== NO_REPLY_MARKER && !roomOnly) || (pending?.length && !answeringGroup)) {
           pushMessage({
             role: "bot",
             kind: "text",
@@ -1687,8 +1746,14 @@ bus.subscribe((event: RuntimeEvent) => {
             ...(replyModel ? { model: replyModel } : {}),
             ...(pending?.length ? { attachments: pending } : {}),
           });
-        } else if (answeringPeer) {
-          store.appendMessage(event.threadId, { role: "bot", kind: "text", text: event.text, hidden: true });
+        } else if (roomOnly) {
+          // ponytail: a file the bot sent during a group turn is kept on the
+          // hidden record but has no place in the group ledger, which is text
+          // only. Widen the ledger if groups ever need to pass files.
+          store.appendMessage(event.threadId, {
+            role: "bot", kind: "text", text: event.text, hidden: true,
+            ...(pending?.length ? { attachments: pending } : {}),
+          });
         }
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
@@ -1706,6 +1771,13 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.started":
       if (event.itemType === "tool") {
         turnUsedTool.add(event.threadId);
+        // The WORK a member does for the group belongs to the group too: a row
+        // of "Read file" pills in a private chat that holds no group message is
+        // the same leak in a quieter shape. `turnUsedTool` above is bookkeeping
+        // and still records that a tool ran. (An error, a permission prompt or
+        // a question stays visible — those need a human, and the group ledger
+        // has nowhere to put them.)
+        if (isGroupOnlyTurn(bot.id, event.threadId)) break;
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
       }
@@ -1802,6 +1874,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // nadawcy sprzed awarii.
       peerTurn.delete(bot.id);
       groupTurn.get(bot.id)?.done("");
+      forgetSettledGroupTurn(bot.id);
       turnAssistantText.delete(event.threadId);
       turnUsedTool.delete(event.threadId);
       turnUserText.delete(event.threadId);
@@ -1809,7 +1882,10 @@ bus.subscribe((event: RuntimeEvent) => {
       endTurnPush(bot.id, "failed", event.message.slice(0, 120));
       // watchdog: provider padl bez turn.completed -> zwolnij busy
       if (bot) {
-        store.patchBot(bot.id, { busy: false });
+        // The error pill above IS visible, so a failed turn leaves the dot on
+        // even when everything else it produced belonged to a room.
+        store.patchBot(bot.id, { busy: false, unread: turnPushedVisible.has(event.threadId) });
+        turnPushedVisible.delete(event.threadId);
         if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
         activeCommsDepth.delete(bot.id);
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
@@ -1826,9 +1902,15 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
+      const groupOnly = isGroupOnlyTurn(bot.id, event.threadId);
       const frame = stopScreenPoller(bot.id);
-      if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
-      store.patchBot(bot.id, { busy: false, unread: true });
+      if (frame && !groupOnly) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+      // The dot follows what the user can actually SEE, not what kind of turn
+      // ran: a group turn that wrote nothing here leaves no dot, and a turn
+      // that carried both a group envelope and a private message still does.
+      store.patchBot(bot.id, { busy: false, unread: turnPushedVisible.has(event.threadId) });
+      turnPushedVisible.delete(event.threadId);
+      const groupHere = groupTurn.get(bot.id);
       if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
       const lastReply = store.messagesFor(bot.threadId).filter((m) => m.role === "bot" && m.kind === "text" && m.text).at(-1)?.text ?? "";
       // Safety net for the whole bot↔bot design: a bot that was answering a
@@ -1862,9 +1944,9 @@ bus.subscribe((event: RuntimeEvent) => {
       // A group turn has no peer to answer: the loop that asked is waiting.
       // A turn that was ALREADY running when the envelope queued did not read
       // it, so it only clears the flag; the turn the drain starts answers.
-      const groupWaiting = groupTurn.get(bot.id);
-      if (groupWaiting?.deferred) groupWaiting.deferred = false;
-      else groupWaiting?.done(saidThisTurn);
+      if (groupHere?.deferred) groupHere.deferred = false;
+      else groupHere?.done(saidThisTurn);
+      forgetSettledGroupTurn(bot.id); // the turn is over; the marker must not outlive it
       const waiting = (peerTurn.get(bot.id) ?? []).filter((entry) => !entry.replied);
       // A message that queued behind THIS turn is read by the next one; it is
       // held over instead of being answered with text written before it landed.
@@ -2469,7 +2551,11 @@ opts?: {
   const promptUser = opts?.actor
     ? { uid: opts.actor.userId, name: opts.actor.displayName }
     : (() => {
-      const lastUser = store.messagesFor(bot.threadId).reverse().find((message) => message.role === "user" && message.userId);
+      // `findLast`, not `.reverse().find`: `messagesFor` hands back the LIVE
+      // cached array, so reversing it flipped that thread's order in memory for
+      // the rest of the process — every order-dependent read after this turn
+      // (and the JSON the clients are served) saw the transcript backwards.
+      const lastUser = store.messagesFor(bot.threadId).findLast((message) => message.role === "user" && message.userId);
       return lastUser?.userId ? { uid: lastUser.userId, name: lastUser.userName } : undefined;
     })();
 
@@ -2483,7 +2569,10 @@ opts?: {
     // Tura bot-bot znaczy się na rekordzie, bo powłoka rysuje banerkę „skończył"
     // z przejścia `busy`, a nie z pusha — bez tego kolega piszący do kolegi
     // wyskakuje na pulpicie. Nie kasujemy jej: następna tura nadpisze.
-    store.patchBot(bot.id, { busy: true, unread: false, botTurn: (opts?.origin ?? "user") === "bot" });
+    const botOrigin = (opts?.origin ?? "user") === "bot";
+    // As in `queueUserTurn`: a turn a COLLEAGUE or a group started does not mark
+    // the private chat read — the user has still not seen what is in it.
+    store.patchBot(bot.id, { busy: true, botTurn: botOrigin, ...(botOrigin ? {} : { unread: false }) });
     setTurnPolicy(bot.threadId, {
       autonomy: workspace.autonomy(bot.id).autonomy,
       access: workspace.access(bot.id).access,
@@ -2642,8 +2731,10 @@ opts?: {
         activeCommsDepth.delete(bot.id); // multibot (F9): tura padła — licznik też
         peerTurn.delete(bot.id);
         groupTurn.get(bot.id)?.done("");
+        forgetSettledGroupTurn(bot.id);
         turnAssistantText.delete(turnThreadId);
         turnUsedTool.delete(turnThreadId);
+        turnPushedVisible.delete(turnThreadId);
         turnUserText.delete(turnThreadId);
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
         drainQueuedUserMessages(bot.id);
@@ -4553,8 +4644,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       activeCommsDepth.delete(bot.id);
       peerTurn.delete(bot.id); // przerwana tura nie odpisuje koledze
       groupTurn.get(bot.id)?.done("");
+      forgetSettledGroupTurn(bot.id);
       turnAssistantText.delete(bot.threadId);
       turnUsedTool.delete(bot.threadId);
+      turnPushedVisible.delete(bot.threadId);
       turnUserText.delete(bot.threadId);
       stopScreenPoller(bot.id);
       releaseTurnSlot(bot.id);

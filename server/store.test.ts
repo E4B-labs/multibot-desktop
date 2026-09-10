@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
-import { BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, type BotRecord } from "./store.ts";
+import { BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, withoutLegacyGroupLeak, type BotRecord, type Message } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -264,5 +264,81 @@ describe("Store", () => {
 
     const reloaded = new Store(selection);
     expect(reloaded.bot(bot.id)?.busy).toBe(false);
+  });
+});
+
+// Serwery ≤0.5.27 zapisywały turę grupową na prywatnym wątku członka WIDOCZNIE:
+// koperta jako bańka użytkownika, odpowiedź jako bańka bota, plus czip pokoju.
+// Nowy serwer już tak nie robi, ale te zapisy leżą na dyskach — czytanie musi je
+// odsiać, inaczej dalej się rysują.
+describe("withoutLegacyGroupLeak", () => {
+  const msg = (over: Partial<Message> & { id: string }): Message =>
+    ({ role: "bot", kind: "text", at: over.at ?? 0, ...over } as Message);
+  const envelope = '[Group chat "Ekipa" with @Atlas, @Researcher. The user writes to the whole group.]\n\nUser: hej';
+
+  it("drops the envelope, the bot's group reply and the group chip", () => {
+    const kept = withoutLegacyGroupLeak([
+      msg({ id: "hello", at: 1, text: "Hey — I'm your new bot." }),
+      msg({ id: "chip", at: 2, kind: "room", room: { id: "r1", name: "Ekipa", bot_ids: [], ownerBotId: "b1", status: "running", groupId: "g1" } }),
+      msg({ id: "env", at: 3, role: "user", text: envelope }),
+      msg({ id: "reply", at: 4, text: "hello from Atlas" }),
+      msg({ id: "mine", at: 5, role: "user", text: "a teraz prywatnie" }),
+      msg({ id: "answer", at: 6, text: "jasne" }),
+    ]).map((m) => m.id);
+
+    expect(kept).toEqual(["hello", "mine", "answer"]);
+  });
+
+  const peerChip = (id: string, at: number) =>
+    msg({ id, at, kind: "room", room: { id: "r0", name: "Zadanie", bot_ids: [], ownerBotId: "b1", status: "done", event: "texted" } });
+
+  it("keeps a peer chip AFTER the leaked window and drops one inside it", () => {
+    const kept = withoutLegacyGroupLeak([
+      msg({ id: "env", at: 1, role: "user", text: envelope }),
+      peerChip("inside", 2),
+      msg({ id: "mine", at: 3, role: "user", text: "a teraz prywatnie" }),
+      peerChip("after", 4),
+    ]).map((m) => m.id);
+
+    expect(kept).toEqual(["mine", "after"]);
+  });
+
+  it("survives an array that is not in chronological order and keeps the caller's order", () => {
+    const kept = withoutLegacyGroupLeak([
+      msg({ id: "reply", at: 4, text: "hello from Atlas" }),
+      msg({ id: "env", at: 3, role: "user", text: envelope }),
+      peerChip("peer", 2),
+      msg({ id: "hello", at: 1, text: "Hey — I'm your new bot." }),
+    ]).map((m) => m.id);
+
+    expect(kept).toEqual(["peer", "hello"]);
+  });
+
+  // Bieżący serwer zapisuje kopertę i odpowiedź grupową JAKO `hidden`, więc
+  // filtr nie ma prawa ich brać za początek starego okna: między nimi a
+  // następną wiadomością człowieka stoją WIDOCZNE rzeczy, na które ktoś czeka
+  // (karta zgody, odpowiedź na prywatną wiadomość dołożoną do tej samej tury).
+  it("a hidden envelope opens no window over the visible messages after it", () => {
+    const kept = withoutLegacyGroupLeak([
+      msg({ id: "env", at: 1, role: "user", text: envelope, hidden: true }),
+      msg({ id: "groupReply", at: 2, text: "hello from Atlas", hidden: true }),
+      msg({ id: "card", at: 3, kind: "options" }),
+      msg({ id: "answer", at: 4, text: "a to już do Ciebie" }),
+    ]).map((m) => m.id);
+
+    expect(kept).toEqual(["env", "groupReply", "card", "answer"]);
+  });
+
+  it("a message that only starts like the envelope is a normal user message", () => {
+    const looksClose = [
+      msg({ id: "a", at: 1, role: "user", text: '[Group chat "Ekipa" — czemu tam nikt nie odpisuje?' }),
+      msg({ id: "b", at: 2, text: "sprawdzam" }),
+    ];
+    expect(withoutLegacyGroupLeak(looksClose).map((m) => m.id)).toEqual(["a", "b"]);
+  });
+
+  it("leaves a clean thread untouched", () => {
+    const clean = [msg({ id: "a", at: 1, role: "user", text: "hej" }), msg({ id: "b", at: 2, text: "cześć" })];
+    expect(withoutLegacyGroupLeak(clean).map((m) => m.id)).toEqual(["a", "b"]);
   });
 });
