@@ -20,6 +20,9 @@ describe("skala prawego panelu i czatu", () => {
     const widths = [...panel.matchAll(/defaultWidth=\{(\d+)\}/g)].map((m) => Number(m[1]));
     expect(widths.length).toBe(1);
     for (const width of widths) expect(width).toBeLessThanOrEqual(340);
+    // Sztywne piksele w środku panelu nadal obowiązuje ten sam sufit.
+    const hard = [...panel.matchAll(/w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
+    for (const width of hard) expect(width).toBeLessThanOrEqual(340);
   });
 
   it("awatar otwiera zakładki Bot i Prześlij bez generatora", () => {

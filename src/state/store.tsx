@@ -586,6 +586,10 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         settingsOpen: open,
+        // multibot: inspektora brakowało na tej liście, więc ustawienia
+        // otwierały się OBOK niego. Odkąd panele mają zmienną szerokość, dwa
+        // naraz potrafią zabrać całe okno i zgnieść kolumnę czatu do zera.
+        inspectorOpen: open ? false : state.inspectorOpen,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
         routinesOpen: open ? false : state.routinesOpen,

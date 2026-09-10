@@ -65,6 +65,21 @@ describe("górna granica z okna", () => {
   });
 });
 
+describe("zwężone okno chowa nadmiar, nie kasuje go", () => {
+  it("wybrana szerokość wraca po powrocie do szerokiego okna", () => {
+    // Rysowana szerokość jest wyliczana z wybranej, więc zwężenie okna jej
+    // nie nadpisuje. Test odtwarza to, co robi hook: `clamp(desired, max)`.
+    const desired = 900;
+    const wide = viewportMaxWidth(PANEL_MIN_WIDTH, 1600);
+    const narrow = viewportMaxWidth(PANEL_MIN_WIDTH, 900);
+    expect(narrow).toBeLessThan(desired);
+    expect(clampPanelWidth(desired, PANEL_MIN_WIDTH, narrow)).toBe(narrow);
+    expect(clampPanelWidth(desired, PANEL_MIN_WIDTH, wide)).toBe(desired);
+    // Wybrana wartość nietknięta — po powrocie panel wraca tam, gdzie był.
+    expect(desired).toBe(900);
+  });
+});
+
 describe("zapamiętana szerokość", () => {
   const withWindow = (store: Record<string, string>, getItem?: () => never) => {
     (globalThis as { window?: unknown }).window = {
@@ -114,8 +129,23 @@ describe("panele boczne montowane przez powłokę", () => {
     "GroupMembersPanel",
   ];
 
+  // Nakladki na cala powloke i ekrany renderowane ZAMIAST czatu - nie kolumny.
+  const notColumns = [
+    "PluginsPanel",
+    "TeamMapPanel",
+    "AppSettingsPanel",
+    "RoomsPanel",
+    "RoomPanel",
+    "GroupPanel",
+  ];
+
   it("App.tsx nie montuje panelu bocznego spoza listy", () => {
-    for (const name of panels) expect(app).toContain(`<${name}`);
+    // Wypisujemy panele Z App.tsx, nie z listy powyzej — inaczej test nie ma
+    // jak zauwazyc siodmego panelu dodanego bez `SidePanel`.
+    const mounted = new Set([...app.matchAll(/<([A-Za-z]+Panel)[\s/>]/g)].map((m) => m[1]));
+    for (const name of panels) expect(mounted.has(name), `${name} zniknal z App.tsx`).toBe(true);
+    const unexpected = [...mounted].filter((n) => !panels.includes(n) && !notColumns.includes(n));
+    expect(unexpected, "nowy panel w App.tsx: kolumna idzie przez SidePanel, nakladka na liste wyjatkow").toEqual([]);
   });
 
   it("każdy panel idzie przez SidePanel z własnym kluczem i etykietą", () => {
@@ -132,6 +162,17 @@ describe("panele boczne montowane przez powłokę", () => {
       // Sztywna szerokość na `<aside>` była tym, co blokowało ciągnięcie.
       expect(source, name).not.toContain("<aside");
     }
+  });
+
+  it("do localStorage idzie szerokość WYBRANA, nie przycięta oknem", () => {
+    const shared = read("ResizablePanel");
+    expect(shared).toContain("localStorage.setItem(key, String(desired))");
+    expect(shared).toContain("const width = clamp(desired);");
+    // Zapis w trakcie ciągnięcia leciałby przy każdej klatce wskaźnika.
+    expect(shared).toContain("if (resizing) return;");
+    // Wczytanie domyka tylko od dołu — inaczej wąskie okno (albo telefon
+    // w kopii mobilnej) zjadłoby zapamiętaną szerokość przy każdym montażu.
+    expect(shared).toContain("Number.MAX_SAFE_INTEGER");
   });
 
   it("szyna botów dzieli tę samą mechanikę zamiast własnej kopii", () => {

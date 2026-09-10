@@ -98,39 +98,58 @@ export function useResizableWidth(key: string, options: ResizableWidthOptions): 
   const clampRef = useRef(clamp);
   clampRef.current = clamp;
 
-  const [width, setWidthRaw] = useState(() => readStoredWidth(key, defaultWidth, clampRef.current));
+  // `desired` to szerokość WYBRANA przez użytkownika i tylko ona idzie do
+  // localStorage. Rysowana szerokość jest z niej wyliczana — dzięki temu
+  // zwężenie okna chowa nadmiar zamiast go skasować: po powrocie do szerokiego
+  // okna panel wraca tam, gdzie użytkownik go postawił.
+  //
+  // Odczyt domyka WYŁĄCZNIE od dołu: sufit z okna zmienia się co chwilę
+  // (a w kopii mobilnej na telefonie schodzi do minimum), więc domykanie nim
+  // przy wczytaniu obcinałoby zapamiętaną wartość raz na zawsze.
+  const [desired, setDesired] = useState(() =>
+    readStoredWidth(key, defaultWidth, customClamp ?? ((w: number) => clampPanelWidth(w, min, Number.MAX_SAFE_INTEGER))),
+  );
+  const width = clamp(desired);
   const [resizing, setResizing] = useState(false);
   const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  /** Czy OSTATNI gest ruszył uchwyt — patrz `onDoubleClick`. */
+  const movedRef = useRef(false);
 
-  const setWidth = useCallback((next: number) => setWidthRaw(clampRef.current(next)), []);
+  const setWidth = useCallback((next: number) => setDesired(clampRef.current(next)), []);
 
   // Okno zwężone po zapisaniu szerokości: panel musi zejść razem z nim,
   // inaczej po zmniejszeniu okna nie widać już czatu.
   useEffect(() => {
     if (fixedMax != null) return;
-    const update = () => setMax(viewportMaxWidth(min, window.innerWidth));
+    const update = () => {
+      // Zminimalizowane okno potrafi zgłosić 0 — wtedy nie ma czego liczyć.
+      if (window.innerWidth > 0) setMax(viewportMaxWidth(min, window.innerWidth));
+    };
     update();
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, [fixedMax, min]);
 
   useEffect(() => {
-    setWidthRaw((current) => clampRef.current(current));
-  }, [max, min]);
-
-  useEffect(() => {
+    // W trakcie ciągnięcia zapis leciałby przy każdej klatce wskaźnika.
+    if (resizing) return;
     try {
-      window.localStorage.setItem(key, String(width));
+      window.localStorage.setItem(key, String(desired));
     } catch {
       // jw. — brak zapisu nie psuje bieżącej sesji
     }
-  }, [key, width]);
+  }, [key, desired, resizing]);
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      setWidthRaw(panelWidthFromDrag(drag.startWidth, event.clientX - drag.startX, side, clampRef.current));
+      const deltaX = event.clientX - drag.startX;
+      // Ciągnięcie liczy się dopiero powyżej progu drgania ręki — inaczej dwa
+      // szarpnięcia w tym samym miejscu wyglądają jak dwuklik i kasują wybraną
+      // szerokość (`onDoubleClick`).
+      if (Math.abs(deltaX) > 2) movedRef.current = true;
+      setDesired(panelWidthFromDrag(drag.startWidth, deltaX, side, clampRef.current));
     };
     const onStop = (event: PointerEvent) => {
       if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
@@ -158,8 +177,14 @@ export function useResizableWidth(key: string, options: ResizableWidthOptions): 
 
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      if (event.button !== 0) return;
+      // Drugi palec na tym samym uchwycie nadpisałby trwający gest, a wtedy
+      // `pointerup` pierwszego przestaje pasować i ciągnięcie się zacina.
+      if (event.button !== 0 || dragRef.current) return;
       event.preventDefault();
+      // `preventDefault` zabiera fokus, a bez niego klawiatura (Home/End,
+      // strzałki) i obrys `focus-visible` są dostępne wyłącznie tabem.
+      event.currentTarget.focus?.();
+      movedRef.current = false;
       dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width };
       setResizing(true);
       document.body.style.cursor = "col-resize";
@@ -185,12 +210,18 @@ export function useResizableWidth(key: string, options: ResizableWidthOptions): 
                 : null;
       if (next == null) return;
       event.preventDefault();
-      setWidthRaw(clampRef.current(next));
+      setDesired(clampRef.current(next));
     },
     [max, min, side, width],
   );
 
-  const onDoubleClick = useCallback(() => setWidthRaw(clampRef.current(defaultWidth)), [defaultWidth]);
+  /** Dwuklik wraca do domyślnej — ale tylko jeśli to naprawdę był klik.
+   * Dwa szarpnięcia w tym samym miejscu też dają `dblclick`, a wtedy reset
+   * kasowałby właśnie ustawianą szerokość. */
+  const onDoubleClick = useCallback(() => {
+    if (movedRef.current) return;
+    setDesired(clampRef.current(defaultWidth));
+  }, [defaultWidth]);
 
   return { width, resizing, side, label, min, max, setWidth, onPointerDown, onKeyDown, onDoubleClick };
 }
@@ -231,10 +262,13 @@ export function ResizeHandle({ resize, className }: { resize: ResizableWidth; cl
 /** Wspólna rama panelu bocznego obok czatu: `<aside>` o zapamiętanej
  * szerokości plus uchwyt. Zawartość paneli zostaje nietknięta.
  *
- * Szerokość idzie zmienną `--panel-width`, a NIE stylem `width` wprost — klasę
- * `w-[var(--panel-width)]` wnosi każdy panel w swoim `className`. Dzięki temu
- * ten sam plik działa w kopii mobilnej, gdzie panel na telefonie jest
- * `fixed inset-0 w-full`, a kolumną staje się dopiero od `md:`. */
+ * Szerokość idzie zmienną `--panel-width` i KLASĄ `w-[var(--panel-width)]`
+ * (poniżej, w bazie), a NIE stylem `width` wprost. Styl inline wygrywa
+ * z arkuszem, a układ telefonu (`styles.css`, `max-width: 700px`) musi móc
+ * nadpisać szerokość na `100%`. Panel, który na telefonie ma być pełnoekranowy
+ * i kolumną dopiero od `md:` (tak działa kopia mobilna), podaje w swoim
+ * `className` `w-full md:w-[var(--panel-width)]` — `twMerge` zdejmie wtedy
+ * klasę z bazy, bo `w-full` jest z tej samej grupy. */
 export function SidePanel({
   storageKey,
   defaultWidth,
