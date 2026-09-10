@@ -212,6 +212,45 @@ body {
   [data-composer-row] > div > button > span { display: none; }
 }
 
+/* == multibot: seria dymków (iMessage/Grok) ==============================
+   Kilka wiadomości pod rząd od tej samej strony ma się czytać jak JEDEN
+   blok: rogi, którymi dwa dymki serii się stykają, robią się ostrzejsze
+   (6 px zamiast 16 px z `rounded-2xl`), rogi zewnętrzne zostają pełne,
+   a odstęp w środku serii schodzi z 4 px (`gap-1` listy) do 2 px. Odstęp
+   MIĘDZY nadawcami zostaje bez zmian.
+
+   Serię wyznacza sąsiedztwo w DOM, nie indeks wiadomości — `+` i `:has(+)`.
+   To celowo: między dymkami stają pigułki zdarzeń, chipy pokoju, karty
+   opcji, podglądy ekranu, karta SKILL.md i separatory sesji, a wszystkie
+   przerywają serię już przez to, że stoją pomiędzy. Mapa liczona w JS
+   musiałaby powtórzyć całą logikę „czy ta wiadomość w ogóle coś rysuje"
+   z pętli w ChatView i rozjeżdżałaby się przy każdym nowym rodzaju wiersza.
+   Wymaga `:has()` (Chromium 105+) — ten plik i tak korzysta z Highlight API
+   (105) i color-mix (111), więc próg się nie podnosi.
+
+   Reguły stoją POZA warstwami, więc biją `rounded-2xl` z `@layer utilities`
+   Tailwinda niezależnie od specyficzności (tak samo jak nagłówki paneli
+   wyżej biją swoje utility). Znacznikami są `data-mb-side` (wiersz) i
+   `data-mb-bubble` (sam dymek) — patrz src/components/ChatView.tsx. */
+[data-mb-side="bot"] + [data-mb-side="bot"],
+[data-mb-side="user"] + [data-mb-side="user"] {
+  margin-top: -2px;
+}
+/* dymek, nad którym stoi dymek tej samej strony — ostry róg GÓRNY wewnętrzny */
+[data-mb-side="bot"] + [data-mb-side="bot"] [data-mb-bubble] {
+  border-top-left-radius: 6px;
+}
+[data-mb-side="user"] + [data-mb-side="user"] [data-mb-bubble] {
+  border-top-right-radius: 6px;
+}
+/* dymek, pod którym stoi dymek tej samej strony — ostry róg DOLNY wewnętrzny */
+[data-mb-side="bot"]:has(+ [data-mb-side="bot"]) [data-mb-bubble] {
+  border-bottom-left-radius: 6px;
+}
+[data-mb-side="user"]:has(+ [data-mb-side="user"]) [data-mb-bubble] {
+  border-bottom-right-radius: 6px;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   /* Bez `height` pasek poziomy zostawał domyślny (15 px na Windowsie), więc
