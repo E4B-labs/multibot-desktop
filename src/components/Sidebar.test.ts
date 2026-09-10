@@ -26,17 +26,20 @@ describe("sidebar avatar", () => {
     expect(sidebarAvatarProps(bot({ busy: true }))).toEqual(still);
   });
 
-  // Stos skladu na wierszu grupy szedl wlasna sciezka (stateForBot + motion
-  // "none", bez `animated`), wiec bezczynny czlonek dalej mrugal i oddychal.
-  it("freezes group members too", () => {
+  it("uses the same paused animation state for group members", () => {
     const idle = groupMemberAvatarProps(bot({ busy: false }));
     expect(idle.animated).toBe(false);
-    expect(idle.state).toBe("happy");
+    expect(idle.state).toBe("idle");
     expect(idle.motion).toBe("none");
 
     const busy = groupMemberAvatarProps(bot({ id: "b2", busy: true }));
     expect(busy.animated).toBe(false);
     expect(busy.motion).toBe("none");
+  });
+
+  it("uses the same state and motion contract as a single bot avatar", () => {
+    const member = bot({ id: "b3", avatarUrl: "data:image/png;base64,a" });
+    expect(groupMemberAvatarProps(member)).toEqual(sidebarAvatarProps(member));
   });
 });
 
@@ -66,7 +69,20 @@ describe("bot picker avatar follow", () => {
     expect(item).toContain("onMouseLeave");
     expect(pinned).toContain("trackPointerWhenPaused");
     expect(hoverCard).not.toContain("trackPointerWhenPaused");
-    expect(groupRow).not.toContain("trackPointerWhenPaused");
-    expect((sidebarSource.match(/trackPointerWhenPaused/g) ?? []).length).toBe(2);
+    expect(groupRow).toContain("trackPointerWhenPaused");
+    expect(groupRow).toContain("avatarUrl={member.avatarUrl}");
+    expect(groupRow).toContain("shape={member.mascotShape}");
+    expect((sidebarSource.match(/trackPointerWhenPaused/g) ?? []).length).toBe(3);
+  });
+});
+
+describe("group picker avatar stack", () => {
+  it("renders the overflow badge and keeps selected and hover states", () => {
+    const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
+    expect(groupRow).toContain("const { shown, hiddenCount } = groupAvatarStack(members, g.bot_ids.length)");
+    expect(groupRow).toContain("hiddenCount > 0");
+    expect(groupRow).toContain("+{hiddenCount}");
+    expect(groupRow).toContain("aria-label={`${hiddenCount} more group members`}");
+    expect(groupRow).toContain('state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50"');
   });
 });

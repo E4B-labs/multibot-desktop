@@ -13,18 +13,27 @@ describe("groupRowTitle", () => {
 
 describe("groupAvatarStack", () => {
   it("keeps both known avatars in the horizontal stack", () => {
-    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"] });
+    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
   });
 
-  it("keeps every known avatar instead of collapsing the rest into +N", () => {
-    expect(groupAvatarStack(["a", "b", "c", "d"])).toEqual({ shown: ["a", "b", "c", "d"] });
+  it("shows at most three avatars and counts every remaining member", () => {
+    expect(groupAvatarStack(["a", "b", "c"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 0 });
+    expect(groupAvatarStack(["a", "b", "c", "d"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 1 });
+    expect(groupAvatarStack(["a", "b", "c", "d", "e"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 2 });
+  });
+
+  it("counts overflow from the full membership when not every bot is known", () => {
+    expect(groupAvatarStack(["a", "b", "c", "d"], 5)).toEqual({
+      shown: ["a", "b", "c"],
+      hiddenCount: 2,
+    });
   });
 
   it("does not invent avatars for unknown bots", () => {
-    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"] });
+    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
   });
 
   it("shows a single avatar for a one-member group", () => {
-    expect(groupAvatarStack(["a"])).toEqual({ shown: ["a"] });
+    expect(groupAvatarStack(["a"])).toEqual({ shown: ["a"], hiddenCount: 0 });
   });
 });

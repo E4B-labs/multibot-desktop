@@ -3,7 +3,7 @@ export function groupRowTitle(memberNames: string[]): string {
   return memberNames.join(", ");
 }
 
-/** Kafelek grupy pokazuje wszystkie znane awatary w jednym poziomym stosie. */
-export function groupAvatarStack<T>(members: T[]): { shown: T[] } {
-  return { shown: members };
+/** Kafelek grupy pokazuje do trzech awatarow i liczbe pozostalych czlonkow. */
+export function groupAvatarStack<T>(members: T[], totalCount = members.length): { shown: T[]; hiddenCount: number } {
+  return { shown: members.slice(0, 3), hiddenCount: Math.max(0, totalCount - 3) };
 }

@@ -29,7 +29,7 @@ import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store"
 import { Skeleton } from "./Loading";
 import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { GROUP_AVATAR_STATE, sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
@@ -70,12 +70,7 @@ export { sidebarAvatarProps };
  * co wiersz bota: stoi, dopoki bot nie pracuje.
  */
 export function groupMemberAvatarProps(bot: Bot) {
-  return {
-    ...sidebarAvatarProps(bot),
-    state: GROUP_AVATAR_STATE,
-    shape: "blob" as const,
-    avatarUrl: null,
-  };
+  return sidebarAvatarProps(bot);
 }
 
 function readSidebarWidth(key: string, fallback: number): number {
@@ -831,9 +826,9 @@ function GroupRow({
   const members = g.bot_ids
     .map((id) => bots.find((b) => "mb-" + b.threadId === id))
     .filter((b): b is Bot => b != null);
-  const { shown } = groupAvatarStack(members);
-  // Jeden członek zachowuje rozmiar awatara bota; większy skład jest poziomym
-  // stosem wszystkich znanych awatarów, bez skosu i bez licznika +N.
+  const { shown, hiddenCount } = groupAvatarStack(members, g.bot_ids.length);
+  // Jeden czlonek zachowuje rozmiar awatara bota; wiekszy sklad pokazuje
+  // najwyzej trzy prawdziwe awatary oraz licznik pozostalych czlonkow.
   const solo = shown.length === 1;
   const last = g.messages?.[g.messages.length - 1];
   const attention = members.find((b) => b.needsAttention != null)?.needsAttention;
@@ -875,10 +870,26 @@ function GroupRow({
       )}
     >
       {members.length > 0 ? (
-        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "-space-x-1")}>
+        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "-space-x-1.5")}>
           {shown.map((member) => (
-            <BotAvatar key={member.id} color={member.color} size={solo ? 48 : 20} {...groupMemberAvatarProps(member)} />
+            <BotAvatar
+              key={member.id}
+              color={member.color}
+              avatarUrl={member.avatarUrl}
+              shape={member.mascotShape}
+              size={solo ? 48 : 24}
+              {...groupMemberAvatarProps(member)}
+              trackPointerWhenPaused
+            />
           ))}
+          {hiddenCount > 0 && (
+            <span
+              aria-label={`${hiddenCount} more group members`}
+              className="relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full bg-raised text-[11px] font-semibold text-ink-secondary ring-2 ring-panel"
+            >
+              +{hiddenCount}
+            </span>
+          )}
           {attention && (
             <span
               title={attention}
