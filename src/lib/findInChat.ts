@@ -11,7 +11,9 @@
 // API maluje po Range'ach: zero mutacji DOM-u, zero kolizji z rekoncyliacją.
 // Wersje są w porządku: Electron 43 = Chromium ~140, Android WebView z Play
 // Store ≥ Chromium 105 (sierpień 2022) — poniżej tego progu podświetlenie po
-// prostu się nie rysuje, a licznik i przewijanie działają dalej.
+// prostu się nie rysuje, a licznik i przewijanie działają dalej. Samo API jest
+// od 105, ale `color-mix()` w `::highlight()` dopiero od 111, dlatego reguła
+// w styles.css ma zapasową deklarację bez niego.
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
