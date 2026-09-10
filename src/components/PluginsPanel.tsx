@@ -473,6 +473,123 @@ function GoogleWorkspaceSection() {
   );
 }
 
+// Karta aplikacji Composio: logo, nazwa, etykieta typu, konta, przyciski.
+//
+// MUSI stać w module, nie w ciele `PluginsPanel`: komponent zdefiniowany
+// wewnątrz rodzica dostaje przy każdym renderze nową tożsamość, React
+// odmontowuje poddrzewo i pole etykiety konta traciłoby focus po każdym
+// wpisanym znaku (stan `alias` żyje w rodzicu).
+function AppCard({
+  card,
+  accounts,
+  connected,
+  busySlug,
+  waiting,
+  configured,
+  asking,
+  alias,
+  onAlias,
+  onAsk,
+  onConnect,
+  onDisconnectAccount,
+  onDisconnect,
+}: {
+  card: ToolkitCard;
+  accounts: ConnectedAccount[];
+  connected: boolean;
+  busySlug: string | null;
+  waiting: boolean;
+  configured: boolean;
+  asking: boolean;
+  alias: string;
+  onAlias: (value: string) => void;
+  onAsk: () => void;
+  onConnect: (slug: string, alias: string) => void;
+  onDisconnectAccount: (slug: string, accountId: string) => void;
+  onDisconnect: (slug: string) => void;
+}) {
+  const polish = useLanguage() === "pl";
+  const busy = busySlug === card.slug;
+  return (
+    <div className="flex flex-col gap-2 rounded-xl bg-card px-4 py-3">
+      <div className="flex items-start gap-3">
+        <ServiceIcon card={card} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[14px] font-medium text-ink">{card.label}</span>
+            <span className="shrink-0 rounded bg-raised px-1.5 py-px text-[10px] uppercase tracking-wide text-ink-secondary">
+              {polish ? "aplikacja OAuth" : "OAuth app"}
+            </span>
+          </div>
+          <div className="line-clamp-2 text-[12px] leading-snug text-ink-secondary">{card.blurb}</div>
+        </div>
+        <button
+          disabled={!configured || busy || waiting}
+          onClick={onAsk}
+          // Etykieta oczekiwania jedzie w `title`, nie w treści: pełne
+          // „Czekam na autoryzację…" rozpychało przycisk na trzy czwarte
+          // karty i nazwa aplikacji zwijała się do „G.".
+          title={waiting ? (polish ? "Czekam na autoryzację…" : "Waiting for authorization…") : undefined}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-3 py-1 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
+        >
+          {waiting ? (
+            <Spinner size={12} />
+          ) : busy ? (
+            <Loader2 size={12} className="mx-auto animate-spin" />
+          ) : connected ? (
+            <><Plus size={12} />{polish ? "Konto" : "Account"}</>
+          ) : (
+            polish ? "Połącz" : "Connect"
+          )}
+        </button>
+      </div>
+      {asking && (
+        <div className="flex items-center gap-1.5">
+          <input
+            autoFocus
+            value={alias}
+            onChange={(e) => onAlias(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onConnect(card.slug, alias.trim()); if (e.key === "Escape") onAsk(); }}
+            placeholder={polish ? "Etykieta konta, np. praca@gmail.com" : "Account label, e.g. work@gmail.com"}
+            className={cn(FIELD, "flex-1")}
+          />
+          <button
+            onClick={() => onConnect(card.slug, alias.trim())}
+            className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink hover:bg-raised-hover"
+          >
+            {polish ? "Połącz" : "Connect"}
+          </button>
+        </div>
+      )}
+      {/* Każde konto własnym wierszem — etykieta i własne odłączenie.
+          Dwa konta tej samej aplikacji stoją tu obok siebie. */}
+      {accounts.map((account) => (
+        <div key={account.id} className="flex items-center gap-2 rounded-lg bg-inset px-2.5 py-1.5">
+          <span className="size-1.5 shrink-0 rounded-full bg-success" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{account.alias || account.id}</span>
+          <button
+            type="button"
+            disabled={busySlug === `${card.slug}:${account.id}`}
+            onClick={() => onDisconnectAccount(card.slug, account.id)}
+            aria-label={`Remove ${account.alias || account.id}`}
+            className="shrink-0 rounded px-1 text-[12px] text-ink-secondary hover:text-danger disabled:opacity-50"
+          >
+            {busySlug === `${card.slug}:${account.id}` ? <Loader2 size={11} className="animate-spin" /> : polish ? "Odłącz" : "Disconnect"}
+          </button>
+        </div>
+      ))}
+      {connected && !accounts.length && (
+        <button
+          onClick={() => onDisconnect(card.slug)}
+          className="self-start text-[12px] text-ink-secondary underline hover:text-danger"
+        >
+          {polish ? "Odłącz" : "Disconnect"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PluginsPanel() {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
@@ -494,8 +611,12 @@ export function PluginsPanel() {
   // multibot (F7): otwarty formularz konektora — null = zamknięty,
   // locked = edycja istniejącego (id nie do zmiany)
   const [draft, setDraft] = useState<CustomDraft | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef(new Map<string, HTMLDivElement>());
+  // Odpytywanie po OAuth przeżywa zamknięcie panelu, jeśli mu na to pozwolić —
+  // interwał wołałby setState na odmontowanym komponencie i odpytywał serwer
+  // w kółko. Trzymamy uchwyty i kasujemy je przy odmontowaniu.
+  const pollTimers = useRef<ReturnType<typeof setInterval>[]>([]);
+  useEffect(() => () => pollTimers.current.forEach(clearInterval), []);
 
   const jumpTo = useCallback((key: string) => {
     sectionRefs.current.get(key)?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -570,10 +691,12 @@ export function PluginsPanel() {
           void refreshStatus([slug]).then((fresh) => {
             if (++tries >= 12 || fresh[slug]?.connected) {
               clearInterval(timer);
+              pollTimers.current = pollTimers.current.filter((t) => t !== timer);
               setWaitingSlug(null);
             }
           });
         }, 5000);
+        pollTimers.current.push(timer);
       })
       .catch((e) => { setError(e.message); setWaitingSlug(null); })
       .finally(() => setBusySlug(null));
@@ -652,91 +775,23 @@ export function PluginsPanel() {
     else sectionRefs.current.delete(key);
   };
 
-  // Karta aplikacji Composio: logo, nazwa, etykieta typu, konta, przyciski.
-  const AppCard = ({ card }: { card: ToolkitCard }) => {
-    const accounts = status[card.slug]?.accounts ?? [];
-    const connected = Boolean(status[card.slug]?.connected) || accounts.length > 0;
-    const busy = busySlug === card.slug;
-    const asking = aliasFor === card.slug;
-    return (
-      <div className="flex flex-col gap-2 rounded-xl bg-card px-4 py-3">
-        <div className="flex items-start gap-3">
-          <ServiceIcon card={card} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-[14px] font-medium text-ink">{card.label}</span>
-              <span className="shrink-0 rounded bg-raised px-1.5 py-px text-[10px] uppercase tracking-wide text-ink-secondary">
-                {polish ? "aplikacja OAuth" : "OAuth app"}
-              </span>
-            </div>
-            <div className="line-clamp-2 text-[12px] leading-snug text-ink-secondary">{card.blurb}</div>
-          </div>
-          <button
-            disabled={!configured || busy || waitingSlug === card.slug}
-            onClick={() => { setAliasFor(asking ? null : card.slug); setAlias(""); }}
-            // Etykieta oczekiwania jedzie w `title`, nie w treści: pełne
-            // „Czekam na autoryzację…" rozpychało przycisk na trzy czwarte
-            // karty i nazwa aplikacji zwijała się do „G.".
-            title={waitingSlug === card.slug ? (polish ? "Czekam na autoryzację…" : "Waiting for authorization…") : undefined}
-            className="flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-3 py-1 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
-          >
-            {waitingSlug === card.slug ? (
-              <Spinner size={12} />
-            ) : busy ? (
-              <Loader2 size={12} className="mx-auto animate-spin" />
-            ) : connected ? (
-              <><Plus size={12} />{polish ? "Konto" : "Account"}</>
-            ) : (
-              polish ? "Połącz" : "Connect"
-            )}
-          </button>
-        </div>
-        {asking && (
-          <div className="flex items-center gap-1.5">
-            <input
-              autoFocus
-              value={alias}
-              onChange={(e) => setAlias(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") connect(card.slug, alias.trim()); if (e.key === "Escape") setAliasFor(null); }}
-              placeholder={polish ? "Etykieta konta, np. praca@gmail.com" : "Account label, e.g. work@gmail.com"}
-              className={cn(FIELD, "flex-1")}
-            />
-            <button
-              onClick={() => connect(card.slug, alias.trim())}
-              className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink hover:bg-raised-hover"
-            >
-              {polish ? "Połącz" : "Connect"}
-            </button>
-          </div>
-        )}
-        {/* Każde konto własnym wierszem — etykieta i własne odłączenie.
-            Dwa konta tej samej aplikacji stoją tu obok siebie. */}
-        {accounts.map((account) => (
-          <div key={account.id} className="flex items-center gap-2 rounded-lg bg-inset px-2.5 py-1.5">
-            <span className="size-1.5 shrink-0 rounded-full bg-success" />
-            <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{account.alias || account.id}</span>
-            <button
-              type="button"
-              disabled={busySlug === `${card.slug}:${account.id}`}
-              onClick={() => disconnectAccount(card.slug, account.id)}
-              aria-label={`Remove ${account.alias || account.id}`}
-              className="shrink-0 rounded px-1 text-[12px] text-ink-secondary hover:text-danger disabled:opacity-50"
-            >
-              {busySlug === `${card.slug}:${account.id}` ? <Loader2 size={11} className="animate-spin" /> : polish ? "Odłącz" : "Disconnect"}
-            </button>
-          </div>
-        ))}
-        {connected && !accounts.length && (
-          <button
-            onClick={() => disconnect(card.slug)}
-            className="self-start text-[12px] text-ink-secondary underline hover:text-danger"
-          >
-            {polish ? "Odłącz" : "Disconnect"}
-          </button>
-        )}
-      </div>
-    );
-  };
+  // Props karty składane w jednym miejscu — obie sekcje („Zainstalowane"
+  // i kategoria) rysują tę samą kartę.
+  const cardProps = (card: ToolkitCard) => ({
+    card,
+    accounts: status[card.slug]?.accounts ?? [],
+    connected: Boolean(status[card.slug]?.connected) || (status[card.slug]?.accounts?.length ?? 0) > 0,
+    busySlug,
+    waiting: waitingSlug === card.slug,
+    configured,
+    asking: aliasFor === card.slug,
+    alias,
+    onAlias: setAlias,
+    onAsk: () => { setAliasFor(aliasFor === card.slug ? null : card.slug); setAlias(""); },
+    onConnect: connect,
+    onDisconnectAccount: disconnectAccount,
+    onDisconnect: disconnect,
+  });
 
   return (
     <div
@@ -847,7 +902,7 @@ export function PluginsPanel() {
             ))}
           </nav>
 
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {cards === null ? (
               <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-ink-secondary">
                 <Loader2 size={14} className="animate-spin" /> {polish ? "Ładowanie katalogu…" : "Loading catalog…"}
@@ -862,7 +917,7 @@ export function PluginsPanel() {
                     </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {installed.map((card) => (
-                        <AppCard key={`installed-${card.slug}`} card={card} />
+                        <AppCard key={`installed-${card.slug}`} {...cardProps(card)} />
                       ))}
                       {customCards.map((card) => (
                         <div key={`installed-${card.slug}`} className="flex items-start gap-3 rounded-xl bg-card px-4 py-3">
@@ -896,7 +951,7 @@ export function PluginsPanel() {
                       <div className="mb-2 text-[13px] font-medium text-ink-secondary">{section.label}</div>
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {section.cards.map((card) => (
-                          <AppCard key={card.slug} card={card} />
+                          <AppCard key={card.slug} {...cardProps(card)} />
                         ))}
                       </div>
                     </div>
