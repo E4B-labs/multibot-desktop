@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Bot } from "@/state/store";
-import { clampSidebarWidth, groupMemberAvatarProps, sidebarAvatarProps } from "./Sidebar";
+import { clampSidebarWidth, groupMemberAvatarProps, hoverCardPosition, sidebarAvatarProps } from "./Sidebar";
 // Ciągnięcie liczy wspólna mechanika paneli — szyna wnosi tylko swoje domknięcie.
 import { panelWidthFromDrag } from "./ResizablePanel";
 
@@ -146,5 +146,30 @@ describe("group row avatar cluster", () => {
     expect(form).toContain("else if (next.size < MAX_GROUP_MEMBERS) next.add(engineBotId)");
     expect(form).toContain("disabled={!picked.has(engineBotId) && picked.size >= MAX_GROUP_MEMBERS}");
     expect(form).toContain("{picked.size}/{MAX_GROUP_MEMBERS}");
+  });
+});
+
+describe("bot hover card position", () => {
+  const row = (top: number, right: number) => ({ top, right });
+
+  it("stawia kafelek po prawej stronie wiersza w szerokim oknie", () => {
+    expect(hoverCardPosition(row(100, 240), 1280, 900)).toEqual({ top: 96, left: 250 });
+  });
+
+  it("nie wychodzi poza prawą krawędź", () => {
+    // wiersz na całą szerokość okna telefonu: kafelek cofa się pod prawą krawędź
+    expect(hoverCardPosition(row(120, 382), 390, 844).left).toBe(390 - 288 - 8);
+  });
+
+  // Regresja: `left` nie miał dolnej granicy, więc przy oknie 280 px wychodziło
+  // -16 px i kafelek uciekał za LEWĄ krawędź (zmierzone Playwrightem).
+  it("nie wychodzi poza lewą krawędź w wąskim oknie", () => {
+    expect(hoverCardPosition(row(120, 272), 280, 700).left).toBe(8);
+    expect(hoverCardPosition(row(120, 190), 200, 700).left).toBe(8);
+  });
+
+  it("nie wychodzi poza dolną krawędź", () => {
+    expect(hoverCardPosition(row(800, 240), 1280, 900).top).toBe(900 - 120 - 8);
+    expect(hoverCardPosition(row(10, 240), 1280, 100).top).toBe(8);
   });
 });
