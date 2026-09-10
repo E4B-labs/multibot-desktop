@@ -34,10 +34,25 @@ export type AdminUser = {
   disabled?: boolean;
 };
 
+/** Mirrors `GpuInfo` in server/admin.ts — one row per card, because
+ * `nvidia-smi` reports one row per card. Typing it as a string is what took
+ * the whole app down with React #31 on every machine that has a GPU.
+ *
+ * Mirrored, not imported: server/admin.ts pulls in node:child_process and
+ * imports its neighbours with `.ts` extensions, which the app's tsconfig does
+ * not allow. `AdminPanel.test.ts` diffs the two shapes so they cannot drift
+ * apart again. */
+export type GpuInfo = {
+  name: string;
+  utilization: number;
+  memoryUsedMb: number;
+  memoryTotalMb: number;
+};
+
 export type AdminOverview = {
   users?: AdminUser[];
   server?: {
-    gpu?: string | null;
+    gpu?: GpuInfo[] | null;
     tlsFingerprint?: string | null;
     uptimeMs?: number;
     version?: string;
@@ -71,6 +86,28 @@ export function uptimeText(ms: number | undefined, polish: boolean): string {
   if (days > 0) return polish ? `${days} d ${hours % 24} h` : `${days}d ${hours % 24}h`;
   const minutes = Math.floor(ms / 60_000) % 60;
   return polish ? `${hours} h ${minutes} min` : `${hours}h ${minutes}m`;
+}
+
+/** nvidia-smi answers in MiB; a bare 24576 on screen is a number, not an answer. */
+export function gpuMemoryText(usedMb: number, totalMb: number): string {
+  const gb = (mb: number) => (mb / 1024).toFixed(1).replace(/\.0$/, "");
+  return `${gb(usedMb)} / ${gb(totalMb)} GB`;
+}
+
+/** Nothing at all on most machines: `gpu` is null without an NVIDIA driver
+ * (server/admin.ts), and a card that says "—" forever is worse than no card —
+ * the same rule the rest of this tab follows. */
+export function GpuRows({ gpus }: { gpus?: GpuInfo[] | null }) {
+  if (!gpus?.length) return null;
+  return (
+    <>
+      {gpus.map((gpu, index) => (
+        <div key={`${gpu.name}#${index}`} className="mt-2 rounded-xl bg-card px-4 py-3 text-[12.5px] text-ink-secondary">
+          GPU <b className="font-medium text-ink">{gpu.name}</b> · {Math.round(gpu.utilization)}% · {gpuMemoryText(gpu.memoryUsedMb, gpu.memoryTotalMb)}
+        </div>
+      ))}
+    </>
+  );
 }
 
 const ERROR_TEXTS: Record<string, [string, string]> = {
@@ -304,9 +341,7 @@ export function AdminPanel() {
       )}
 
       <MachineResources />
-      {overview?.server?.gpu && (
-        <div className="mt-2 rounded-xl bg-card px-4 py-3 text-[12.5px] text-ink-secondary">GPU <b className="font-medium text-ink">{overview.server.gpu}</b></div>
-      )}
+      <GpuRows gpus={overview?.server?.gpu} />
 
       {users.length > 0 && (
         <Card title={polish ? "Użytkownicy" : "Users"}>
