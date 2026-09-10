@@ -201,7 +201,12 @@ describe("karta bot↔bot otwiera pokój", () => {
     for (const label of ["Napisano do", "Messaged", "Wiadomość od", "Message from"]) {
       expect(card, `brak kierunkowego opisu ${label}`).toContain(label);
     }
-    expect(card).toContain("const avatars = sent ? [actor, ...peers] : [actor];");
+    expect(card).not.toContain("const avatars = sent ? [actor, ...peers] : [actor];");
+    expect(card).toContain("id !== currentBotId");
+    expect(card).toContain("bot.id === currentBotId");
+    expect(card).toContain('"--bot": BOT_COLORS[bot.color]');
+    expect(card).toContain('dispatch({ type: "select", id: bot.id })');
+    expect(card).toContain("stopPropagation");
   });
 
   it("obie karty wchodzą do pokoju tym samym helperem", () => {
@@ -211,11 +216,16 @@ describe("karta bot↔bot otwiera pokój", () => {
 });
 
 describe("małe awatary rozmów botów", () => {
-  it("oddziela stos avatarów w karcie aktywności", () => {
+  it("umieszcza pojedynczy mały avatar w chipie obok nazwy", () => {
     const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
-    expect(card).toContain("bg-app ring-2 ring-app");
+    expect(card).toContain('role="link"');
+    expect(card).toContain('size={20}');
     expect(card).toContain('shape="blob"');
     expect(card).toContain("{...sidebarAvatarProps(bot)}");
+    expect(card).toContain("inline-flex items-center gap-1 rounded-full");
+    expect(card).not.toContain("-space-x-1");
+    // obwódka hovera nie może być obcinana przez `overflow-hidden` wiersza
+    for (const token of ["overflow-hidden", "p-1 -m-1", "items-center"]) expect(card).toContain(token);
     expect(card).not.toContain("state={stateForBot(bot)}");
   });
 
