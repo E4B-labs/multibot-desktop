@@ -134,14 +134,26 @@ describe("zakładka Admin zależy od roli", () => {
 
 // multibot: historia zmian stoi w zakładce „Aktualizacje", pod wierszem
 // sprawdzania wersji — dokładnie tam, gdzie ma ją aplikacja na telefonie.
-// Repozytorium MUSI zostać desktopowe: `sync-webui.mjs` przenosi ten plik do
-// repo mobilnego, więc bez strażnika po obu stronach jeden sync po cichu
-// pokazałby tu commity cudzego projektu (mobilny strażnik stoi w
-// `webui/src/mobile-parity.test.ts` tamtego repo).
+// Repozytorium MUSI zostać desktopowe: `sync-webui.mjs` (skrypt stoi w repo
+// mobilnym i ciągnie stąd) NIE ma tego pliku na liście `PHONE_OWNED`, więc
+// leci on trójstronnym mergem. Bez strażnika po obu stronach jeden sync po
+// cichu pokazałby tu commity cudzego projektu (mobilny bliźniak stoi
+// w `webui/src/mobile-parity.test.ts` tamtego repo).
 describe("historia zmian w ustawieniach", () => {
   it("ciągnie się z repo desktopowego i siedzi w zakładce aktualizacji", () => {
     expect(panel).toContain('<UpdateLog repository="E4B-labs/multibot-desktop"');
     const branch = panel.slice(panel.indexOf('{tab === "update" &&'));
-    expect(branch.slice(0, branch.indexOf("</>"))).toContain("<UpdateLog");
+    const end = branch.indexOf("</>");
+    // Bez tego strażnik przechodzi także wtedy, gdy gałąź zniknie: `indexOf`
+    // zwraca wtedy −1, a `slice(0, -1)` bierze prawie CAŁĄ resztę pliku.
+    expect(end).toBeGreaterThan(0);
+    expect(branch.slice(0, end)).toContain("<UpdateLog");
+  });
+
+  // Przełączenie języka ma przetłumaczyć komunikat, a nie odpytać GitHuba
+  // jeszcze raz — przy limicie 60 zapytań/h to różnica między działającym
+  // panelem a błędem.
+  it("nie odpytuje GitHuba przy przełączeniu języka", () => {
+    expect(panel).toContain("}, [page, repository, retry]);");
   });
 });

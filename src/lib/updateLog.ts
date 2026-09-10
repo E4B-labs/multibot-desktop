@@ -1,6 +1,28 @@
+// multibot: historia zmian w Ustawieniach → Aktualizacje. Ten plik był
+// początkowo kopią bajt w bajt swojego odpowiednika z repo mobilnego
+// (`webui/src/lib/updateLog.ts` w `E4B-labs/multibot-mobile`) — gałąź mostu
+// natywnego zostaje, bo `sync-webui.mjs` przenosi ten plik między repami, a w
+// Electronie i tak nigdy się nie odpala (`isReactNativeShell()` → false, więc
+// od razu leci zwykły `fetch`). RÓŻNICA DO NADROBIENIA PO TAMTEJ STRONIE:
+// odczyt `x-ratelimit-reset` i walidacja `html_url` niżej powstały tutaj.
 import { isReactNativeShell, shellPost } from "./shell";
 
 export const COMMITS_PER_PAGE = 10;
+
+/** Limit GitHuba dla zapytań bez tokenu to 60/h na adres IP i jest to
+ *  najczęstsza porażka tego panelu — dlatego wyjątek niesie moment
+ *  odblokowania, żeby dało się napisać „spróbuj po 14:20" zamiast „nie da
+ *  się", po którym użytkownik klika Ponów w kółko. Most natywny nie przenosi
+ *  nagłówków, więc na telefonie zostaje sam komunikat ogólny. */
+export type UpdateLogError = Error & { retryAt?: number };
+
+function unavailable(status: number, resetHeader?: string | null): UpdateLogError {
+  const error: UpdateLogError = new Error(`Update log unavailable (${status}).`);
+  const reset = Number(resetHeader);
+  // 403 = limit bez tokenu, 429 = limit wtórny; oba niosą sekundy uniksowe.
+  if ((status === 403 || status === 429) && Number.isFinite(reset) && reset > 0) error.retryAt = reset * 1000;
+  return error;
+}
 
 export type UpdateLogEntry = {
   sha: string;
@@ -63,7 +85,11 @@ function parseEntry(value: unknown): UpdateLogEntry | null {
   const author = record(commit?.author);
   const committer = record(commit?.committer);
   const sha = typeof candidate?.sha === "string" ? candidate.sha : "";
-  const url = typeof candidate?.html_url === "string" ? candidate.html_url : "";
+  // Adres trafia wprost do `href`, a odpowiedź jest cudza — bierzemy tylko to,
+  // co naprawdę wskazuje na GitHuba, żeby podmienione pole nie stało się
+  // linkiem do czegokolwiek innego.
+  const html = typeof candidate?.html_url === "string" ? candidate.html_url : "";
+  const url = html.startsWith("https://github.com/") ? html : "";
   const message = typeof commit?.message === "string" ? commit.message.split(/\r?\n/, 1)[0].trim() : "";
   const date = typeof author?.date === "string" ? author.date : typeof committer?.date === "string" ? committer.date : "";
   if (!sha || !url || !message || !date) return null;
@@ -107,7 +133,7 @@ async function fetchUpdateLogViaNative(
       const detail = (event as CustomEvent<NativeUpdateLogDetail>).detail;
       if (!detail || detail.requestId !== requestId) return;
       if (!detail.ok) {
-        finish(() => reject(new Error(`Update log unavailable (${detail.status ?? 0}).`)));
+        finish(() => reject(unavailable(detail.status ?? 0)));
         return;
       }
       finish(() => resolve(parseUpdateLogPage(detail.body, page, detail.link ?? null)));
@@ -136,6 +162,6 @@ export async function fetchUpdateLog(repository: string, page: number, signal?: 
     cache: "no-store",
     ...(signal ? { signal } : {}),
   });
-  if (!response.ok) throw new Error(`Update log unavailable (${response.status}).`);
+  if (!response.ok) throw unavailable(response.status, response.headers.get("x-ratelimit-reset"));
   return parseUpdateLogPage(await response.json(), page, response.headers.get("link"));
 }
