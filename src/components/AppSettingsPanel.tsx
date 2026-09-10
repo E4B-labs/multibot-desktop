@@ -9,7 +9,7 @@ import { AdminPanel } from "./AdminPanel";
 // multibot: piąta kopia tej samej linii (App.tsx, ChatView.tsx, Onboarding.tsx,
 // Sidebar.tsx). Tu decyduje o jednym: czy pokazać przełącznik akceleracji.
 const isElectron = navigator.userAgent.includes("Electron");
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
@@ -18,6 +18,7 @@ import { authFetch, clearAuthToken } from "@/lib/auth";
 import { canRemember, forgetRemembered } from "@/lib/shell";
 import { languageLabel, setLanguage, useLanguage, type Language } from "@/lib/language";
 import { SkinPicker } from "./SkinPicker";
+import { copyText } from "@/lib/shell";
 import { MicrophoneRow } from "./MicrophoneRow";
 import { BotSettingsCard } from "./BotSettingsCard";
 import { Skeleton, Spinner } from "./Loading";
@@ -373,7 +374,11 @@ function CustomModels() {
   );
 }
 
-function CommandLineTools() {
+// `cliLogin` = narzędzie wskazane przez banerkę „logowanie wygasło”. Prośbę
+// zużywa już ekran ustawień (żeby nie przeżyła nieudanego `/api/cli-tools`),
+// tu przyjeżdża zwykłym propem.
+function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
+  const requested = cliLogin;
   type CliRow = { id: string; displayName: string; enabled: boolean; detected: boolean; authenticated?: boolean; reason?: string; version?: string; installCommand?: string | null; loginCommand?: string | null; loginAvailable?: boolean; loginMode?: "stdin" | "device"; loginHint?: string };
   type LoginSession = { toolId: string; jobId: string; output: string[]; done: boolean; mode: "stdin" | "device"; error?: string };
   type InstallSession = { toolId: string; jobId: string; output: string[]; done: boolean; error?: string };
@@ -383,6 +388,13 @@ function CommandLineTools() {
   const [installJob, setInstallJob] = useState<InstallSession | null>(null);
   const [login, setLogin] = useState<LoginSession | null>(null);
   const [loading, setLoading] = useState(true);
+  // multibot: narzędzie bez interaktywnego logowania (`loginAvailable` false)
+  // — pokazujemy komendę do wklejenia w terminalu zamiast okna.
+  const [manualLogin, setManualLogin] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  // Wiersz komendy stoi w głębi długiego panelu — na telefonie trzeba go
+  // dowieźć na ekran, inaczej „Odśwież logowanie” wygląda na nic nie robiące.
+  const manualRef = useRef<HTMLDivElement>(null);
   const polish = useLanguage() === "pl";
   const deviceLogin = (() => {
     if (login?.mode !== "device") return null;
@@ -394,7 +406,21 @@ function CommandLineTools() {
   })();
 
   useEffect(() => {
-    void api("/api/cli-tools").then(({ tools }) => setCli(tools)).catch(() => {}).finally(() => setLoading(false));
+    let alive = true;
+    void api("/api/cli-tools").then(({ tools }) => {
+      if (!alive) return;
+      const rows: CliRow[] = Array.isArray(tools) ? tools : [];
+      setCli(rows);
+      if (!requested) return;
+      // multibot: przyszliśmy z banerki „logowanie wygasło” — okno logowania
+      // tego narzędzia otwiera się samo, bez szukania go w liście.
+      const tool = rows.find((item) => item.id.toLowerCase() === requested.toLowerCase());
+      if (!tool) return;
+      if (tool.loginAvailable) void startLogin(tool);
+      else setManualLogin(tool.id);
+    }).catch(() => {}).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lista wczytuje się raz, przy montowaniu
   }, []);
 
   const toggle = (tool: CliRow) => {
@@ -430,8 +456,13 @@ function CommandLineTools() {
     }
   };
 
+  useEffect(() => {
+    if (manualLogin) manualRef.current?.scrollIntoView({ block: "center" });
+  }, [manualLogin]);
+
   const startLogin = async (tool: CliRow) => {
     if (login) return;
+    setManualLogin(null);
     try {
       const response = await api(`/api/cli-tools/${encodeURIComponent(tool.id)}/login`, { method: "POST" });
       const session: LoginSession = { toolId: tool.id, jobId: response.id, output: response.job?.output ?? [], done: false, mode: tool.loginMode ?? "stdin" };
@@ -562,6 +593,34 @@ function CommandLineTools() {
                 />
               </div>
             </div>
+            {manualLogin === item.id && (
+              <div ref={manualRef} className="mx-2 mb-2 rounded-lg bg-inset p-2 text-[11px] text-ink-secondary">
+                {item.loginCommand && (
+                  <>
+                    <div>{polish ? "Zaloguj się w terminalu:" : "Sign in from a terminal:"}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="min-w-0 flex-1 break-all text-ink">{item.loginCommand}</code>
+                      <button
+                        onClick={() => {
+                          // `copyText` ma zapasowe `execCommand` — panel bywa w WebView
+                          // bez bezpiecznego kontekstu, gdzie `clipboard` odrzuca zapis
+                          void copyText(item.loginCommand ?? "").then((ok) => {
+                            if (!ok) return;
+                            setCopied(item.id);
+                            setTimeout(() => setCopied((current) => (current === item.id ? null : current)), 1500);
+                          });
+                        }}
+                        className="shrink-0 rounded-md bg-raised px-2 py-1 text-[11px] text-ink hover:bg-raised-hover"
+                      >{copied === item.id ? (polish ? "Skopiowano" : "Copied") : (polish ? "Kopiuj" : "Copy")}</button>
+                    </div>
+                  </>
+                )}
+                {item.loginHint && <div className="mt-1">{item.loginHint}</div>}
+                {!item.loginCommand && !item.loginHint && (
+                  <div>{polish ? "To narzędzie nie ma osobnego logowania." : "This tool has no sign-in step."}</div>
+                )}
+              </div>
+            )}
             {installJob?.toolId === item.id && (
               <div className="mx-2 mb-2 rounded-lg bg-inset p-2">
                 <div className="mb-1 text-[11px] text-ink-secondary">
@@ -892,10 +951,25 @@ export function visibleSettingsTabs(role: SettingsRole): typeof settingsTabs[num
 }
 
 export function AppSettingsPanel() {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const language = useLanguage();
   const polish = language === "pl";
+  // multibot: przyjście z banerki „logowanie wygasło" otwiera od razu tę
+  // zakładkę, na której mieszka lista narzędzi CLI — inaczej prośba czekałaby
+  // niezauważona, bo `CommandLineTools` montuje się dopiero tutaj.
   const [tab, setTab] = useState<AppSettingsTab>("general");
+  // multibot: prośba „zaloguj to CLI” z banerki. Zużywamy ją TU i od razu
+  // (pusty `cliLogin` w akcji ją kasuje), a dalej niesie ją zwykły stan tego
+  // ekranu — inaczej nieudane `/api/cli-tools` zostawiłoby ją w store i
+  // porwałoby następne, niezwiązane wejście w ustawienia.
+  const [pendingCli, setPendingCli] = useState<string | null>(null);
+  const cliLogin = state.appSettingsCliLogin;
+  useEffect(() => {
+    if (!cliLogin) return;
+    setTab("other");
+    setPendingCli(cliLogin);
+    dispatch({ type: "toggleAppSettings", open: true });
+  }, [cliLogin, dispatch]);
   // multibot: licznik kliknięć w szynę sekcji. Sam `tab` nie wystarczy —
   // ponowne kliknięcie w już wybraną ikonę nie zmienia stanu, więc animacja
   // nie miałaby czego odtworzyć. Numer idzie do `key`, co przemontowuje
@@ -1077,7 +1151,7 @@ export function AppSettingsPanel() {
               {/* multibot: G1 — custom model catalog lives at app level, never per bot. */}
               <CustomModels />
               {/* multibot: G1 — CLI allowlist UI; provisioning actions land in G3. */}
-              <CommandLineTools />
+              <CommandLineTools cliLogin={pendingCli} />
 
               <MachineResources />
               <DiagnosticsRow />

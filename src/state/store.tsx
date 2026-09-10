@@ -232,6 +232,10 @@ interface AppState {
   pluginsConnector?: ConnectorTarget;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  // multibot: narzędzie CLI, którego logowanie ma się otworzyć od razu po
+  // wejściu w ustawienia (banerka wygasłego logowania). Ta sama droga co
+  // `pluginsConnector` dla kart konektorów.
+  appSettingsCliLogin?: string;
   // multibot: F6 — panel rutyn, ten sam prawy slot co settings/computer
   routinesOpen: boolean;
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
@@ -309,7 +313,7 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean; connector?: ConnectorTarget }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleAppSettings"; open?: boolean; cliLogin?: string }
   // multibot: F6 — otwarcie/zamknięcie panelu rutyn
   | { type: "toggleRoutines"; open?: boolean }
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
@@ -616,6 +620,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsCliLogin: action.cliLogin,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -1136,6 +1141,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
+        // multibot: harness stracił logowanie — ramka niesie narzędzie i
+        // gotową treść, a bot i tak parkuje na `needsAttention`, więc
+        // powłoka trzyma to w JEDNYM polu (banerka, pasek boczny, banerka
+        // systemowa czytają je tak samo).
+        case "auth-expired":
+          if (typeof frame.botId === "string" && typeof frame.message === "string") {
+            rawDispatch({ type: "botPatched", bot: { id: frame.botId, needsAttention: frame.message } });
+          }
+          break;
         case "group":
           rawDispatch({ type: "workspaceChanged", botId: "", resource: "groups" });
           break;

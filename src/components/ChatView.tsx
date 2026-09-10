@@ -38,6 +38,8 @@ import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { authFetch } from "@/lib/auth";
 import { peerActivityGroupFor } from "@/lib/peerActivity";
+// multibot: wygasłe logowanie harnessu — banerka z przyciskiem naprawy
+import { AuthExpiredBanner } from "./AuthExpiredBanner";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -722,6 +724,10 @@ export function ChatView({ bot }: { bot: Bot }) {
           )}
         </div>
       </div>
+
+      {/* multibot: logowanie CLI wygasło — jedno kliknięcie prowadzi do
+          okna logowania tego narzędzia w ustawieniach. */}
+      <AuthExpiredBanner bot={bot} />
 
       {/* Error banner */}
       {state.error && (
