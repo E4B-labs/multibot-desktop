@@ -274,10 +274,93 @@ describe("małe awatary rozmów botów", () => {
     expect(card).not.toContain("state={stateForBot(bot)}");
   });
 
+  it("chip ma wypełnienie i tekst w kolorze bota już w spoczynku", () => {
+    const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
+    // spoczynek: obwódka + wypełnienie + tekst, nie tylko wariant `hover:`
+    expect(card).toContain("[box-shadow:0_0_0_1px_var(--bot-ink)]");
+    expect(card).toContain("text-[var(--bot-ink)]");
+    expect(card).toContain("bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))]");
+    expect(card).toContain("hover:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))]");
+    expect(card).not.toContain("hover:[box-shadow:0_0_0_1px_var(--bot)]");
+    // tekst zostaje w kolorze bota także pod kursorem (przycisk karty ma
+    // własne `hover:text-ink` — patrzymy tylko w blok chipa)
+    const chipBlock = card.slice(card.indexOf("const chip ="), card.indexOf("const visiblePeers ="));
+    expect(chipBlock).not.toContain("text-ink");
+    // atrament miesza się ze skórką, inaczej yellow/white/black toplo w tle
+    expect(card).toContain('"--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))"');
+  });
+
   it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
     expect(roomPanel).toContain("bg-app ring-2 ring-app");
     expect(roomPanel).toContain('shape="blob"');
     expect(roomPanel).toContain("{...sidebarAvatarProps(bot)}");
     expect(roomPanel).not.toContain("state={stateForBot(bot)}");
+  });
+});
+
+// multibot: seria dymków (iMessage/Grok). Kilka wiadomości pod rząd od tej
+// samej strony ma się czytać jak jeden blok — rogi styku ostrzejsze, rogi
+// zewnętrzne pełne, odstęp w środku serii mniejszy niż między nadawcami.
+// Reguły siedzą w styles.css (`[data-mb-side]`, `:has(+ …)`), bo o serii
+// decyduje sąsiedztwo w DOM, a nie indeks wiadomości. Bez DOM w vitest
+// sprawdzamy sam kontrakt: który róg tnie która reguła i jaki wychodzi
+// odstęp — mylny (odbity) róg to tu najłatwiejszy błąd.
+const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+
+/** Wszystkie reguły serii ze styles.css: selektor → treść deklaracji. */
+function seriesRules(): Array<{ selector: string; body: string }> {
+  return [...styles.matchAll(/(\[data-mb-side[^{]*)\{([^}]*)\}/g)].map((match) => ({
+    selector: match[1].replace(/\s+/g, " ").trim(),
+    body: match[2],
+  }));
+}
+
+function cornerRule(side: "bot" | "user", edge: "top" | "bottom"): string {
+  const row = `[data-mb-side="${side}"]`;
+  // róg GÓRNY tnie dymek, NAD którym stoi dymek tej samej strony (`+`);
+  // róg DOLNY ten, POD którym taki dymek stoi (`:has(+ …)`)
+  const selector = edge === "top"
+    ? `${row} + ${row} [data-mb-bubble]`
+    : `${row}:has(+ ${row}) [data-mb-bubble]`;
+  return seriesRules().find((rule) => rule.selector === selector)?.body ?? "";
+}
+
+describe("seria dymków czatu", () => {
+  it("ostrzy tylko róg styku i tylko po wewnętrznej stronie dymka", () => {
+    // bot stoi po lewej → jego rogi wewnętrzne są LEWE; użytkownik odwrotnie
+    expect(cornerRule("bot", "top"), "brak reguły górnego rogu bota").toMatch(/border-top-left-radius:\s*6px/);
+    expect(cornerRule("bot", "bottom"), "brak reguły dolnego rogu bota").toMatch(/border-bottom-left-radius:\s*6px/);
+    expect(cornerRule("user", "top"), "brak reguły górnego rogu użytkownika").toMatch(/border-top-right-radius:\s*6px/);
+    expect(cornerRule("user", "bottom"), "brak reguły dolnego rogu użytkownika").toMatch(/border-bottom-right-radius:\s*6px/);
+    for (const edge of ["top", "bottom"] as const) {
+      expect(cornerRule("bot", edge), "dymek bota ścina róg zewnętrzny").not.toContain("right-radius");
+      expect(cornerRule("user", edge), "dymek użytkownika ścina róg zewnętrzny").not.toContain("left-radius");
+    }
+  });
+
+  it("zostawia w serii mniejszy odstęp niż między nadawcami", () => {
+    // lista wiadomości: `gap-1` = 4 px między nadawcami
+    expect(chat).toContain('className="flex w-full min-w-0 flex-col gap-1 pb-16"');
+    const gap = 4;
+    // po `+`, żeby przyszła reguła `[data-mb-side]` z własnym marginesem
+    // nie podszyła się pod tę jedną, która zwiera odstęp w serii
+    const rule = seriesRules().find((entry) => entry.selector.includes("+") && entry.body.includes("margin-top"));
+    const shift = Number.parseFloat(/margin-top:\s*(-?[\d.]+)px/.exec(rule?.body ?? "")?.[1] ?? "NaN");
+    expect(shift, "brak reguły zwierającej odstęp w serii").toBeLessThan(0);
+    expect(gap + shift, "dymki serii sklejają się albo nachodzą").toBeGreaterThan(0);
+    expect(gap + shift, "odstęp w serii nie jest mniejszy od zwykłego").toBeLessThan(gap);
+    // ta sama reguła musi obejmować obie strony, nie tylko jedną
+    for (const side of ["bot", "user"]) {
+      expect(rule?.selector, `seria ${side} bez zwarcia odstępu`).toContain(`[data-mb-side="${side}"] + [data-mb-side="${side}"]`);
+    }
+  });
+
+  it("oznacza każdy dymek — gotowy i strumieniowany", () => {
+    const sides = [...chat.matchAll(/data-mb-side=(?:"([a-z]+)"|\{[^}]*\})/g)];
+    expect(sides.length, "nie każdy wiersz dymka niesie data-mb-side").toBe(bubbleLines().length);
+    expect((chat.match(/data-mb-bubble/g) ?? []).length, "nie każdy dymek niesie data-mb-bubble").toBe(bubbleLines().length);
+    // `[data-mb-side] [data-mb-bubble]` to selektor POTOMKA: gdyby oba
+    // znaczniki wylądowały na jednym elemencie, reguły przestałyby trafiać
+    expect(chat, "oba znaczniki na jednym elemencie").not.toMatch(/data-mb-side=[^\n]*data-mb-bubble|data-mb-bubble=[^\n]*data-mb-side/);
   });
 });

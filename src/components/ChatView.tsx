@@ -153,6 +153,14 @@ function Bubble({
     // data-mb-msg = kotwica dla find-in-chat
     <div
       data-mb-msg={message.id}
+      // multibot: seria dymków (iMessage) — reguły w styles.css, sekcja
+      // `[data-mb-side]`. O przynależności do serii decyduje SĄSIEDZTWO W DOM,
+      // nie indeks wiadomości: między dymkami stają pigułki zdarzeń, chipy
+      // pokoju, karty, podglądy ekranu, załącznik SKILL.md i separatory sesji
+      // — każde z nich przerywa serię i przerywa ją samym tym, że stoi
+      // pomiędzy. Dlatego nie ma tu mapy „ta wiadomość jest N-ta w serii":
+      // musiałaby powtórzyć całą logikę widoczności z pętli renderującej.
+      data-mb-side={user ? "user" : "bot"}
       className={cn(
         "group/msg flex w-full rounded-2xl transition-shadow",
         user ? "justify-end" : "justify-start",
@@ -167,6 +175,7 @@ function Bubble({
           (dymek + przyciski), przyciski są `shrink-0`. */}
       <div className="flex min-w-0 max-w-[90%] items-end gap-1">
       <div
+        data-mb-bubble=""
         className={cn(
           // multibot: dymek szeroki (90%) — poprzednie 35% było dla właściciela
           // za wąskie, 29.08 poprosił o niemal pełną szerokość kolumny czatu,
@@ -343,8 +352,15 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
         onKeyDown={activate}
         // multibot: `bot.color` to NAZWA z allowlisty, nie kolor CSS — bez
         // BOT_COLORS obwódka brałaby słowo kluczowe CSS (`green` = #008000).
-        style={{ "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green } as CSSProperties}
-        className="inline-flex items-center gap-1 rounded-full min-w-0 px-1.5 py-0.5 hover:[box-shadow:0_0_0_1px_var(--bot)] hover:bg-[color-mix(in_srgb,var(--bot)_14%,transparent)] hover:text-ink focus-visible:[box-shadow:0_0_0_1px_var(--bot)] focus-visible:bg-[color-mix(in_srgb,var(--bot)_14%,transparent)] focus-visible:text-ink transition-[box-shadow,background-color] duration-150"
+        // `--bot-ink` to kolor bota dociągnięty w połowie do atramentu skórki: sam
+        // hex tonie i na jasnych skórkach (yellow, white), i na ciemnych (black).
+        // 50/50 w oklab trzyma odcień, a najgorszy kontrast na wypełnieniu to
+        // 3,3:1 (lagoon/white) dla całej allowlisty w czterech skórkach.
+        style={{
+          "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green,
+          "--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))",
+        } as CSSProperties}
+        className="inline-flex items-center gap-1 rounded-full min-w-0 px-1.5 py-0.5 text-[var(--bot-ink)] [box-shadow:0_0_0_1px_var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))] hover:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:outline focus-visible:outline-1 focus-visible:outline-focus focus-visible:outline-offset-1 transition-[background-color] duration-150"
       >
         <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...sidebarAvatarProps(bot)} />
         <span className="truncate">{name}</span>
@@ -356,7 +372,8 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
   // multibot: opis to jeden rząd flexa, nie zdanie z chipami wklejonymi w tekst.
   // Chip jest `inline-flex`, więc w toku tekstu bierze linię bazową z awatara i
   // tekst obok siada 2,2 px niżej (zmierzone) — `items-center` to kasuje.
-  // `p-1 -m-1` daje `overflow-hidden` zapas na 1 px obwódki hovera.
+  // `p-1 -m-1` daje `overflow-hidden` zapas na stałą obwódkę chipa (1 px) i na
+  // obwódkę fokusu (1 px + 1 px offsetu) — razem 3 px z 4 px zapasu.
   const content = (
     <span className="flex min-w-0 items-center gap-1 overflow-hidden p-1 -m-1">
       <span className="shrink-0">{sent ? (polish ? "Napisano do" : "Messaged") : (polish ? "Wiadomość od" : "Message from")}</span>
@@ -486,13 +503,16 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
 
 function StreamingBubble({ text }: { text: string }) {
   return (
-    <div className="flex w-full justify-start">
+    // multibot: dymek strumienia dokleja się do serii bota tak samo jak gotowy
+    // (patrz styles.css `[data-mb-side]`) — inaczej ostatni dymek odskakiwałby
+    // w chwili, gdy strumień się kończy i Bubble go podmienia.
+    <div className="flex w-full justify-start" data-mb-side="bot">
       {/* multibot: ten sam rozmiar co Bubble — inaczej tekst „skakałby" po
           zakończeniu strumienia; wrapper-wiersz identyczny jak w Bubble
           (bez przycisków), żeby sufit szerokości liczył się w tym samym
           miejscu. */}
       <div className="flex min-w-0 max-w-[90%] items-end gap-1">
-      <div className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
+      <div data-mb-bubble="" className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
         <ChatMarkdown text={text} streaming compact />
         <span className="ml-0.5 inline-block h-[13px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
       </div>

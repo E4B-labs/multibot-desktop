@@ -107,7 +107,22 @@ describe("group row avatar cluster", () => {
     expect(botRow).toContain("gap-3 px-3 py-2.5");
     expect(groupRow).toContain("gap-3 px-3 py-2.5");
     // Awatary siedzą w pudełku przez tabelę slotów, nie przez własne marginesy.
-    expect(groupRow).toContain('cn("absolute", GROUP_AVATAR_SLOTS[layout][index])');
+    // `flex` na slocie jest obowiązkowe: inline slot łapie 6 px zejścia linii,
+    // więc awatar 24 px zajmował 24×30 i rozjeżdżał się z plakietką.
+    expect(groupRow).toContain('cn("absolute flex", GROUP_AVATAR_SLOTS[layout][index])');
+  });
+
+  // Klaster ma się nakładać: sąsiednie sloty stoją co 18 px przy elemencie 24 px,
+  // czyli części wspólne po 6 px (25%). Zmierzone headless w after-rows.json.
+  it("overlaps the cluster slots by a quarter and centres them in the box", () => {
+    const slots = sidebarSource.slice(
+      sidebarSource.indexOf("const GROUP_AVATAR_SLOTS"),
+      sidebarSource.indexOf("function GroupRow"),
+    );
+    expect(slots).toContain('pair: ["left-[3px] top-[12px]", "left-[21px] top-[12px]"]');
+    expect(slots).toContain('trio: ["left-[3px] top-[3px]", "left-[21px] top-[3px]", "left-[12px] top-[21px]"]');
+    // Układ „stack" zniknął — 4+ używa tych samych trzech slotów co trójka.
+    expect(slots).not.toContain("stack:");
   });
 
   it("renders the overflow badge and keeps selected and hover states", () => {
@@ -116,6 +131,12 @@ describe("group row avatar cluster", () => {
     expect(groupRow).toContain("+{hiddenCount}");
     expect(groupRow).toContain("aria-label={`${hiddenCount} more group members`}");
     expect(groupRow).toContain('state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50"');
+    // Plakietka to kolejny element klastra: ten sam rozmiar 24 px co awatar,
+    // slot za ostatnim awatarem i żadnego `ring-2`, który rysował się na
+    // zewnątrz i robił z niej kółko 28 px z obwódką.
+    expect(groupRow).toContain("GROUP_AVATAR_SLOTS[layout][shown.length]");
+    expect(groupRow).toContain("size-6 items-center justify-center rounded-full border border-hairline bg-raised");
+    expect(groupRow).not.toContain("ring-2 ring-panel");
   });
 
   // Limit 12 nie ma testu renderującego (repo nie ma jsdom), więc pilnujemy, że
