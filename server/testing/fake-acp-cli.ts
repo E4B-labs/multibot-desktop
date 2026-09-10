@@ -208,6 +208,11 @@ function handle(msg: any) {
         });
         return complete();
       }
+      // multibot: tura kończy się BEZ ANI JEDNEGO kawałka tekstu. Tak zachował
+      // się codex 10.09.2026 — po `ask_user` w komórce exec oddał puste
+      // `final_answer`, harness nie dostał `assistant_text` i w czacie nie
+      // pojawiło się nic; dla człowieka wyglądało to jak zgubiona wiadomość.
+      if (mode === "silent") return complete();
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);
@@ -437,7 +442,17 @@ function handle(msg: any) {
       // odpowiedź człowieka — droga, której drivery ACP wcześniej nie miały
       if (mode === "ask-user" && agentsMcp) {
         void driveMcp(agentsMcp, [
-          { name: "ask_user", args: () => ({ question: "Which database?", choices: ["Postgres", "SQLite"] }) },
+          {
+            name: "ask_user",
+            args: () => ({
+              question: "Which database?",
+              choices: process.env.FAKE_ACP_ASK_CHOICES?.split("|") ?? ["Postgres", "SQLite"],
+              // multibot: pytanie wielokrotnego wyboru i tło pod tytułem —
+              // domyślnie wyłączone, żeby stare testy widziały starą kartę
+              ...(process.env.FAKE_ACP_ASK_MULTIPLE ? { multiple: true } : {}),
+              ...(process.env.FAKE_ACP_ASK_DETAIL ? { detail: process.env.FAKE_ACP_ASK_DETAIL } : {}),
+            }),
+          },
         ])
           .then((answer) => {
             out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `owner says: ${answer}` } } } });

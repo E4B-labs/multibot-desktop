@@ -237,7 +237,8 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
       expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zdecyduj" })).status).toBe(202);
 
       const card = await waitForCard(botId);
-      expect(card.title).toBe("Your bot has a question");
+      // multibot: tytułem karty pytania jest samo pytanie
+      expect(card.title).toBe("Which database?");
       expect(card.answered).toBeUndefined();
       expect(card.options).toEqual(["Postgres", "SQLite"]);
 

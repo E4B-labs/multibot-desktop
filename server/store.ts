@@ -49,6 +49,12 @@ export interface OptionCardData {
   kind?: "computer-handoff" | "connect";
   /** karty `connect`: który konektor otworzyć w panelu wtyczek. */
   connector?: ConnectorTarget;
+  /** multibot: pytanie wielokrotnego wyboru — karta rysuje checkboxy i przycisk
+   *  „Zatwierdź", a odpowiedź wraca jako wybrane etykiety rozdzielone przecinkiem. */
+  multiple?: boolean;
+  /** multibot: odpowiedź dojechała do bota (serwer potwierdził jej przyjęcie).
+   *  Karta potwierdzenia mówi „wysłano do X", póki tej flagi nie ma. */
+  delivered?: boolean;
 }
 
 export interface SecretRequestCardData {

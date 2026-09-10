@@ -558,11 +558,14 @@ describe("comms e2e (fake ACP fleet)", () => {
         if (Date.now() > deadline) throw new Error(`no question card. stderr: ${stderr.slice(-2000)}`);
         await new Promise((r) => setTimeout(r, 250));
       }
+      // multibot: TYTUŁEM karty jest samo pytanie; podtytuł zostaje pusty,
+      // bo to wywołanie `ask_user` nie podało `detail`.
       expect(card).toMatchObject({
-        title: "Your bot has a question",
-        subtitle: "Which database?",
+        title: "Which database?",
+        subtitle: "",
         options: ["Postgres", "SQLite"],
       });
+      expect(card.multiple).toBeUndefined();
 
       expect(
         (await api("POST", `/api/bots/${asker.id}/respond`, {

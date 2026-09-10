@@ -1733,11 +1733,18 @@ bus.subscribe((event: RuntimeEvent) => {
         role: "bot",
         kind: "options",
           card: {
+            // multibot: TYTUŁEM pytania jest samo pytanie — nagłówek „Bot ma
+            // pytanie" zabierał wiersz, a treść lądowała pod spodem drobnym
+            // drukiem. Karty zgody zostają jak były: tytuł nazywa decyzję,
+            // pod nim jedzie opis akcji.
             title: autoAllow ? t("Zgoda automatyczna", "Auto-approved")
-              : permission ? t("Wymagana zgoda", "Approval needed") : t("Bot ma pytanie", "Your bot has a question"),
-            subtitle: autoNote ? `${event.summary}\n${autoNote}` : event.summary,
+              : permission ? t("Wymagana zgoda", "Approval needed") : event.summary,
+            subtitle: permission
+              ? (autoNote ? `${event.summary}\n${autoNote}` : event.summary)
+              : event.detail ?? "",
             options: permission ? ["Allow", "Deny", "Allow for all"] : event.choices ?? [],
             requestId: event.requestId,
+            ...(!permission && event.multiple ? { multiple: true } : {}),
             ...(autoAllow ? { answered: "Allow" } : {}),
           },
       });
@@ -1767,13 +1774,18 @@ bus.subscribe((event: RuntimeEvent) => {
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
         if (existing?.card && !existing.card.answered) {
+          // multibot: przy `answer` treść odpowiedzi zna wyłącznie klient,
+          // który ją wysłał (zdarzenie niesie samo `behavior`). Wpisanie tu
+          // słowa „answer" psuło kartę potwierdzenia, więc zostawiamy pole
+          // pustę i czekamy na PATCH /cards od tego klienta.
+          const label = event.behavior === "always" ? "Allow for all"
+            : event.behavior === "allow" ? "Allow"
+              : event.behavior === "deny" ? "Deny"
+                : null;
           const patched = store.patchMessage(event.threadId, messageId, {
             card: {
               ...existing.card,
-              answered: event.behavior === "always" ? "Allow for all"
-                : event.behavior === "allow" ? "Allow"
-                  : event.behavior === "deny" ? "Deny"
-                    : event.behavior,
+              ...(label ? { answered: label } : {}),
               dismissed: event.source !== "user",
             },
           });
@@ -1829,6 +1841,22 @@ bus.subscribe((event: RuntimeEvent) => {
       // bot's previous, unrelated answer to a bot that never asked for it.
       const saidThisTurn = (turnAssistantText.get(event.threadId) ?? []).join("\n").trim();
       turnAssistantText.delete(event.threadId);
+      // multibot: tura, która nie napisała ANI SŁOWA, znikała bez śladu —
+      // `busy` gasło, pasek maskotki wracał do spoczynku i w transkrypcie nie
+      // było nic. Zgłoszenie Kacpra 10.09.2026 (bot „Ogar", 16:23): model
+      // odpowiedział na `ask_user`, po czym oddał PUSTĄ odpowiedź końcową,
+      // więc `item.completed`/`assistant_text` nigdy nie przyszło. Dla
+      // człowieka to nie do odróżnienia od zgubionej wiadomości, więc cisza
+      // dostaje widoczny ślad. Tylko w turach, na które ktoś CZEKA: rozmowa
+      // bot↔bot milczy z projektu (`[NO REPLY]`).
+      const origin = turnOrigin.get(bot.id);
+      const silentNote = !saidThisTurn && !frame && (origin === "user" || origin === "routine")
+        ? t(
+          "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
+          '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
+        )
+        : "";
+      if (silentNote) pushMessage({ role: "bot", kind: "text", text: silentNote });
       turnUsedTool.delete(event.threadId);
       turnUserText.delete(event.threadId);
       // A group turn has no peer to answer: the loop that asked is waiting.
@@ -1855,7 +1883,10 @@ bus.subscribe((event: RuntimeEvent) => {
           console.warn(`[multibot] peer reply from ${bot.id} failed:`, error instanceof Error ? error.message : error),
         );
       }
-      endTurnPush(bot.id, "finished", lastReply.slice(0, 120) || t("skończył pracę", "finished working"));
+      // multibot: treścią powiadomienia jest to, co bot powiedział W TEJ TURZE.
+      // `lastReply` chodzi po całym wątku, więc po niemej turze telefon
+      // pokazywał STARĄ odpowiedź, jakby przyszła nowa.
+      endTurnPush(bot.id, "finished", (saidThisTurn || silentNote || lastReply).slice(0, 120) || t("skończył pracę", "finished working"));
       clearTurnPolicy(bot.threadId);
       activeCommsDepth.delete(bot.id); // multibot (F9): tura skończona — licznik też
       turnModelByThread.delete(event.threadId); // multibot (F12): sprzątanie badge
@@ -3508,10 +3539,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const choices = Array.isArray(body.choices)
               ? body.choices.map((choice: unknown) => String(choice).trim()).filter(Boolean).slice(0, 5)
               : [];
+            // multibot: tytułem karty jest samo pytanie, `detail` idzie pod nim
+            // drobnym drukiem. `multiple` przełącza kartę na checkboxy —
+            // człowiek wybiera kilka odpowiedzi i zatwierdza jednym przyciskiem.
             const answer = await askOwnerAndWait(caller.threadId, {
-              title: t("Bot ma pytanie", "Your bot has a question"),
-              subtitle: question,
+              title: question,
+              subtitle: String(body.detail ?? "").trim().slice(0, 400),
               options: choices,
+              ...(body.multiple === true && choices.length > 1 ? { multiple: true } : {}),
             });
             return json(res, 200, { answer });
           }
@@ -4349,6 +4384,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           ...existing.card,
           ...(body.answered !== undefined ? { answered: body.answered } : {}),
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
+          // multibot: potwierdzenie dostarczenia odpowiedzi — klient ustawia je
+          // dopiero po odpowiedzi serwera, więc przeżywa przeładowanie i widzą
+          // je pozostałe otwarte okna.
+          ...(body.delivered !== undefined ? { delivered: Boolean(body.delivered) } : {}),
         },
       });
       broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });

@@ -46,7 +46,10 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("coworker on a messenger");
     expect(text).toContain("As an AI");
     expect(text).toContain("On it:");
-    expect(text).toContain("ask_user(question, choices)` is the ONLY way");
+    expect(text).toContain("ask_user(question, choices, multiple, detail)` is the ONLY way");
+    // multibot: format pytania musi opisywać wielokrotny wybór, inaczej model
+    // nigdy z niego nie skorzysta
+    expect(text).toContain("multiple: true");
     expect(text).toContain("# Human writing style");
     // Wyjatek na pogrubienia: odpowiedz krokowa MA miec wytluszczony poczatek
     // punktu (tego chce Kacper), zwykla rozmowa nadal bez pogrubien.

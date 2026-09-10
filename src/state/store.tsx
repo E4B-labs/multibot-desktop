@@ -53,6 +53,11 @@ export interface OptionCardData {
   kind?: "computer-handoff" | "connect";
   /** karty `connect`: konektor, który otwiera przycisk „Podłącz". */
   connector?: ConnectorTarget;
+  /** multibot: pytanie wielokrotnego wyboru — checkboxy + „Zatwierdź".
+   *  Odpowiedź wraca jako wybrane etykiety rozdzielone przecinkiem. */
+  multiple?: boolean;
+  /** multibot: odpowiedź przyjęta przez serwer, czyli dojechała do bota. */
+  delivered?: boolean;
 }
 
 /** Skill widziany przez czat: nazwa do podświetlenia + opis do popovera. */
@@ -279,6 +284,8 @@ type Action =
   | { type: "selectComputer"; id: string }
   | { type: "send"; botId: string; text: string; reasoning?: string; attachmentIds?: string[]; replyToId?: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
+  /** multibot: serwer przyjął odpowiedź — karta potwierdzenia mówi „odebrane". */
+  | { type: "cardDelivered"; botId: string; messageId: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot"; visibility?: "team" | "private" }
   | { type: "botAdded"; bot: Bot }
@@ -412,11 +419,15 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, selectedId: action.id };
     // optimistic card settle; the server's message.patch confirms it later
     case "answerCard":
+      // multibot: karta NIE znika po kliknięciu — zamienia się w potwierdzenie
+      // (pytanie + wybór + „wysłano do X"), które zostaje w transkrypcie.
       return withMascotMotion(
-        patchCard(state, action.botId, action.messageId, { answered: action.answer, dismissed: true }),
+        patchCard(state, action.botId, action.messageId, { answered: action.answer }),
         action.botId,
         "working",
       );
+    case "cardDelivered":
+      return patchCard(state, action.botId, action.messageId, { delivered: true });
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "botAdded":
@@ -916,8 +927,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
+          // multibot: „odebrane" dopiero, gdy serwer POTWIERDZI przyjęcie —
+          // `/respond` wraca po oddaniu odpowiedzi czekającemu narzędziu bota,
+          // `/messages` po wpuszczeniu jej w jego kolejkę tur. Do tego czasu
+          // karta potwierdzenia mówi „wysłano do X".
+          const delivered = () => {
+            rawDispatch({ type: "cardDelivered", botId: action.botId, messageId: action.messageId });
+            persistCard(action.botId, action.messageId, { delivered: true });
+          };
+          persistCard(action.botId, action.messageId, { answered: action.answer });
           if (card?.requestId) {
-            persistCard(action.botId, action.messageId, { answered: action.answer, dismissed: true });
             const behavior =
               action.answer === "Allow" ? "allow"
                 : action.answer === "Allow for all" ? "always"
@@ -930,13 +949,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 behavior,
                 message: behavior === "answer" ? action.answer : undefined,
               }),
-            }).catch(showError);
+            }).then(delivered, showError);
           } else {
-            persistCard(action.botId, action.messageId, { answered: action.answer, dismissed: true });
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
               body: JSON.stringify({ text: action.answer }),
-            }).catch(showError);
+            }).then(delivered, showError);
           }
           break;
         }
