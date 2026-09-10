@@ -1,6 +1,7 @@
 // multibot (H2): the parts of the computer that are decidable without a daemon.
 // The container lifecycle itself is covered by the H0 spike against a real
 // image, not here.
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +13,7 @@ import {
   dockerCommand,
   ensureComputer,
   parsePortOutput,
+  rememberReadyPorts,
 } from "./hosted-computer.ts";
 
 describe("naming", () => {
@@ -69,6 +71,25 @@ describe("ensureComputer", () => {
     const [a, b] = await Promise.all([ensureComputer(), ensureComputer()]);
     expect(a).toEqual(b);
     expect(a.state).toBe("error");
+  });
+
+  it("skips docker while the last known browser still answers its CDP probe", async () => {
+    // Docker is refused under vitest, so a "ready" answer can only have come
+    // from the probe shortcut — the ~10 s of `wsl docker …` per turn on Windows.
+    const cdp = createServer((_req, res) => res.end("{}"));
+    await new Promise<void>((resolve) => cdp.listen(0, "127.0.0.1", resolve));
+    const port = (cdp.address() as { port: number }).port;
+    try {
+      rememberReadyPorts({ cdp: port, novnc: port, api: port });
+      expect((await ensureComputer()).state).toBe("ready");
+      cdp.close();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Browser gone → back to the real path, which is refused here.
+      expect((await ensureComputer()).state).toBe("error");
+    } finally {
+      rememberReadyPorts(null);
+      cdp.close();
+    }
   });
 });
 

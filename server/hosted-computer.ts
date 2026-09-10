@@ -274,8 +274,21 @@ async function ensureNative(): Promise<ComputerStatus> {
   return { state: (await probeReady(ports)) ? "ready" : "provisioning", ports };
 }
 
+/** Ports of the last computer that answered its CDP probe. A turn that finds the
+ *  browser still answering on them skips the docker round trip entirely —
+ *  on Windows every `docker …` is a `wsl` launch (measured 5.4 s for
+ *  `inspect` alone, plus one `port` call per published port), and it ran at the
+ *  start of EVERY turn, so each bot answer carried ~10 s of dead time. */
+let lastReadyPorts: Record<PortName, number> | null = null;
+/** Test hook: pretend a computer answered on these ports. */
+export function rememberReadyPorts(ports: Record<PortName, number> | null): void {
+  lastReadyPorts = ports;
+}
+
 async function ensureOnce(limits: ComputerLimits): Promise<ComputerStatus> {
   if (BACKEND === "native") return ensureNative();
+  if (lastReadyPorts && (await probeReady(lastReadyPorts))) return { state: "ready", ports: lastReadyPorts };
+  lastReadyPorts = null;
   try {
     const running = await inspectRunning();
     if (running === null) {
@@ -298,7 +311,9 @@ async function ensureOnce(limits: ComputerLimits): Promise<ComputerStatus> {
 
   const ports = await readPorts();
   if (!ports) return { state: "provisioning", detail: "ports not published yet" };
-  return { state: (await probeReady(ports)) ? "ready" : "provisioning", ports };
+  const ready = await probeReady(ports);
+  if (ready) lastReadyPorts = ports;
+  return { state: ready ? "ready" : "provisioning", ports };
 }
 
 /**
