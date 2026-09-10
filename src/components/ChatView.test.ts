@@ -28,10 +28,31 @@ function bubbleLines(): string[] {
     .filter((line) => line.includes("rounded-2xl") && line.includes("py-[5px]"));
 }
 
-/** Szerokości z linii, które opisują sam dymek. */
+/** Linie wrappera-kolumny nad dymkiem: to na nim siedzi teraz sufit
+ *  szerokości (`max-w-[…]`) — stopka (TTS/kopiuj) wyszła z dymka pod niego,
+ *  więc dymek i stopka dzielą jedną kolumnę o wspólnym suficie. */
+function wrapperLines(): string[] {
+  // Wrapper znajdujemy przez kotwicę do dymka: to najbliższa NAD dymkiem
+  // linia z `flex-col`. Sam grep po `flex-col` + `max-w-[` łapał też kolumnę
+  // załączników (`max-w-[70%] … gap-2`), która dymkiem nie jest.
+  const lines = chat.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!(lines[i].includes("rounded-2xl") && lines[i].includes("py-[5px]"))) continue;
+    for (let j = i - 1; j >= 0 && j >= i - 30; j--) {
+      if (lines[j].includes("flex-col")) {
+        out.push(lines[j]);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Szerokości z linii wrapperów kolumn dymków. */
 function bubbleWidths(): string[] {
   const out: string[] = [];
-  for (const line of bubbleLines()) {
+  for (const line of wrapperLines()) {
     if (!line.includes("max-w-[")) continue;
     const at = line.indexOf("max-w-[") + "max-w-[".length;
     out.push(line.slice(at, line.indexOf("]", at)));
@@ -50,18 +71,25 @@ describe("szerokość dymków czatu", () => {
     expect(Number.parseInt(bubbleWidths()[0], 10)).toBeGreaterThanOrEqual(80);
   });
 
-  // multibot: `max-w-` to sufit, nie szerokość — dymek jest elementem flexa,
-  // więc kurczy się do treści i jednoliniowa odpowiedź bota („Sesja wygasła,
-  // loguję się ponownie.") zajmuje tyle, ile potrzebuje. `w-full` w tej samej
-  // klasie zamienia sufit w szerokość na sztywno i każdy dymek staje się
-  // pasem na całą kolumnę. Mobilna kopia webui zrobiła dokładnie to (Kacper
-  // 08.09, zrzut z telefonu), stąd strażnik po tej stronie.
+  // multibot: `max-w-` to sufit, nie szerokość — wrapper kolumny jest
+  // elementem flexa, więc kurczy się do treści i jednoliniowa odpowiedź bota
+  // („Sesja wygasła, loguję się ponownie.") zajmuje tyle, ile potrzebuje.
+  // `w-full` w tej samej klasie zamienia sufit w szerokość na sztywno i każdy
+  // dymek staje się pasem na całą kolumnę. Mobilna kopia webui zrobiła
+  // dokładnie to (Kacper 08.09, zrzut z telefonu), stąd strażnik po tej
+  // stronie. Sufit pilnujemy na wrapperze (tam się przeniósł), a `w-full`
+  // nie może wrócić ani na wrapper, ani na sam dymek.
   it("dymek ma sufit szerokości, a nie sztywną pełną szerokość", () => {
-    const lines = bubbleLines();
-    expect(lines.length, "nie znalazłem linii dymków").toBeGreaterThanOrEqual(2);
-    for (const line of lines) {
-      expect(line, `dymek bez sufitu szerokości: ${line.trim()}`).toContain("max-w-[");
-      // `\b` nie wystarcza: w `max-w-full` przed „w" też stoi granica słowa.
+    const wrappers = wrapperLines();
+    expect(wrappers.length, "nie znalazłem wrapperów dymków").toBeGreaterThanOrEqual(2);
+    // `\b` nie wystarcza: w `max-w-full` przed „w" też stoi granica słowa.
+    for (const line of wrappers) {
+      expect(line, `wrapper bez sufitu szerokości: ${line.trim()}`).toContain("max-w-[");
+      expect(line, `wrapper przypięty do pełnej szerokości: ${line.trim()}`).not.toMatch(/(?<![-\w])w-full\b/);
+    }
+    const bubbles = bubbleLines();
+    expect(bubbles.length, "nie znalazłem linii dymków").toBeGreaterThanOrEqual(2);
+    for (const line of bubbles) {
       expect(line, `dymek przypięty do pełnej szerokości: ${line.trim()}`).not.toMatch(/(?<![-\w])w-full\b/);
     }
   });
@@ -94,9 +122,15 @@ const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("czat nie przewija się w bok", () => {
   it("oba dymki kurczą się i łamią długie tokeny", () => {
-    const bubbles = chat
-      .split(/\r?\n/)
-      .filter((line) => line.includes("rounded-2xl") && line.includes("py-[5px]") && line.includes("max-w-["));
+    // sufit siedzi na wrapperze kolumny, więc to on musi mieć `min-w-0`,
+    // żeby jako element flexa umiał zejść poniżej min-content…
+    const wrappers = wrapperLines();
+    expect(wrappers.length).toBeGreaterThanOrEqual(2);
+    for (const line of wrappers) {
+      expect(line, `wrapper bez min-w-0: ${line.trim()}`).toContain("min-w-0");
+    }
+    // …a sam dymek dalej łamie długie tokeny i też się kurczy.
+    const bubbles = bubbleLines();
     expect(bubbles.length).toBeGreaterThanOrEqual(2);
     for (const line of bubbles) {
       expect(line, `dymek bez min-w-0: ${line.trim()}`).toContain("min-w-0");
@@ -201,7 +235,12 @@ describe("karta bot↔bot otwiera pokój", () => {
     for (const label of ["Napisano do", "Messaged", "Wiadomość od", "Message from"]) {
       expect(card, `brak kierunkowego opisu ${label}`).toContain(label);
     }
-    expect(card).toContain("const avatars = sent ? [actor, ...peers] : [actor];");
+    expect(card).not.toContain("const avatars = sent ? [actor, ...peers] : [actor];");
+    expect(card).toContain("id !== currentBotId");
+    expect(card).toContain("bot.id === currentBotId");
+    expect(card).toContain('"--bot": BOT_COLORS[bot.color]');
+    expect(card).toContain('dispatch({ type: "select", id: bot.id })');
+    expect(card).toContain("stopPropagation");
   });
 
   it("obie karty wchodzą do pokoju tym samym helperem", () => {
@@ -211,11 +250,16 @@ describe("karta bot↔bot otwiera pokój", () => {
 });
 
 describe("małe awatary rozmów botów", () => {
-  it("oddziela stos avatarów w karcie aktywności", () => {
+  it("umieszcza pojedynczy mały avatar w chipie obok nazwy", () => {
     const card = chat.slice(chat.indexOf("function PeerActivity"), chat.indexOf("function RoomChip"));
-    expect(card).toContain("bg-app ring-2 ring-app");
+    expect(card).toContain('role="link"');
+    expect(card).toContain('size={20}');
     expect(card).toContain('shape="blob"');
     expect(card).toContain("{...sidebarAvatarProps(bot)}");
+    expect(card).toContain("inline-flex items-center gap-1 rounded-full");
+    expect(card).not.toContain("-space-x-1");
+    // obwódka hovera nie może być obcinana przez `overflow-hidden` wiersza
+    for (const token of ["overflow-hidden", "p-1 -m-1", "items-center"]) expect(card).toContain(token);
     expect(card).not.toContain("state={stateForBot(bot)}");
   });
 

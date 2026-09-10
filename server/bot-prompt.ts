@@ -125,7 +125,10 @@ export function connectionsBlock(
     mounted.length
       ? `You ARE connected. Mounted for you in THIS turn:\n${mounted.map((line) => `- ${line}`).join("\n")}`
       : "Nothing is mounted for you in THIS turn: you work with your own built-in abilities only.",
-    "When you are asked whether you are connected, what you are connected to, what tools you have or what you can do, answer from exactly this list: name the connections above and say plainly that anything not listed is unavailable to you this turn. Never claim you have no tools, no computer and no connections while something is listed here.",
+    // multibot: „never claim you have no computer" czytało się jak zakaz
+    // powiedzenia prawdy botowi, który komputera NIE dostał (blok niżej każe mu
+    // to powiedzieć wprost). Zakaz dotyczy wyłącznie tego, co JEST na liście.
+    "When you are asked whether you are connected, what you are connected to, what tools you have or what you can do, answer from exactly this list: name the connections above and say plainly that anything not listed is unavailable to you this turn. Never deny a connection that is listed here.",
   ].join("\n");
 }
 
@@ -263,6 +266,7 @@ export function botSystemPrompt(
   const taggedReplies = o.taggedReplies ?? "";
   const agents = Boolean(integrations.agents);
   const computer = Boolean(integrations.localComputer);
+  const web = Boolean(integrations.web || integrations.webNative);
   const currentUser = o.currentUser;
 
   // Driver-neutral workspace context: every driver receives the same durable
@@ -334,7 +338,7 @@ export function botSystemPrompt(
     agents &&
       "Missing connections — when a task needs a service you are not connected to, call `request_connection(connector, why)` instead of describing the steps; never pretend the action happened. The card does not block you: finish the turn saying what you will do once it is connected.",
     agents &&
-      "Questions — `ask_user(question, choices)` is the ONLY way to ask the human anything. Whenever you lack a decision or data you cannot obtain yourself, call it: one question per call, with 2-5 ready answers as `choices`. NEVER end a message with a question mark (`?`) in plain text — every question must go through `ask_user` and the human answers via the in-chat card. Do not ask about something a tool can check.",
+      "Questions — `ask_user(question, choices, multiple, detail)` is the ONLY way to ask the human anything. Whenever you lack a decision or data you cannot obtain yourself, call it: one question per call, with 2-5 ready answers as `choices`. `question` is the card's title, so keep it to one short line and put any background in `detail` (optional, shown small underneath). Set `multiple: true` whenever more than one of the choices can be right at the same time (days, features, files) — the card then shows checkboxes and a Confirm button, and the answer comes back as the chosen labels joined by commas; leave it out only when the answers are mutually exclusive, and never put a comma inside a choice label. NEVER end a message with a question mark (`?`) in plain text — every question must go through `ask_user` and the human answers via the in-chat card. Do not ask about something a tool can check.",
     agents &&
       "Question enforcement — if a turn ever needs a human answer, your FINAL action must be a single `ask_user` tool call; after it, STOP and produce no further prose. A message that ends in `?` without a tool call is a rule violation.",
     // multibot: logowanie/2FA/captcha to nie jest pytanie w tekście — człowiek
@@ -359,10 +363,30 @@ export function botSystemPrompt(
     // search pokazuje namespaces, nie pojedyncze narzędzia).
     computer &&
       "To open a URL call navigate(url) — prefer it over shell commands. The shell tools you may also have (bash, exec_command, run_command) run on the HOST machine, never inside your computer; for anything on the computer use only the computer tools listed for you above. If a computer tool is not visible, search for it in the mcp__computer tool namespace.",
-    // multibot: zdanie o komputerze jest warunkowe razem z blokiem wyżej —
-    // obiecywanie `browser_navigate` botowi bez zamontowanego komputera każe mu
-    // szukać narzędzi, których nie dostał.
-    `Web search and fetch — you have \`web_search(query)\` to search the internet and \`web_extract(url)\` to fetch and read a page (this is your \`fetch\`). Use them for any question needing current information, documentation, or URL content.${computer ? " If you need to interact with the page, use your computer's `browser_navigate`/`browser_snapshot` etc. instead of saying you cannot browse." : ""} Budget ~25 tool steps: try web search${computer ? ", then computer," : ","} then CLI tools; say what blocked you only after all are exhausted.`,
+    // multibot: „użyj komputera, wejdź na youtube" kończyło się opowiadaniem —
+    // model pisał, co ZROBI, i na końcu twierdził, że film jest otwarty, choć
+    // nie padło ani jedno wywołanie. Zmierzone (D:\tmp\mb-cu-evidence): z
+    // zamontowanym komputerem model woła narzędzia sam, więc regułą, której
+    // brakowało, jest ta jedna: relacja bez wyniku narzędzia to kłamstwo.
+    computer &&
+      "Act, do not narrate. \"Use your computer\", \"open the browser\", \"go to <site>\" is an instruction to CALL a computer tool in THIS turn — navigate/read_page/find/click/actions — not to describe what you would do. Say what you did only AFTER the tool answered, and only what its answer says. Never claim you opened a page, clicked something, played a video or logged in unless a computer tool call returned a result showing it. If a computer tool returns an error, quote that error and say the step failed — never fill the gap with a story.",
+    // multibot: bot BEZ komputera nie dostawał o nim ani słowa, więc na „użyj
+    // komputera" wymyślał sesję przeglądania, której nie było (zmierzone:
+    // probe-before-nocomputer, zero wywołań, „YouTube MrBeast video open").
+    // Blok jest lustrem tego wyżej: brak narzędzia też trzeba nazwać.
+    // `web_search` chodzi za tą samą bramką `browser` co komputer (index.ts:2532),
+    // więc oferta jest warunkowa — inaczej to zdanie samo popełniałoby błąd,
+    // który naprawia: obiecywałoby narzędzie, którego bot nie dostał.
+    // `integrations.computer` to chmurowy box: dziś nikt go nie montuje, ale
+    // `drivers/claude.ts` nadal z niego stawia `mcp__computer`, więc bot z boxem
+    // nie może dostać zdania „nie masz komputera" obok własnych narzędzi.
+    !computer && !integrations.computer &&
+      `You have NO computer this turn — no browser, no screen, no shell inside a computer, and no computer tools in your tool list. If the user asks you to use the computer, open a browser or go to a site, say plainly that the computer is not available to you this turn${web ? " and offer `web_search`/`web_extract` instead" : ""}. Never describe browsing, clicking or playing anything.`,
+    // Ta linia obiecywała `web_search` bezwarunkowo, a web stoi za tą samą
+    // bramką `browser` co komputer (index.ts:2532) — bot z wyłączoną wtyczką
+    // dostawał ofertę narzędzia, którego nie ma. Ten sam błąd, co wyżej.
+    web &&
+      `Web search and fetch — you have \`web_search(query)\` to search the internet and \`web_extract(url)\` to fetch and read a page (this is your \`fetch\`). Use them for any question needing current information, documentation, or URL content.${computer ? " If you need to interact with the page, use your computer's `navigate`/`read_page` etc. instead of saying you cannot browse." : ""} Budget ~25 tool steps: try web search${computer ? ", then computer," : ","} then CLI tools; say what blocked you only after all are exhausted.`,
     integrations.composio &&
       `Connected apps — Composio connectors (Gmail, calendar, CRM and the rest) are a dynamic toolset: before you tell the user you have no access to a service, look for its tool with COMPOSIO_SEARCH_TOOLS. If the service is not connected, say plainly that they have to connect it in Plugins — never pretend the action happened.${bot.composioAccounts && Object.keys(bot.composioAccounts).length ? ` This bot's selected connected accounts are ${JSON.stringify(bot.composioAccounts)}; pass matching connected_account_id when a Composio tool supports it.` : ""}`,
     agents &&

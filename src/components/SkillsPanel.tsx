@@ -1,7 +1,7 @@
 // multibot: F8 — skille bota w prawym slocie (400px, jak Routines).
 // Provider-neutral skills. Harness stores them per bot and injects enabled
 // instructions into every provider turn.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -12,6 +12,7 @@ import {
   Pencil,
   Square,
   Trash2,
+  Upload,
   Wand2,
   X,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { cn } from "@/lib/cn";
 import { SkillRef } from "./SkillRef";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
+import { parseSkillFile, type ParsedSkillFile } from "@/lib/skillFile";
 
 // Lokalny helper jak w RoutinesPanel, plus `status` na błędzie: teach/start
 // odróżnia "brak otwartej karty" (404) od realnej awarii po kodzie, nie po treści.
@@ -423,6 +425,15 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillInstructions, setNewSkillInstructions] = useState("");
   const [creating, setCreating] = useState(false);
+  // multibot: .md z pulpitu upuszczony na panel = nowa umiejętność.
+  // W Electronie `dataTransfer.files` działa w rendererze bez IPC. Android
+  // WebView nie zna upuszczania plików — kod jest tam martwy, nie szkodliwy.
+  const [dragOver, setDragOver] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const dragCounter = useRef(0);
+  // ref, nie `dropping` — stan nie zdąży się odświeżyć między dwoma szybkimi
+  // zrzutami tego samego pliku, a drugi dostałby 409
+  const inFlight = useRef(false);
 
   const load = () =>
     api(skillsRoot).then((ss: Skill[]) => {
@@ -459,6 +470,67 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
       .finally(() => setBusy(null));
   };
 
+  // Najpierw rozbiera się WSZYSTKIE pliki, dopiero potem leci pierwszy POST.
+  // Nie dla elegancji: udany POST rozgłasza `workspace`, App podbija
+  // `workspaceVersion`, a ten panel wisi na `key` z tej wartości — czyli
+  // przemontowuje się i gubi swój stan. Komunikat o błędzie ustawiony PO
+  // pierwszym udanym zapisie nigdy by się nie pokazał.
+  // ponytail: błąd z samego serwera (np. 409 na drugim z trzech plików) wciąż
+  // może zginąć w tym przemontowaniu — `workspaceVersion` jest licznikiem
+  // GLOBALNYM, więc podbija go też bot zapisujący pamięć w tle. Gdy zacznie
+  // boleć, błąd musi wyjść z panelu do store'a (albo `key` przestać zależeć
+  // od tej wartości).
+  const dropFiles = useCallback(async (files: File[]) => {
+    if (inFlight.current) return;
+    const bad = files.filter((file) => !/\.(md|markdown)$/i.test(file.name));
+    if (bad.length || !files.length) {
+      // Cały zrzut idzie do kosza, nie tylko złe pliki — komunikat musi to
+      // powiedzieć wprost, inaczej przy „a.md b.md logo.png" użytkownik jest
+      // przekonany, że dwa skille jednak weszły.
+      const names = bad.map((file) => file.name).join(", ");
+      setError(
+        polish
+          ? `Same pliki .md, proszę — nic nie dodano${names ? ` (odrzucone: ${names})` : ""}`
+          : `Only .md skill files — nothing added${names ? ` (rejected: ${names})` : ""}`,
+      );
+      return;
+    }
+    // serwer tnie instrukcje na 100 000 znaków BŁĘDEM, nie przycięciem —
+    // lepiej powiedzieć to przed wysłaniem całego pliku
+    const big = files.find((file) => file.size > 100_000);
+    if (big) {
+      setError(
+        polish
+          ? `${big.name} jest za duży na umiejętność (limit 100 000 znaków)`
+          : `${big.name} is too large for a skill (100,000 character limit)`,
+      );
+      return;
+    }
+    inFlight.current = true;
+    setDropping(true);
+    setError(null);
+    try {
+      const parsed: ParsedSkillFile[] = [];
+      for (const file of files) {
+        try {
+          parsed.push(parseSkillFile(file.name, await file.text()));
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : String(e));
+          return;
+        }
+      }
+      for (const skill of parsed) {
+        const created: Skill = await api(skillsRoot, { method: "POST", body: JSON.stringify(skill) });
+        setSkills((items) => [...items, created]);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlight.current = false;
+      setDropping(false);
+    }
+  }, [polish, skillsRoot]);
+
   const create = () => {
     if (creating || !newSkillName.trim() || !newSkillInstructions.trim()) return;
     setCreating(true);
@@ -469,7 +541,37 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
   };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[360px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <aside
+      className={cn(
+        "animate-panel-in relative flex h-full w-[360px] shrink-0 flex-col border-l border-hairline/40 bg-panel",
+        dragOver && "outline outline-2 outline-dashed outline-offset-[-6px] outline-accent/70",
+      )}
+      onDragEnter={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragCounter.current++;
+        setDragOver(true);
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragCounter.current = Math.max(0, dragCounter.current - 1);
+        if (dragCounter.current === 0) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current = 0;
+        setDragOver(false);
+        void dropFiles([...e.dataTransfer.files]);
+      }}
+    >
       {/* Header */}
       <div data-shell-header className="flex items-center justify-between px-4 py-3">
         <span className="w-[26px]" />
@@ -586,12 +688,32 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
           </>
         )}
 
+        {dropping && (
+          <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-secondary">
+            <Loader2 size={13} className="animate-spin" />
+            {polish ? "Wczytuję umiejętność…" : "Adding skill…"}
+          </div>
+        )}
+
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
             {error}
           </div>
         )}
       </div>
+
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-panel/80 backdrop-blur-[2px]">
+          <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-accent/60 bg-card px-8 py-6 text-center shadow-2xl">
+            <span className="flex size-11 items-center justify-center rounded-full bg-accent/15 text-accent">
+              <Upload size={22} />
+            </span>
+            <span className="text-[14px] font-semibold text-ink">
+              {polish ? "Upuść tu plik .md" : "Drop .md skill here"}
+            </span>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
