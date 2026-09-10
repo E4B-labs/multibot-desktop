@@ -95,6 +95,9 @@ import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
 import { onionSuppressed, startTor, torBinary, torEnabled, TOR_INGRESS_PORT, type Tor } from "./tor.ts";
 
+// multibot: id konektorów, dla których trwa właśnie „testuj połączenie".
+// Sonda stdio odpala prawdziwy proces na maks. 15 s — jedna naraz na konektor.
+const probesInFlight = new Set<string>();
 const PORT = Number(process.env.MULTIBOT_PORT || process.env.OGB_PORT || 8799);
 // `Number("eight")` is NaN and `server.listen(NaN)` quietly picks a RANDOM free
 // port — a server nobody can find, reported as running. And 8798 is the Tor
@@ -5369,7 +5372,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     m = path.match(/^\/api\/connectors\/custom\/([\w-]+)\/test$/);
     if (m && method === "POST") {
       const id = m[1];
-      const body = await readBody(req).catch(() => ({}));
+      // Bez `catch(() => ({}))`: zjedzony błąd ciała cicho przechodził na
+      // sondowanie ZAPISANEGO konektora, więc panel pokazywał zielone
+      // „połączono" dla wsadu, którego serwer nigdy nie sparsował.
+      let body: Record<string, unknown>;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return json(res, 400, { error: e instanceof Error ? e.message : "invalid body" });
+      }
       let transport: mcpConnectors.McpConnector["transport"];
       try {
         const draft = body && typeof body === "object" && body.transport && typeof body.transport === "object";
@@ -5381,14 +5392,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       } catch (e) {
         return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
       }
-      const probe = await probeMcp(transport);
+      // Jedna sonda na konektor naraz: każda sonda stdio to żywy proces na
+      // 15 s, a bez tej bramki N równoległych POST-ów to N procesów z jednego
+      // kliknięcia (na telefonie wystarczy kilka, żeby położyć harness).
+      if (probesInFlight.has(id)) return json(res, 429, { error: "a test for this connector is already running" });
+      probesInFlight.add(id);
+      const probe = await probeMcp(transport).finally(() => probesInFlight.delete(id));
       if (!probe.ok) return json(res, 200, { ok: false, error: probe.error });
       // Licznik na karcie katalogu bierze się STĄD, nie z sondy przy renderze —
       // ale tylko wtedy, gdy zmierzony transport to DOKŁADNIE ten zapisany.
       // Inaczej szkic z ciała HTTP podstawiłby liczbę pod konektor, którego
       // nikt nigdy nie odpytał.
       const stored = mcpConnectors.connectors().find((c) => c.id === id);
-      if (stored && JSON.stringify(stored.transport) === JSON.stringify(transport)) {
+      if (stored && mcpConnectors.sameTransport(stored.transport, transport)) {
         mcpConnectors.recordProbe(id, probe.tools.length);
         Object.assign(cfg, loadConfig());
       }

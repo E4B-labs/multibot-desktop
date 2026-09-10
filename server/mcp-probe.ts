@@ -31,6 +31,26 @@ const PROTOCOL_VERSION = "2025-06-18";
 // Serwer z tysiącem narzędzi nie ma prawa rozdmuchać odpowiedzi API.
 const MAX_TOOLS = 200;
 const MAX_ERROR = 300;
+// Tyle wolno przeczytać z jednej odpowiedzi, po stdio i po HTTP tak samo.
+const MAX_BYTES = 1_048_576;
+
+/** Ciało odpowiedzi HTTP z budżetem bajtów — `res.text()` jest nieograniczone. */
+async function readCapped(res: Response): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += decoder.decode(value, { stream: true });
+    if (out.length > MAX_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error("MCP answer larger than 1 MB");
+    }
+  }
+  return out + decoder.decode();
+}
 
 const INITIALIZE = {
   jsonrpc: "2.0",
@@ -52,7 +72,10 @@ function redactor(transport: StdioTransport | HttpTransport): (text: string) => 
   let secrets: string[] = [];
   try {
     const bag = (transport as StdioTransport).env ?? (transport as HttpTransport).headers ?? {};
-    secrets = Object.values(bag).map(String).filter(Boolean);
+    // Tylko wartości, które mogą BYĆ sekretem. Krótkie (`DEBUG=1`,
+    // `NODE_ENV=production`) zamazywałyby swoje wystąpienia w diagnostyce,
+    // czyli psuły dokładnie ten komunikat, po który użytkownik tu przyszedł.
+    secrets = Object.values(bag).map(String).filter((v) => v.length >= 8);
   } catch {
     /* nie-obiekt w configu — nie ma czego zamazywać */
   }
@@ -92,20 +115,25 @@ function shape(init: unknown, list: unknown): ProbeResult {
  * potrafi lecieć postęp albo log, a wzięcie ich za odpowiedź dawało „działa,
  * 0 narzędzi" na zdrowym serwerze. */
 function parseRpc(text: string, id: number): unknown {
-  const frames = text.trimStart().startsWith("{")
+  // `data:` bez spacji jest równie poprawnym SSE co `data: `, a odpowiedź
+  // batchowa zaczyna się od `[`, nie od `{` — obie odpadały jako „empty".
+  const head = text.trimStart()[0];
+  const frames = head === "{" || head === "["
     ? [text]
-    : text.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6));
+    : text.split("\n").flatMap((l) => (/^data:\s?/.test(l) ? [l.replace(/^data:\s?/, "")] : []));
   if (!frames.length) throw new Error("empty MCP response");
   for (const frame of frames) {
-    let msg: { id?: unknown; error?: unknown; result?: unknown };
+    let parsed: unknown;
     try {
-      msg = JSON.parse(frame);
+      parsed = JSON.parse(frame);
     } catch {
       continue;
     }
-    if (String(msg.id) !== String(id)) continue;
-    if (msg.error) throw new Error(rpcError(msg.error));
-    return msg.result ?? null;
+    for (const msg of (Array.isArray(parsed) ? parsed : [parsed]) as { id?: unknown; error?: unknown; result?: unknown }[]) {
+      if (String(msg?.id) !== String(id)) continue;
+      if (msg.error) throw new Error(rpcError(msg.error));
+      return msg.result ?? null;
+    }
   }
   throw new Error("no MCP answer to the request");
 }
@@ -132,7 +160,10 @@ async function probeHttp(transport: HttpTransport, timeoutMs: number): Promise<P
       signal,
     });
     session = res.headers.get("mcp-session-id") || session;
-    const text = await res.text();
+    // Limit czasu tnie CZAS, nie bajty — bez tego wrogi (albo zepsuty) endpoint
+    // wpycha setki MB w stertę harnessu, zanim zdąży wybrzmieć abort. Ten sam
+    // budżet, co po stdio.
+    const text = await readCapped(res);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`.trim());
     return expectId === null ? null : parseRpc(text, expectId);
   };
@@ -164,7 +195,13 @@ function probeStdio(transport: StdioTransport, timeoutMs: number): Promise<Probe
   });
   // Awaria zapisu na stdin przychodzi ZDARZENIEM, nie wyjątkiem: bez tego
   // listenera EPIPE po serwerze, który padł od razu, przewraca cały harness.
+  // Awaria pipe'u przychodzi ZDARZENIEM na każdym z trzech strumieni — nie
+  // tylko na stdin. `killTree` leci też przy sukcesie (na Windowsie
+  // `taskkill /T /F` rwie pipe'y w trakcie czytania), więc stdout/stderr bez
+  // listenera potrafią wywalić harness nieobsłużonym `error`.
   child.stdin?.on("error", () => {});
+  child.stdout?.on("error", () => {});
+  child.stderr?.on("error", () => {});
   child.stdout?.setEncoding("utf8"); // znak UTF-8 pocięty między chunkami = zgubiona ramka
   child.stderr?.setEncoding("utf8");
 
@@ -214,12 +251,16 @@ function probeStdio(transport: StdioTransport, timeoutMs: number): Promise<Probe
         } catch {
           continue; // serwery lubią logować po stdout — ignorujemy nie-JSON
         }
-        if (msg.error && (msg.id === 1 || msg.id === 2)) return finish({ ok: false, error: clean(rpcError(msg.error)) });
-        if (msg.id === 1) {
+        // Po `String(id)`, nie po `===`: serwer odsyłający `"id":"1"` jako
+        // napis jest w JSON-RPC poprawny, a przy porównaniu ścisłym nie
+        // pasował do niczego i zdrowy serwer wisiał do limitu czasu.
+        const id = String(msg.id);
+        if (msg.error && (id === "1" || id === "2")) return finish({ ok: false, error: clean(rpcError(msg.error)) });
+        if (id === "1") {
           init = msg.result;
           send(INITIALIZED);
           send(TOOLS_LIST);
-        } else if (msg.id === 2) {
+        } else if (id === "2") {
           return finish(shape(init, msg.result));
         }
       }
@@ -227,7 +268,7 @@ function probeStdio(transport: StdioTransport, timeoutMs: number): Promise<Probe
       // wyżej. 1 MB bez jednego `\n` to nie serwer MCP, to zwykły program.
       // (Nie ucinać po długości bufora: `tools/list` z setką narzędzi i ich
       // schematami bywa grubo ponad 64 KB i przyszedłby obcięty.)
-      if (stdout.length > 1_048_576) stdout = "";
+      if (stdout.length > MAX_BYTES) stdout = "";
     });
     send(INITIALIZE);
   });

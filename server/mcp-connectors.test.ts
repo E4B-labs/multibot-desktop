@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR, loadConfig } from "./config.ts";
-import { connectorCards, connectors, recordProbe, removeConnector, saveConnector } from "./mcp-connectors.ts";
+import { connectorCards, connectors, recordProbe, removeConnector, sameTransport, saveConnector } from "./mcp-connectors.ts";
 import { mcpServers } from "./mcp-servers.ts";
 
 const STDIO = { name: "Echo", transport: { type: "stdio", command: "node", args: ["echo.mjs"], env: { TOKEN: "t" } } };
@@ -148,5 +148,25 @@ describe("mcp-servers", () => {
     saveConnector("echo", STDIO);
     expect(Object.keys(mcpServers(undefined))).toEqual(["echo"]);
     expect(mcpServers({})).toEqual({ echo: { command: "node", args: ["echo.mjs"], env: { TOKEN: "t" } } });
+  });
+});
+
+describe("sameTransport", () => {
+  it("ignores key order, because config.json gets hand-written", () => {
+    // Naglowek mcp-connectors.ts wprost zaprasza do recznej edycji configu.
+    // Porownanie wrazliwe na kolejnosc kluczy kasowalo licznik narzedzi przy
+    // KAZDYM zapisie takiego wpisu.
+    expect(sameTransport({ type: "http", url: "https://x/mcp" }, { url: "https://x/mcp", type: "http" })).toBe(true);
+    expect(
+      sameTransport(
+        { type: "stdio", command: "node", args: ["a", "b"], env: { A: "1", B: "2" } },
+        { env: { B: "2", A: "1" }, args: ["a", "b"], command: "node", type: "stdio" },
+      ),
+    ).toBe(true);
+  });
+
+  it("still sees a real difference", () => {
+    expect(sameTransport({ type: "stdio", command: "node", args: ["a"] }, { type: "stdio", command: "node", args: ["b"] })).toBe(false);
+    expect(sameTransport({ type: "http", url: "https://x/mcp" }, { type: "http", url: "https://y/mcp" })).toBe(false);
   });
 });

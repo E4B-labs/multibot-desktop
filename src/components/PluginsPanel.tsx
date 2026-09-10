@@ -83,7 +83,6 @@ function ServiceIcon({ card, className }: { card: ToolkitCard; className?: strin
 // multibot: kategorie katalogu. Identyfikatory pochodzą z serwera
 // (`server/composio.ts` — CATEGORY_IDS), etykiety zostają tutaj, bo panel
 // jest dwujęzyczny, a serwer nie zna języka klienta.
-const CATEGORY_ORDER = ["google", "productivity", "developer", "communication", "design", "data-ai", "business", "other"] as const;
 const CATEGORY_LABELS: Record<string, { pl: string; en: string }> = {
   google: { pl: "Google", en: "Google" },
   productivity: { pl: "Praca i dokumenty", en: "Productivity & documents" },
@@ -94,6 +93,9 @@ const CATEGORY_LABELS: Record<string, { pl: string; en: string }> = {
   business: { pl: "Biznes", en: "Business" },
   other: { pl: "Inne", en: "Other" },
 };
+// Kolejność sekcji i szyny = kolejność kluczy wyżej, żeby lista id istniała
+// w tym pliku dokładnie raz.
+const CATEGORY_ORDER = Object.keys(CATEGORY_LABELS);
 const categoryLabel = (id: string, polish: boolean) =>
   (CATEGORY_LABELS[id] ?? { pl: id, en: id })[polish ? "pl" : "en"];
 
@@ -148,7 +150,7 @@ function ConnectorForm({
   // multibot: wynik ostatniego PRAWDZIWEGO uścisku dłoni z serwerem MCP —
   // initialize + tools/list po stronie harnessa, nie zgadywanie z kształtu
   // formularza.
-  const [probe, setProbe] = useState<{ ok: boolean; tools?: string[]; error?: string } | null>(null);
+  const [probe, setProbe] = useState<{ ok: boolean; tools?: string[]; error?: string; serverName?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Wspólny wsad dla „Testuj" i „Zapisz" — jedno miejsce, w którym powstaje
@@ -195,7 +197,7 @@ function ConnectorForm({
     if (!p) return;
     setTesting(true);
     api(`/api/connectors/custom/${p.cleanId}/test`, { method: "POST", body: JSON.stringify(p.body) })
-      .then((r) => setProbe({ ok: Boolean(r.ok), tools: r.tools ?? [], error: r.error }))
+      .then((r) => setProbe({ ok: Boolean(r.ok), tools: r.tools ?? [], error: r.error, serverName: r.serverName }))
       .catch((e) => setProbe({ ok: false, error: e.message }))
       .finally(() => setTesting(false));
   };
@@ -206,12 +208,18 @@ function ConnectorForm({
     if (!p) return;
     setSaving(true);
     api(`/api/connectors/custom/${p.cleanId}`, { method: "PUT", body: JSON.stringify(p.body) })
-      // Sonda przy ZAPISANYM już konektorze — dopiero wtedy serwer ma gdzie
-      // zapamiętać licznik narzędzi (`recordProbe` przy nieistniejącym wpisie
-      // to no-op), więc karta pokazuje „N narzędzi" od razu po dodaniu.
-      // Nieudana sonda nie blokuje zapisu: konektor jest już w rejestrze.
-      .then(() => api(`/api/connectors/custom/${p.cleanId}/test`, { method: "POST", body: "{}" }).catch(() => null))
-      .then(onSaved)
+      .then(() => {
+        // Zamykamy OD RAZU po zapisie: konektor jest już w rejestrze, a
+        // czekanie na sondę trzymałoby „Zapisz" w spinnerze przez pełne
+        // 15 s, gdyby komenda wisiała.
+        onSaved();
+        // Sonda dopiero przy ZAPISANYM wpisie — wcześniej serwer nie ma gdzie
+        // zapamiętać licznika (`recordProbe` bez wpisu to no-op). Wynik
+        // dociąga listę drugi raz; porażka nic nie psuje.
+        void api(`/api/connectors/custom/${p.cleanId}/test`, { method: "POST", body: "{}" })
+          .then(() => onSaved())
+          .catch(() => {});
+      })
       .catch((e) => setError(e.message))
       .finally(() => setSaving(false));
   };
@@ -313,7 +321,8 @@ function ConnectorForm({
         <div className={cn("mt-2 rounded-lg px-3 py-2 text-[12px]", probe.ok ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
           {probe.ok ? (
             <>
-              {polish ? "Połączono — narzędzi: " : "Connected — "}
+              {probe.serverName ? `${probe.serverName} — ` : ""}
+              {polish ? "połączono, narzędzi: " : "connected — "}
               {probe.tools?.length ?? 0}
               {polish ? "" : " tools"}
               {probe.tools?.length ? <span className="text-ink-secondary">{` · ${probe.tools.slice(0, 6).join(", ")}`}</span> : null}
@@ -615,10 +624,20 @@ export function PluginsPanel() {
   // Odpytywanie po OAuth przeżywa zamknięcie panelu, jeśli mu na to pozwolić —
   // interwał wołałby setState na odmontowanym komponencie i odpytywał serwer
   // w kółko. Trzymamy uchwyty i kasujemy je przy odmontowaniu.
-  const pollTimers = useRef<ReturnType<typeof setInterval>[]>([]);
-  useEffect(() => () => pollTimers.current.forEach(clearInterval), []);
+  // `clearInterval` i `clearTimeout` to w przeglądarce ta sama pula uchwytów,
+  // więc jedna lista starczy na oba rodzaje zegara.
+  const pollTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    const timers = pollTimers.current;
+    return () => timers.forEach((t) => { clearInterval(t); clearTimeout(t); });
+  }, []);
 
+  // Podświetlenie w szynie idzie za KLIKNIĘCIEM, nie za pozycją scrolla —
+  // obserwator przecięć dokładałby cały mechanizm po to, żeby powiedzieć to
+  // samo w typowym użyciu (klik → skok → sekcja na górze).
+  const [jumped, setJumped] = useState<string | null>(null);
   const jumpTo = useCallback((key: string) => {
+    setJumped(key);
     sectionRefs.current.get(key)?.scrollIntoView({ block: "start", behavior: "smooth" });
   }, []);
 
@@ -685,8 +704,11 @@ export function PluginsPanel() {
         setWaitingSlug(slug);
         // pierwsze odpytanie od razu: konta z aliasem Composio zakłada już przy
         // „add", więc wiersz konta pojawia się w karcie, zanim ktokolwiek
-        // dokończy logowanie w przeglądarce
-        setTimeout(() => void refreshStatus([slug]), 800);
+        // dokończy logowanie w przeglądarce. Uchwyt trafia do tej samej listy
+        // co interwał — zamknięcie panelu w ciągu 800 ms nie może zostawić
+        // setState na odmontowanym komponencie.
+        const first = setTimeout(() => void refreshStatus([slug]), 800);
+        pollTimers.current.push(first);
         const timer = setInterval(() => {
           void refreshStatus([slug]).then((fresh) => {
             if (++tries >= 12 || fresh[slug]?.connected) {
@@ -748,10 +770,16 @@ export function PluginsPanel() {
     .filter((c) => (c.source === "custom" ? true : status[c.slug]?.connected))
     .slice(0, 6);
 
-  // sekcje w kolejności szyny; kategorie puste znikają
+  const installedSlugs = useMemo(() => new Set(installed.map((c) => c.slug)), [installed]);
+
+  // Sekcje w kolejności szyny; kategorie puste znikają. Aplikacja PODŁĄCZONA
+  // znika ze swojej kategorii i mieszka wyłącznie w „Zainstalowane" — inaczej
+  // ta sama karta stała w dwóch miejscach naraz, a stan pola etykiety jest
+  // trzymany po slugu, więc „+ Konto" otwierało input w OBU kopiach.
   const sections = useMemo(() => {
     const byCategory = new Map<string, ToolkitCard[]>();
     for (const card of composioCards) {
+      if (installedSlugs.has(card.slug)) continue;
       const id = card.category && CATEGORY_LABELS[card.category] ? card.category : "other";
       const list = byCategory.get(id);
       if (list) list.push(card);
@@ -762,7 +790,7 @@ export function PluginsPanel() {
       label: categoryLabel(id, polish),
       cards: byCategory.get(id) ?? [],
     }));
-  }, [composioCards, polish]);
+  }, [composioCards, installedSlugs, polish]);
 
   const railItems = [
     ...(installed.length || customCards.length ? [{ id: "installed", label: polish ? "Zainstalowane" : "Installed" }] : []),
@@ -807,20 +835,28 @@ export function PluginsPanel() {
         className="animate-pop-in flex max-h-[85%] w-full max-w-[640px] flex-col rounded-2xl border border-hairline/50 bg-panel p-4 shadow-2xl md:h-full md:max-h-none md:max-w-[1400px]"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* `min-w-0` na tytule i `shrink` na pigułce: przycisk domyślnie ma
+            `min-width:auto`, więc na wąskim ekranie wiersz nagłówka rozpychał
+            się i wypychał „X" poza panel. Ikon w pigułce mniej niż na
+            desktopie z tego samego powodu. */}
         <div className="flex items-center gap-3">
-          <div className="text-[17px] font-semibold text-ink">Marketplace</div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">Marketplace</div>
+          <div className="flex shrink items-center gap-2">
             {/* „N zainstalowanych ›" z ikonami połączonych aplikacji */}
             <button
               onClick={() => jumpTo("installed")}
-              className="flex items-center gap-2 rounded-full bg-raised/60 py-1 pl-2 pr-3 text-[12.5px] text-ink-secondary hover:text-ink"
+              className="flex min-w-0 items-center gap-2 whitespace-nowrap rounded-full bg-raised/60 py-1 pl-2 pr-3 text-[12.5px] text-ink-secondary hover:text-ink"
             >
               <span className="flex -space-x-1.5">
-                {installedIcons.map((card) => (
+                {installedIcons.slice(0, 3).map((card) => (
                   <ServiceIcon key={card.slug} card={card} className="size-5 rounded p-0.5" />
                 ))}
+                {installedIcons.slice(3).map((card) => (
+                  <ServiceIcon key={card.slug} card={card} className="hidden size-5 rounded p-0.5 md:grid" />
+                ))}
               </span>
-              {installedCount} {polish ? "zainstalowanych" : "installed"} ›
+              {installedCount}
+              <span className="hidden sm:inline">{polish ? " zainstalowanych" : " installed"}</span> ›
             </button>
             <RefreshCw
               size={14}
@@ -875,13 +911,18 @@ export function PluginsPanel() {
         )}
         {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
 
-        {/* wąski ekran: pigułki kategorii zamiast szyny */}
-        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1 md:hidden">
+        {/* Wąski ekran: pigułki kategorii zamiast szyny. `shrink-0`
+            obowiązkowe — bez niego kolumna flex ściska pasek i pigułki
+            wychodzą przycięte w pół. */}
+        <div className="mt-3 flex shrink-0 gap-1.5 overflow-x-auto pb-1 md:hidden">
           {railItems.map((item) => (
             <button
               key={item.id}
               onClick={() => jumpTo(item.id)}
-              className="shrink-0 rounded-full bg-raised/60 px-3 py-1 text-[12px] text-ink-secondary hover:text-ink"
+              className={cn(
+                "shrink-0 rounded-full px-3 py-1 text-[12px]",
+                jumped === item.id ? "bg-raised text-ink" : "bg-raised/60 text-ink-secondary hover:text-ink",
+              )}
             >
               {item.label}
             </button>
@@ -895,7 +936,10 @@ export function PluginsPanel() {
               <button
                 key={item.id}
                 onClick={() => jumpTo(item.id)}
-                className="rounded-lg px-3 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60 hover:text-ink"
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-left text-[13px] hover:bg-raised/60 hover:text-ink",
+                  jumped === item.id ? "bg-raised/60 font-medium text-ink" : "text-ink-secondary",
+                )}
               >
                 {item.label}
               </button>
@@ -915,7 +959,7 @@ export function PluginsPanel() {
                     <div className="mb-2 text-[13px] font-medium text-ink-secondary">
                       {polish ? "Zainstalowane" : "Installed"}
                     </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {installed.map((card) => (
                         <AppCard key={`installed-${card.slug}`} {...cardProps(card)} />
                       ))}
@@ -949,7 +993,7 @@ export function PluginsPanel() {
                   sections.map((section) => (
                     <div key={section.id} ref={setSectionRef(section.id)} className="mb-5 scroll-mt-2">
                       <div className="mb-2 text-[13px] font-medium text-ink-secondary">{section.label}</div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {section.cards.map((card) => (
                           <AppCard key={card.slug} {...cardProps(card)} />
                         ))}

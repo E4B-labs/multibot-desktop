@@ -109,8 +109,10 @@ export async function removeAccount(cfg: AppConfig, slug: string, accountId: str
 // ── marketplace catalog ────────────────────────────────────────────────
 // Sekcje marketplace'u. Etykiety siedzą w UI (tłumaczenia), tu tylko
 // identyfikatory i ich kolejność na lewej szynie.
-export type CategoryId = "google" | "productivity" | "developer" | "communication" | "design" | "data-ai" | "business" | "other";
-export const CATEGORY_IDS: CategoryId[] = ["google", "productivity", "developer", "communication", "design", "data-ai", "business", "other"];
+// Jedna lista, typ z niej wyprowadzony — dwa źródła prawdy rozjeżdżają się
+// po cichu, bo TypeScript nie ma jak sprawdzić, że są tą samą listą.
+export const CATEGORY_IDS = ["google", "productivity", "developer", "communication", "design", "data-ai", "business", "other"] as const;
+export type CategoryId = (typeof CATEGORY_IDS)[number];
 
 export interface ToolkitCard {
   slug: string;
@@ -236,7 +238,10 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
             label: t.name ?? t.slug ?? "",
             blurb: (t.meta?.description ?? t.description ?? "").slice(0, 90),
             logo: t.meta?.logo ?? t.logo ?? null,
-            category: categoryFor((t.slug ?? t.key ?? t.name ?? "").toLowerCase()),
+            category: categoryForToolkit(
+              (t.slug ?? t.key ?? t.name ?? "").toLowerCase(),
+              t.meta?.categories ?? t.categories ?? t.meta?.category ?? t.category,
+            ),
           }));
           toolkitCache = { at: Date.now(), cards };
           return { cards, source: "api" };
@@ -259,4 +264,34 @@ const CATEGORY_BY_SLUG = new Map(CURATED.map((c) => [c.slug, c.category] as cons
 /** Kategoria sluga; `other` dla wszystkiego spoza kuratorowanego katalogu. */
 export function categoryFor(slug: string): CategoryId {
   return CATEGORY_BY_SLUG.get(slug) ?? "other";
+}
+
+// ponytail: dopasowanie po słowach kluczowych, nie tabela 500 pozycji.
+// Z kluczem API katalog Composio ma ~500 toolkitów, z czego kuratorowana lista
+// zna 72 — bez tego cała reszta wpadała do „Inne" i szyna kategorii była pusta
+// dokładnie na skonfigurowanej ścieżce. Composio wozi własne kategorie
+// (`meta.categories[].name`), ale ich nazewnictwo jest jego, nie nasze, więc
+// mapujemy je na nasze kubełki. Jeśli kiedyś zacznie zwracać stabilne id,
+// zastąpić to mapą id→id, nie rozbudowywać regeksów.
+const CATEGORY_KEYWORDS: [RegExp, CategoryId][] = [
+  [/\bcrm\b|sales|marketing|commerce|payment|billing|invoic|support|helpdesk|ticket|finance|account|hr\b|recruit/i, "business"],
+  [/developer|\bcode\b|coding|version.?control|\bci\b|\bcd\b|devops|infrastructur|monitor|observab|error|deploy|hosting|issue.?track/i, "developer"],
+  [/communicat|messaging|\bchat\b|social|email|\bsms\b|voice|community/i, "communication"],
+  [/design|media|video|image|photo|audio|music|\bcms\b|content.?management|publish|website.?builder/i, "design"],
+  [/\bai\b|\bml\b|machine.?learning|\bllm\b|model|data\b|analytic|search|database|warehouse|scrap|crawl/i, "data-ai"],
+  [/productiv|document|\bfile\b|storage|calendar|schedul|note|task|project.?manage|meeting|spreadsheet|knowledge/i, "productivity"],
+];
+
+/** Kategoria dla karty z API Composio: najpierw nasza lista, potem kategorie
+ * zwrócone przez Composio po słowach kluczowych, na końcu `other`. */
+export function categoryForToolkit(slug: string, categories: unknown): CategoryId {
+  const known = CATEGORY_BY_SLUG.get(slug);
+  if (known) return known;
+  if (/^google/.test(slug)) return "google";
+  const names = (Array.isArray(categories) ? categories : [])
+    .map((c) => (typeof c === "string" ? c : String((c as { name?: unknown; slug?: unknown })?.name ?? (c as { slug?: unknown })?.slug ?? "")))
+    .join(" ");
+  if (!names.trim()) return "other";
+  for (const [pattern, id] of CATEGORY_KEYWORDS) if (pattern.test(names)) return id;
+  return "other";
 }

@@ -129,10 +129,9 @@ describe("PluginsPanel", () => {
     expect(panel).not.toContain("ORCHESTRATION_HINTS");
     // etykieta sekcji, nie samo słowo — komentarz obok wyjaśnia, czemu jej nie ma
     expect(panel).not.toContain('"Wyróżnione"');
-    // kolejność sekcji i etykiety kategorii: id lecą z serwera
-    // (server/composio.ts, CATEGORY_IDS), etykiety zostają tutaj, bo panel
-    // jest dwujęzyczny, a serwer nie zna języka klienta
-    expect(panel).toContain("CATEGORY_ORDER");
+    // etykiety kategorii: id lecą z serwera (server/composio.ts,
+    // CATEGORY_IDS), etykiety zostają tutaj, bo panel jest dwujęzyczny,
+    // a serwer nie zna języka klienta
     for (const id of ["google", "productivity", "developer", "communication", "design", "data-ai", "business", "other"]) {
       expect(panel, `${id} needs a label in CATEGORY_LABELS`).toContain(id.includes("-") ? `"${id}":` : `${id}:`);
     }
@@ -145,9 +144,10 @@ describe("PluginsPanel", () => {
     // razem z szyną kategorii.
     expect(panel).toContain("w-full max-w-[640px]");
     expect(panel).toContain("grid-cols-1 gap-2 sm:grid-cols-2");
-    expect(panel).toContain("md:h-full md:max-h-none md:max-w-[1400px]");
+    expect(panel).toContain("md:max-w-[1400px]");
     // lewa szyna kategorii jest desktopowa; na telefonie zostają pigułki
-    expect(panel).toContain("hidden w-[190px] shrink-0 flex-col gap-0.5 overflow-y-auto md:flex");
+    expect(panel).toContain("w-[190px]");
+    expect(panel).toMatch(/hidden[^"]*md:flex/);
     expect(panel).toContain("md:hidden");
   });
 

@@ -109,6 +109,20 @@ export function connectorCards(cfg: AppConfig = loadConfig()) {
   }));
 }
 
+/** Porównanie transportów niezależne od KOLEJNOŚCI kluczy: `config.json` bywa
+ * pisany ręcznie (nagłówek tego pliku wręcz do tego zachęca), a wtedy
+ * `{"url":…,"type":…}` nigdy nie zrównałoby się z `{"type":…,"url":…}` i
+ * licznik narzędzi kasowałby się przy każdym zapisie. */
+export function sameTransport(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v && typeof v === "object"
+        ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => x.localeCompare(y)).map(([k, val]) => [k, canon(val)]))
+        : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
 /** Podłącz (albo nadpisz) konektor. Zwraca zapisany wpis. */
 export function saveConnector(id: string, raw: unknown): McpConnector {
   const connector = decodeConnector(id, raw);
@@ -117,8 +131,7 @@ export function saveConnector(id: string, raw: unknown): McpConnector {
   // pokazuje „12 narzędzi" dla serwera, którego nikt nigdy nie odpytał.
   const previous = loadConfig().mcpConnectors?.[id];
   const cached =
-    previous && typeof previous.tools === "number"
-      && JSON.stringify(previous.transport) === JSON.stringify(connector.transport)
+    previous && typeof previous.tools === "number" && sameTransport(previous.transport, connector.transport)
       ? { tools: previous.tools, ...(typeof previous.checkedAt === "number" ? { checkedAt: previous.checkedAt } : {}) }
       : {};
   saveConfig({ mcpConnectors: { [id]: { name: connector.name, transport: connector.transport, ...cached } } });
