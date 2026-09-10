@@ -102,11 +102,14 @@ describe("Store", () => {
   // Ta sama pulapka od strony koloru: nowa barwa w panelu, ktorej serwer nie
   // przyjmuje, to zapis odbity bledem 400 zamiast zmiany wygladu.
   it("accepts every colour the client offers", () => {
-    const source = readFileSync(new URL("../src/lib/mascot.ts", import.meta.url), "utf8");
+    // Zrodlo, nie import: `src/lib/mascot.ts` ciagnie za soba React i `@/`,
+    // ktorych tsconfig serwera nie zna. Komentarze lecą przed dopasowaniem —
+    // cytowane slowo w komentarzu wewnatrz tablicy udawaloby kolor.
+    const source = readFileSync(new URL("../src/lib/mascot.ts", import.meta.url), "utf8")
+      .replace(/\/\/[^\n]*/g, "");
     const body = /BOT_COLOR_NAMES = \[([\s\S]*?)\] as const/.exec(source);
     if (!body) throw new Error("BOT_COLOR_NAMES not found in src/lib/mascot.ts");
-    const names = [...body[1].matchAll(/"([a-z]+)"/g)].map((match) => match[1]);
-    expect(names).toHaveLength(14);
+    const names = [...body[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
     expect([...names].sort()).toEqual([...BOT_COLORS].sort());
   });
 

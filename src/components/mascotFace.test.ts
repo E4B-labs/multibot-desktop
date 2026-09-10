@@ -55,19 +55,32 @@ describe("statyczna maskotka ma twarz", () => {
 describe("zmiana kształtu morfuje, nie przeskakuje", () => {
   it("interpoluje sylwetkę przez flubber", () => {
     expect(blob).toContain("import { interpolate } from 'flubber'");
-    expect(blob).toMatch(/interpolate\(faceDFor\(renderedShape\), faceDFor\(shape\)/);
+    // Przerwany morf startuje od ścieżki, która jest NA EKRANIE, nie od kształtu
+    // sprzed poprzedniego kliknięcia.
+    expect(blob).toContain("interpolate(morphRef.current ?? faceDFor(renderedShape), faceDFor(shape))");
   });
 
   it("rysuje ścieżkę przejściową zamiast osiadłego ciała", () => {
     expect(blob).toMatch(/morphD \? \(\s*<path d=\{morphD\} fill=\{paint\} \/>/);
     // Sylwetka i obszar przycięcia muszą iść tą samą ścieżką, inaczej twarz
     // przez pół morfa wystaje poza brzuch.
-    expect(blob).toMatch(/<clipPath id=\{`\$\{uid\}-clip`\}>\s*<path d=\{morphD\} \/>/);
+    expect(blob).toMatch(/<clipPath key="morph" id=\{`\$\{uid\}-clip`\}>\s*<path d=\{morphD\} \/>/);
   });
 
   it("prowadzi kotwicę twarzy z kształtu do kształtu", () => {
     expect(blob).toContain("lerp(morphFrom.current.x, morphTo.current.x, morphT)");
     expect(blob).toContain("anchorTransform(anchorNow)");
+  });
+
+  // Skasowanie `dangerouslySetInnerHTML` jest w ReactDOM operacją pustą, więc
+  // bez osobnych kluczy stary obszar przycięcia przeżywa pod morfującą ścieżką.
+  it("przemontowuje clipPath zamiast go nadpisywać w miejscu", () => {
+    expect(blob).toContain('<clipPath key="morph"');
+    expect(blob).toContain('key="settled"');
+  });
+
+  it("kto prosił o mniej ruchu, dostaje podmianę", () => {
+    expect(blob).toMatch(/if \(prefersReducedMotion\) \{[\s\S]{0,120}setRenderedShape\(shape\)/);
   });
 });
 

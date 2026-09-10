@@ -310,7 +310,9 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                         key={color}
                         onClick={() => patch({ color })}
                         className={cn(
-                          "size-7 rounded-full border-2 border-transparent transition-transform hover:scale-110",
+                          // Obwódka, nie przezroczysta: `bg-card` na jasnych
+                          // motywach to biel, więc biała próbka bez niej znika.
+                          "size-7 rounded-full border-2 border-hairline/70 transition-transform hover:scale-110",
                           bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                         )}
                         style={{ backgroundColor: BOT_COLORS[color] }}

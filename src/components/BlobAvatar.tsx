@@ -2055,6 +2055,20 @@ const MORPH_SVG_NS = 'http://www.w3.org/2000/svg'
 const MORPH_MS = 420
 const faceDCache = new Map<string, string>()
 
+/**
+ * The `transform` a silhouette carries on the element itself.
+ *
+ * Three shapes have one — the cursor's `translate(210,80)`, the diamond's
+ * `rotate(45 …)`, the cloud's `translate(0 -2)` — and it is NOT the same thing
+ * as `fit`. Sampling the raw `d` without it puts the cursor a hundred units off
+ * the canvas and turns the diamond back into an upright square, so `faceDFor`
+ * composes it under the fit. A regex rather than the DOM parse, so it can be
+ * checked without a browser.
+ */
+export function elementTransform(markup: string): string {
+  return / transform="([^"]+)"/.exec(markup)?.[1] ?? ''
+}
+
 /** Reduces any silhouette primitive (path/circle/ellipse/rect) to a single `d`. */
 function elementToPathD(markup: string): string {
   const doc = new DOMParser().parseFromString(`<svg xmlns="${MORPH_SVG_NS}">${markup}</svg>`, 'image/svg+xml')
@@ -2091,14 +2105,19 @@ function elementToPathD(markup: string): string {
   return ''
 }
 
-/** SVG `transform` (e.g. `rotate(45 cx cy)`) as CSS, so DOMMatrix can parse it. */
+/**
+ * SVG `transform` (e.g. `rotate(45 cx cy)`) as CSS, so DOMMatrix can parse it.
+ * SVG separates arguments with a comma OR whitespace and both appear in the
+ * shapes here (`translate(210,80)` vs `translate(0 -2)`).
+ */
 function fitToCss(fit: string): string {
   return fit
     .replace(
-      /rotate\(([-\d.]+) ([-\d.]+) ([-\d.]+)\)/g,
+      /rotate\(([-\d.]+)[,\s]+([-\d.]+)[,\s]+([-\d.]+)\)/g,
       (_, a, x, y) => `translate(${x}px, ${y}px) rotate(${a}deg) translate(${-x}px, ${-y}px)`,
     )
-    .replace(/translate\(([-\d.]+) ([-\d.]+)\)/g, (_, x, y) => `translate(${x}px, ${y}px)`)
+    .replace(/translate\(([-\d.]+)[,\s]+([-\d.]+)\)/g, (_, x, y) => `translate(${x}px, ${y}px)`)
+    .replace(/translate\(([-\d.]+)\)/g, (_, x) => `translate(${x}px)`)
 }
 
 /**
@@ -2109,10 +2128,18 @@ function fitToCss(fit: string): string {
 function faceDFor(shape: BlobShape): string {
   const cached = faceDCache.get(shape.name)
   if (cached) return cached
+  const local = elementToPathD(shape.body)
+  if (!local) return ''
   const path = document.createElementNS(MORPH_SVG_NS, 'path')
-  path.setAttribute('d', elementToPathD(shape.body))
+  path.setAttribute('d', local)
   const total = path.getTotalLength()
-  const matrix = shape.fit ? new DOMMatrix(fitToCss(shape.fit)) : new DOMMatrix()
+  // A silhouette that measures nothing would sample 221 points at the origin.
+  // Returning empty (and NOT caching it) makes `interpolate` throw, which is
+  // the plain swap — the right answer for a shape this cannot read.
+  if (!total) return ''
+  const own = elementTransform(shape.body)
+  let matrix = shape.fit ? new DOMMatrix(fitToCss(shape.fit)) : new DOMMatrix()
+  if (own) matrix = matrix.multiply(new DOMMatrix(fitToCss(own)))
   const n = 220
   let d = ''
   for (let i = 0; i <= n; i++) {
@@ -2699,23 +2726,39 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
       outline `morphD` in its place and lerp the face anchor from the old shape's to the
       new one's. Anything flubber refuses (an outline it cannot pair up) falls straight
       through to the plain swap, which is what this used to do everywhere.
+
+      Clicking through the picker interrupts a morph in flight, so the next one starts
+      from the outline actually on screen (`morphRef`) and from the anchor actually in
+      use — otherwise the body pops back to the shape before last on every click.
     */
     const [renderedShape, setRenderedShape] = useState(shape)
     const [morphD, setMorphD] = useState<string | null>(null)
     const [morphT, setMorphT] = useState(0)
+    const morphRef = useRef<string | null>(null)
+    morphRef.current = morphD
+    const anchorRef = useRef(shape.anchor)
     const morphFrom = useRef(shape.anchor)
     const morphTo = useRef(shape.anchor)
 
     useEffect(() => {
       if (shape.name === renderedShape.name) return
-      let tween: ((t: number) => string) | null = null
-      try {
-        tween = interpolate(faceDFor(renderedShape), faceDFor(shape), { maxSegmentLength: 2 })
-      } catch {
+      // A morph is motion for its own sake; someone who asked for less gets the swap.
+      if (prefersReducedMotion) {
+        setMorphD(null)
         setRenderedShape(shape)
         return
       }
-      morphFrom.current = renderedShape.anchor
+      let tween: ((t: number) => string) | null = null
+      try {
+        // Both outlines already carry the same 221 samples, so re-subdividing them
+        // would only make flubber's pairing more expensive.
+        tween = interpolate(morphRef.current ?? faceDFor(renderedShape), faceDFor(shape))
+      } catch {
+        setMorphD(null)
+        setRenderedShape(shape)
+        return
+      }
+      morphFrom.current = anchorRef.current
       morphTo.current = shape.anchor
       const start = performance.now()
       let frame = 0
@@ -2739,7 +2782,7 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
       frame = requestAnimationFrame(step)
       return () => cancelAnimationFrame(frame)
       // `renderedShape` is read, but only its name decides whether a morph starts.
-    }, [shape, renderedShape])
+    }, [shape, renderedShape, prefersReducedMotion])
 
     /*
       What the extras are made of.
@@ -2754,10 +2797,10 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
       body, so a `url(#…)` fill still resolves.
     */
     const paint = useMemo(() => {
-      if (renderedShape.body.includes('{{GRADIENT}}')) return `url(#${uid}-grad)`
-      const own = renderedShape.body.match(/fill="(?!none)([^"]+)"/)
+      if (shape.body.includes('{{GRADIENT}}')) return `url(#${uid}-grad)`
+      const own = shape.body.match(/fill="(?!none)([^"]+)"/)
       return own ? own[1] : `url(#${uid}-grad)`
-    }, [renderedShape.body, uid])
+    }, [shape.body, uid])
     const paintRef = useRef(paint)
     paintRef.current = paint
 
@@ -2771,6 +2814,7 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
           scale: lerp(morphFrom.current.scale, morphTo.current.scale, morphT),
         }
       : renderedShape.anchor
+    anchorRef.current = anchorNow
 
     return (
       <svg
@@ -2791,12 +2835,17 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
           </linearGradient>
           {/* The fit goes on the clipPath itself: a <g> inside one is ignored by browsers,
               which is also why shape.clip is pre-flattened to bare shapes. */}
+          {/* Distinct keys, so React REMOUNTS instead of updating in place: dropping
+              `dangerouslySetInnerHTML` is a no-op in ReactDOM, so without them the
+              settled clip markup would survive under the tweened path and the face
+              would go on being clipped by the shape it is leaving. */}
           {morphD ? (
-            <clipPath id={`${uid}-clip`}>
+            <clipPath key="morph" id={`${uid}-clip`}>
               <path d={morphD} />
             </clipPath>
           ) : (
             <clipPath
+              key="settled"
               id={`${uid}-clip`}
               transform={renderedShape.fit || undefined}
               dangerouslySetInnerHTML={{ __html: renderedShape.clip }}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { elementTransform } from "@/components/BlobAvatar";
 import { MASCOT_SHAPES, mascotShape, resolveShape } from "./mascotShapes";
 
 describe("mascot shapes", () => {
@@ -42,5 +43,18 @@ describe("mascot shapes", () => {
   // w dół, więc twarz w środku pudełka lądowała na zgięciu.
   it("centres the folder face in its body, not in the box", () => {
     expect(mascotShape("folder").anchor).toEqual({ x: 114, y: 136, scale: 0.86 });
+  });
+
+  // Trzy kształty niosą `transform` NA SAMYM elemencie, osobno od `fit`.
+  // Morf próbkuje surowe `d`, więc pominięcie go wysyłało kursor sto jednostek
+  // poza kadr, a romb prostowało do kwadratu na czas przejścia.
+  it("keeps the element transforms the morph has to compose", () => {
+    expect(elementTransform(mascotShape("cursor").body)).toBe("translate(210,80)");
+    expect(elementTransform(mascotShape("diamond").body)).toBe("rotate(45 114.2705 114.2705)");
+    expect(elementTransform(mascotShape("cloud").body)).toBe("translate(0 -2)");
+    // Reszta zestawu nie ma własnego transformu — cała geometria siedzi w `d`.
+    for (const name of ["blob", "circle", "square", "pill", "triangle", "star", "folder", "leaf"]) {
+      expect(elementTransform(mascotShape(name).body), name).toBe("");
+    }
   });
 });

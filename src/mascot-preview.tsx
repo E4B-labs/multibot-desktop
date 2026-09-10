@@ -385,7 +385,7 @@ function Preview() {
       <section className="expression-library" aria-labelledby="expression-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Identity system · {BOT_COLOR_NAMES.length * 10} combinations</p>
+            <p className="eyebrow">Identity system · {BOT_COLOR_NAMES.length * PICKABLE_STATES.length} combinations</p>
             <h2 id="expression-heading">Colors and states</h2>
           </div>
           <p>Move your pointer over any Bot to test the responsive eyes.</p>

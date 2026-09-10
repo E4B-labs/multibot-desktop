@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   CELEBRATE_MS,
@@ -227,6 +228,9 @@ describe("paleta maskotki", () => {
   // 11 barw w siatce o 7 kolumnach zostawiało trzy dziury w drugim rzędzie.
   // Dwa pełne rzędy to warunek na wygląd panelu, nie kosmetyka testu.
   it("wypełnia dwa rzędy po siedem, w kolejności koła barw", () => {
+    const panel = readFileSync(new URL("../components/SettingsPanel.tsx", import.meta.url), "utf8");
+    expect(panel).toContain("grid-cols-7");
+    expect(BOT_COLOR_NAMES.length % 7).toBe(0);
     expect([...BOT_COLOR_NAMES]).toEqual([
       "red", "coral", "orange", "yellow", "lime", "green",
       "teal", "cyan", "blue", "indigo", "purple", "pink",
