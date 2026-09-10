@@ -46,9 +46,15 @@ export interface OptionCardData {
    *  captcha) i czeka: przejmij / gotowe / pomiń.
    *  `connect` — bot potrzebuje konektora, którego nie ma: karta nie blokuje
    *  tury, człowiek podłącza go wtedy, kiedy chce. */
-  kind?: "computer-handoff" | "connect";
+  kind?: "computer-handoff" | "connect" | "approval";
   /** karty `connect`: który konektor otworzyć w panelu wtyczek. */
   connector?: ConnectorTarget;
+  /** multibot: pytanie wielokrotnego wyboru — karta rysuje checkboxy i przycisk
+   *  „Zatwierdź", a odpowiedź wraca jako wybrane etykiety rozdzielone przecinkiem. */
+  multiple?: boolean;
+  /** multibot: odpowiedź dojechała do bota (serwer potwierdził jej przyjęcie).
+   *  Karta potwierdzenia mówi „wysłano do X", póki tej flagi nie ma. */
+  delivered?: boolean;
 }
 
 export interface SecretRequestCardData {

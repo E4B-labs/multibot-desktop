@@ -22,6 +22,15 @@ describe("polskie etykiety interfejsu", () => {
   it("serwer wysyła tytuły kart po polsku (U22 — teksty gotowe do klienta)", () => {
     const source = readFileSync(join(process.cwd(), "server", "index.ts"), "utf8");
     expect(source).toContain('t("Wymagana zgoda", "Approval needed")');
-    expect(source).toContain('t("Bot ma pytanie", "Your bot has a question")');
+    // multibot: karta pytania nie ma już własnego tytułu — jest nim samo
+    // pytanie. Po polsku zostaje powiadomienie push.
+    expect(source).toContain('t("Bot ma pytanie.", "The bot has a question.")');
+  });
+
+  it("karta pytania ma polskie etykiety wyboru i potwierdzenia", () => {
+    const source = readFileSync(join(process.cwd(), "src", "components", "OptionCard.tsx"), "utf8");
+    for (const label of ["Zatwierdź", "odebrane", "wysłano do", "Wpisz własną odpowiedź"]) {
+      expect(source).toContain(label);
+    }
   });
 });

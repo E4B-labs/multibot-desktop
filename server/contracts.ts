@@ -90,6 +90,10 @@ export type RuntimeEvent = RuntimeEventBase &
         tool: string;
         summary: string;
         choices?: string[];
+        /** multibot: pytanie wielokrotnego wyboru — karta rysuje checkboxy. */
+        multiple?: boolean;
+        /** multibot: dłuższe tło pytania; w karcie jedzie pod tytułem drobnym drukiem. */
+        detail?: string;
         approvalRule?: ApprovalRuleCandidate;
       }
     | { type: "request.resolved"; behavior: string; source: string }
