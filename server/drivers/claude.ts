@@ -565,7 +565,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             requestType: ask.kind, tool: ask.tool, summary: askSummary(ask),
             choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
             ...(ask.input?.multiple === true ? { multiple: true } : {}),
-            ...(typeof ask.input?.detail === "string" && ask.input.detail.trim() ? { detail: ask.input.detail.trim() } : {}),
+            ...(typeof ask.input?.detail === "string" && ask.input.detail.trim() ? { detail: ask.input.detail.trim().slice(0, 400) } : {}),
             ...(ask.kind === "permission" ? { approvalRule: remembered } : {}) });
         },
         onResolve: (resolved) => {

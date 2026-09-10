@@ -46,7 +46,7 @@ export interface OptionCardData {
    *  captcha) i czeka: przejmij / gotowe / pomiń.
    *  `connect` — bot potrzebuje konektora, którego nie ma: karta nie blokuje
    *  tury, człowiek podłącza go wtedy, kiedy chce. */
-  kind?: "computer-handoff" | "connect";
+  kind?: "computer-handoff" | "connect" | "approval";
   /** karty `connect`: który konektor otworzyć w panelu wtyczek. */
   connector?: ConnectorTarget;
   /** multibot: pytanie wielokrotnego wyboru — karta rysuje checkboxy i przycisk

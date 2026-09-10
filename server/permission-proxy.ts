@@ -111,7 +111,7 @@ const TOOLS = [
         },
         multiple: {
           type: "boolean",
-          description: "Set true when several choices may be picked at once: the card shows checkboxes and a Confirm button, and the answer comes back as the chosen labels separated by commas.",
+          description: "Set `multiple: true` whenever more than one of the choices can be right at the same time (days, features, files); leave it out only when the answers are mutually exclusive. Choice labels must not contain a comma, because the answer comes back as the chosen labels joined by commas.",
         },
         detail: {
           type: "string",

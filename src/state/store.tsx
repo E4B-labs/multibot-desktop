@@ -50,7 +50,7 @@ export interface OptionCardData {
   /** multibot: `computer-handoff` — bot prosi człowieka o zrobienie czegoś na
    *  jego komputerze (logowanie, 2FA, captcha). `connect` — bot prosi o
    *  podłączenie konektora i NIE czeka. Brak = zwykła karta. */
-  kind?: "computer-handoff" | "connect";
+  kind?: "computer-handoff" | "connect" | "approval";
   /** karty `connect`: konektor, który otwiera przycisk „Podłącz". */
   connector?: ConnectorTarget;
   /** multibot: pytanie wielokrotnego wyboru — checkboxy + „Zatwierdź".
@@ -284,8 +284,9 @@ type Action =
   | { type: "selectComputer"; id: string }
   | { type: "send"; botId: string; text: string; reasoning?: string; attachmentIds?: string[]; replyToId?: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
-  /** multibot: serwer przyjął odpowiedź — karta potwierdzenia mówi „odebrane". */
-  | { type: "cardDelivered"; botId: string; messageId: string }
+  /** multibot: wysyłka odpowiedzi padła — karta wraca do stanu pytania, żeby
+   *  człowiek mógł odpowiedzieć jeszcze raz. */
+  | { type: "cardAnswerFailed"; botId: string; messageId: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot"; visibility?: "team" | "private" }
   | { type: "botAdded"; bot: Bot }
@@ -418,16 +419,23 @@ function reducer(state: AppState, action: Action): AppState {
     case "selectComputer":
       return { ...state, selectedId: action.id };
     // optimistic card settle; the server's message.patch confirms it later
-    case "answerCard":
-      // multibot: karta NIE znika po kliknięciu — zamienia się w potwierdzenie
-      // (pytanie + wybór + „wysłano do X"), które zostaje w transkrypcie.
+    case "answerCard": {
+      // multibot: karta pytania NIE znika po kliknięciu — zamienia się w
+      // potwierdzenie (pytanie + wybór + „wysłano do X"), które zostaje w
+      // transkrypcie. Karta bez `requestId` (powitalna) zamyka się jak dotąd:
+      // odpowiedź idzie zwykłą wiadomością i to ona jest śladem w czacie.
+      const card = state.bots.find((b) => b.id === action.botId)?.messages.find((m) => m.id === action.messageId)?.card;
       return withMascotMotion(
-        patchCard(state, action.botId, action.messageId, { answered: action.answer }),
+        patchCard(state, action.botId, action.messageId, {
+          answered: action.answer,
+          ...(card?.requestId ? {} : { dismissed: true }),
+        }),
         action.botId,
         "working",
       );
-    case "cardDelivered":
-      return patchCard(state, action.botId, action.messageId, { delivered: true });
+    }
+    case "cardAnswerFailed":
+      return patchCard(state, action.botId, action.messageId, { answered: undefined });
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "botAdded":
@@ -927,16 +935,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
-          // multibot: „odebrane" dopiero, gdy serwer POTWIERDZI przyjęcie —
-          // `/respond` wraca po oddaniu odpowiedzi czekającemu narzędziu bota,
-          // `/messages` po wpuszczeniu jej w jego kolejkę tur. Do tego czasu
-          // karta potwierdzenia mówi „wysłano do X".
-          const delivered = () => {
-            rawDispatch({ type: "cardDelivered", botId: action.botId, messageId: action.messageId });
-            persistCard(action.botId, action.messageId, { delivered: true });
+          // multibot: nieudana wysyłka MUSI oddać kartę z powrotem — inaczej
+          // zostaje pokwitowanie „wysłano do X", którego nikt nie odebrał, a
+          // bot dalej czeka na odpowiedź, której nie da się już kliknąć.
+          const failed = (error: unknown) => {
+            rawDispatch({ type: "cardAnswerFailed", botId: action.botId, messageId: action.messageId });
+            showError(error);
           };
-          persistCard(action.botId, action.messageId, { answered: action.answer });
           if (card?.requestId) {
+            // Kartę domyka serwer (`answered` + `delivered` w `POST /respond`),
+            // więc klient jej nie zapisuje — dwa zapisy bez kolejności potrafiły
+            // przepisać cudzą odpowiedź w drugim otwartym oknie.
             const behavior =
               action.answer === "Allow" ? "allow"
                 : action.answer === "Allow for all" ? "always"
@@ -949,12 +958,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 behavior,
                 message: behavior === "answer" ? action.answer : undefined,
               }),
-            }).then(delivered, showError);
+            }).catch(failed);
           } else {
+            persistCard(action.botId, action.messageId, { answered: action.answer, dismissed: true });
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
               body: JSON.stringify({ text: action.answer }),
-            }).then(delivered, showError);
+            }).catch(failed);
           }
           break;
         }
@@ -962,9 +972,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
           if (card?.requestId) {
+            // `dismiss` mówi serwerowi, że to krzyżyk, a nie odpowiedź „Deny" —
+            // bez tego karta zamknięta ręcznie wracała po przeładowaniu.
             api(`/api/bots/${action.botId}/respond`, {
               method: "POST",
-              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user." }),
+              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user.", dismiss: true }),
             }).catch(() => {});
           } else {
             persistCard(action.botId, action.messageId, { dismissed: true });

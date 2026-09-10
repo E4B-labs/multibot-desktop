@@ -177,9 +177,12 @@ describe("karta pytania", () => {
 
       const deadline = Date.now() + 25_000;
       let card: any;
+      let cardMessageId = "";
       for (;;) {
         const bot = await getBot(id);
-        card = bot?.messages.find((m: any) => m.card?.requestId)?.card;
+        const held = bot?.messages.find((m: any) => m.card?.requestId);
+        card = held?.card;
+        cardMessageId = held?.id ?? "";
         if (card) break;
         if (Date.now() > deadline) throw new Error(`brak karty pytania. stderr:\n${stderr.slice(-2000)}`);
         await wait(200);
@@ -208,6 +211,14 @@ describe("karta pytania", () => {
       expect(
         bot.messages.some((m: any) => m.role === "bot" && m.kind === "text" && m.text?.includes("owner says: C, D")),
       ).toBe(true);
+
+      // Kartę domyka SERWER, nie klient: pokwitowanie („C, D" + „odebrane")
+      // musi być w transkrypcie także dla okna, które nie klikało, i po
+      // przeładowaniu. Wcześniej wpisywał to osobny PATCH z klienta.
+      const settled = bot.messages.find((m: any) => m.id === cardMessageId).card;
+      expect(settled.answered).toBe("C, D");
+      expect(settled.delivered).toBe(true);
+      expect(settled.dismissed).toBeFalsy();
     },
     45_000,
   );

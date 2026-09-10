@@ -357,6 +357,9 @@ function armBusyWatchdog(botId: string): void {
       turnUsedTool.delete(b.threadId);
       turnPushedVisible.delete(b.threadId);
       turnUserText.delete(b.threadId);
+      // multibot: turę ubił watchdog, nie model — spóźnione `turn.completed`
+      // nie ma zostawiać znacznika „bot nic nie napisał" ani pushować końca.
+      turnOrigin.delete(botId);
       releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
       broadcast({ kind: "bot", bot: store.bot(botId) });
       drainQueuedUserMessages(botId);
@@ -1518,7 +1521,10 @@ fleetEnvironmentTimer.unref?.();
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
-const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+// requestId -> gdzie leży karta. Wątek idzie razem z wiadomością, bo `ask_user`
+// z tury izolowanej (grupa, pokój) siedzi na CUDZYM wątku, a `POST /respond`
+// zna tylko wątek bota.
+const askMessageByRequest = new Map<string, { threadId: string; messageId: string }>();
 const approvalRuleByRequest = new Map<string, ApprovalRuleCandidate>();
 // multibot: pytania zadane przez bota narzędziem `ask_user`. Wcześniej takie
 // pytanie niósł WYŁĄCZNIE broker uprawnień claude'a — a ten montuje się tylko
@@ -1604,18 +1610,19 @@ function endTurnPush(botId: string, kind: "finished" | "failed", body: string): 
 async function askOwnerAndWait(threadId: string, card: Omit<OptionCardData, "requestId">): Promise<string> {
   const requestId = newId();
   const message = store.appendMessage(threadId, { role: "bot", kind: "options", card: { ...card, requestId } });
+  askMessageByRequest.set(requestId, { threadId, messageId: message.id });
   broadcast({ kind: "message", threadId, message });
   // pytanie / przekazanie komputera idzie na telefon także z tury izolowanej
   // (grupa, pokój) — o odpowiedź prosi człowieka, nie drugiego bota
   const asker = store.botByThread(threadId) ?? store.bot(isolatedTurnBots.get(threadId) ?? "");
-  if (asker) pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.subtitle || card.title);
+  if (asker) pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.title || card.subtitle);
   return new Promise<string>((resolve) => {
     const timer = setTimeout(() => {
       if (!pendingUserAsks.delete(requestId)) return;
       // karta bez odpowiedzi zostaje w czacie na zawsze i przyjmuje kliknięcia,
       // które nie mają już gdzie trafić — zamykamy ją
       const patched = store.patchMessage(threadId, message.id, { card: { ...message.card!, dismissed: true } });
-      if (patched) broadcast({ kind: "message", threadId, message: patched });
+      if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
       resolve(USER_ASK_TIMEOUT_NOTE);
     }, USER_ASK_TIMEOUT_MS);
     pendingUserAsks.set(requestId, (value) => {
@@ -1816,11 +1823,14 @@ bus.subscribe((event: RuntimeEvent) => {
               : event.detail ?? "",
             options: permission ? ["Allow", "Deny", "Allow for all"] : event.choices ?? [],
             requestId: event.requestId,
-            ...(!permission && event.multiple ? { multiple: true } : {}),
+            // multibot: karta zgody NIE zwija się w pokwitowanie — jej podtytuł
+            // (co dokładnie zatwierdzono i jaką regułą) to ślad autoweryfikacji.
+            ...(permission ? { kind: "approval" as const } : {}),
+            ...(!permission && event.multiple && (event.choices?.length ?? 0) > 1 ? { multiple: true } : {}),
             ...(autoAllow ? { answered: "Allow" } : {}),
           },
       });
-      if (event.requestId) askMessageByRequest.set(event.requestId, message.id);
+      if (event.requestId) askMessageByRequest.set(event.requestId, { threadId: event.threadId, messageId: message.id });
       if (permission && event.requestId && event.approvalRule) approvalRuleByRequest.set(event.requestId, event.approvalRule);
       if (autoAllow) {
         // Dokładnie ta droga, którą idzie `POST /api/bots/:id/respond` dla
@@ -1842,23 +1852,25 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     }
     case "request.resolved": {
-      const messageId = event.requestId ? askMessageByRequest.get(event.requestId) : null;
+      const located = event.requestId ? askMessageByRequest.get(event.requestId) : null;
+      const messageId = located?.messageId ?? null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
         if (existing?.card && !existing.card.answered) {
-          // multibot: przy `answer` treść odpowiedzi zna wyłącznie klient,
-          // który ją wysłał (zdarzenie niesie samo `behavior`). Wpisanie tu
-          // słowa „answer" psuło kartę potwierdzenia, więc zostawiamy pole
-          // pustę i czekamy na PATCH /cards od tego klienta.
-          const label = event.behavior === "always" ? "Allow for all"
-            : event.behavior === "allow" ? "Allow"
-              : event.behavior === "deny" ? "Deny"
-                : null;
+          // multibot: `answer` rozstrzygnięte po stronie dostawcy (jego własny
+          // timeout) nie niesie treści — karta i tak musi się domknąć, inaczej
+          // zostaje klikalna, a kliknięcie nie ma już gdzie trafić. `POST
+          // /respond` wpisuje prawdziwą odpowiedź WCZEŚNIEJ, więc tu wchodzimy
+          // tylko wtedy, gdy nikt jej nie wpisał.
           const patched = store.patchMessage(event.threadId, messageId, {
             card: {
               ...existing.card,
-              ...(label ? { answered: label } : {}),
-              dismissed: event.source !== "user",
+              answered: event.behavior === "always" ? "Allow for all"
+                : event.behavior === "allow" ? "Allow"
+                  : event.behavior === "deny" ? "Deny"
+                    : t("(brak odpowiedzi)", "(no answer)"),
+              // karta zamknięta przez człowieka krzyżykiem ma zostać zamknięta
+              dismissed: existing.card.dismissed === true || event.source !== "user",
             },
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
@@ -1932,7 +1944,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // dostaje widoczny ślad. Tylko w turach, na które ktoś CZEKA: rozmowa
       // bot↔bot milczy z projektu (`[NO REPLY]`).
       const origin = turnOrigin.get(bot.id);
-      const silentNote = !saidThisTurn && !frame && (origin === "user" || origin === "routine")
+      const silentNote = !saidThisTurn && !frame && origin === "user"
         ? t(
           "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
           '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
@@ -3634,7 +3646,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             // drobnym drukiem. `multiple` przełącza kartę na checkboxy —
             // człowiek wybiera kilka odpowiedzi i zatwierdza jednym przyciskiem.
             const answer = await askOwnerAndWait(caller.threadId, {
-              title: question,
+              title: question.slice(0, 300),
               subtitle: String(body.detail ?? "").trim().slice(0, 400),
               options: choices,
               ...(body.multiple === true && choices.length > 1 ? { multiple: true } : {}),
@@ -4473,12 +4485,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const patched = store.patchMessage(bot.threadId, m[2], {
         card: {
           ...existing.card,
-          ...(body.answered !== undefined ? { answered: body.answered } : {}),
+          // multibot: pierwsza odpowiedź wygrywa — drugie otwarte okno nie
+          // przepisuje w transkrypcie tego, co człowiek wybrał w pierwszym.
+          ...(body.answered !== undefined && existing.card.answered === undefined ? { answered: body.answered } : {}),
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
-          // multibot: potwierdzenie dostarczenia odpowiedzi — klient ustawia je
-          // dopiero po odpowiedzi serwera, więc przeżywa przeładowanie i widzą
-          // je pozostałe otwarte okna.
-          ...(body.delivered !== undefined ? { delivered: Boolean(body.delivered) } : {}),
         },
       });
       broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
@@ -4607,13 +4617,38 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      // multibot: kartę domyka SERWER, nie klient. Wcześniej klient odsyłał
+      // odpowiedź i osobnym PATCH-em wpisywał ją do karty — dwa strzały bez
+      // kolejności, więc drugie otwarte okno widziało kartę wciąż klikalną,
+      // klient mobilny nie wpisywał nic, a nieudany PATCH zostawiał kartę
+      // ani otwartą, ani domkniętą. `delivered` znaczy dokładnie tyle: bot
+      // odpowiedź DOSTAŁ (obietnica `ask_user` rozwiązana albo dostawca ją
+      // przyjął), więc stawiamy je dopiero po tym fakcie.
+      const located = askMessageByRequest.get(String(body.requestId));
+      const patchCard = (patch: Partial<OptionCardData>) => {
+        if (!located) return;
+        const existing = store.messagesFor(located.threadId).find((msg) => msg.id === located.messageId);
+        if (!existing?.card) return;
+        const patched = store.patchMessage(located.threadId, located.messageId, { card: { ...existing.card, ...patch } });
+        if (patched) broadcast({ kind: "message.patch", threadId: located.threadId, message: patched });
+      };
+      // Odpowiedź wpisujemy PRZED oddaniem jej dostawcy: sterownik odpowiada
+      // własnym `request.resolved`, które zna tylko `behavior`, i bez tego
+      // wpisałoby w kartę „(brak odpowiedzi)" zamiast tego, co człowiek wybrał.
+      const settleCard = (answered: string, dismissed = false) => {
+        patchCard({ answered, ...(dismissed ? { dismissed: true } : {}) });
+        askMessageByRequest.delete(String(body.requestId));
+      };
       // multibot: pytanie z `ask_user` nie przechodzi przez drivera — czeka
       // tutaj. Rozstrzygamy je przed sięgnięciem po instancję, żeby chwilowo
       // niedostępny dostawca nie blokował odpowiedzi na własne pytanie bota.
       const pendingAsk = pendingUserAsks.get(String(body.requestId));
       if (pendingAsk) {
         pendingUserAsks.delete(String(body.requestId));
-        pendingAsk(String(body.message ?? "").trim() || USER_ASK_DISMISS_NOTE);
+        const answer = String(body.message ?? "").trim();
+        settleCard(answer || t("(zamknięte)", "(dismissed)"), body.dismiss === true || !answer);
+        pendingAsk(answer || USER_ASK_DISMISS_NOTE);
+        patchCard({ delivered: true }); // obietnica `ask_user` rozwiązana — bot ma odpowiedź
         return json(res, 200, { ok: true });
       }
       const instance = registry.get(bot.modelSelection.instanceId);
@@ -4628,10 +4663,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         rememberApprovalRule(bot.threadId, candidate);
         broadcast({ kind: "workspace", botId: bot.id, resource: "approval-rules" });
       }
+      settleCard(
+        body.behavior === "always" ? "Allow for all"
+          : body.behavior === "allow" ? "Allow"
+            : body.behavior === "deny" ? "Deny"
+              : String(body.message ?? "").trim() || t("(brak odpowiedzi)", "(no answer)"),
+        body.dismiss === true,
+      );
       await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
         behavior: body.behavior,
         message: body.message,
       });
+      patchCard({ delivered: true }); // dostawca przyjął odpowiedź
       return json(res, 200, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
@@ -4649,6 +4692,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       turnUsedTool.delete(bot.threadId);
       turnPushedVisible.delete(bot.threadId);
       turnUserText.delete(bot.threadId);
+      // multibot: przerwanie to decyzja człowieka — brak tekstu w takiej turze
+      // nie jest ciszą modelu i nie dostaje znacznika ani powiadomienia.
+      turnOrigin.delete(bot.id);
       stopScreenPoller(bot.id);
       releaseTurnSlot(bot.id);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
