@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CHAT_MIN_WIDTH,
   PANEL_MAX_VW,
   PANEL_MIN_WIDTH,
   clampPanelWidth,
@@ -46,9 +47,19 @@ describe("ciągnięcie za krawędź", () => {
 });
 
 describe("górna granica z okna", () => {
-  it("to 60% szerokości okna, ale nigdy mniej niż min", () => {
+  it("to 60% szerokości okna, dopóki czatowi zostaje jego podłoga", () => {
+    // 1600 → 60% = 960, a po podłodze czatu zostałoby 1120. Wygrywa 960.
     expect(viewportMaxWidth(PANEL_MIN_WIDTH, 1600)).toBe(Math.round(1600 * PANEL_MAX_VW));
-    // Okno węższe niż 2× panel: max spada do min, inaczej clamp nie ma zakresu.
+  });
+
+  it("w wąskim oknie ustępuje podłodze czatu — 60% byłoby za dużo", () => {
+    // Minimalne okno Electrona to 900 px: 60% = 540, ale czat ma zostać nie
+    // węższy niż CHAT_MIN_WIDTH, więc panel kończy się na 420.
+    expect(viewportMaxWidth(PANEL_MIN_WIDTH, 900)).toBe(900 - CHAT_MIN_WIDTH);
+    expect(viewportMaxWidth(PANEL_MIN_WIDTH, 900)).toBeLessThan(Math.round(900 * PANEL_MAX_VW));
+  });
+
+  it("okno węższe niż podłoga czatu: max spada do min, clamp ma zakres", () => {
     expect(viewportMaxWidth(PANEL_MIN_WIDTH, 400)).toBe(PANEL_MIN_WIDTH);
     expect(viewportMaxWidth(PANEL_MIN_WIDTH, 0)).toBe(PANEL_MIN_WIDTH);
   });
@@ -129,6 +140,19 @@ describe("panele boczne montowane przez powłokę", () => {
     expect(sidebar).toContain("<ResizeHandle resize={resize} />");
     // Zwijanie do ikon zostaje — szyna wnosi własne domknięcie.
     expect(sidebar).toContain("clamp: clampSidebarWidth");
+  });
+
+  it("uchwyt nie jest uchwytem do przeciągania okna bez ramki", () => {
+    // `data-shell-header` panelu ma `-webkit-app-region: drag` na całą
+    // szerokość i 72 px wysokości (styles.css). Bez `no-drag` i bez kolejności
+    // w drzewie góra uchwytu przesuwałaby okno zamiast zmieniać szerokość.
+    const shared = read("ResizablePanel");
+    expect(shared).toContain('WebkitAppRegion: "no-drag"');
+    expect(shared.indexOf("{children}")).toBeLessThan(shared.indexOf("<ResizeHandle resize={resize}"));
+    // Układ telefonu (styles.css, max-width: 700px) chowa uchwyt — tam panel
+    // zakrywa ekran, a `touch-none` przy krawędzi zjadałoby przewijanie.
+    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    expect(css).toContain('aside:not(:first-child) > [role="separator"]');
   });
 
   it("pasek szukania w czacie zostaje bez uchwytu", () => {

@@ -11,8 +11,13 @@ import { cn } from "@/lib/cn";
 
 /** Poniżej ~280 px nagłówki paneli łamią się po dwóch słowach. */
 export const PANEL_MIN_WIDTH = 280;
-/** Panel nigdy nie zjada czatu: najwyżej 60% okna. */
+/** Panel nigdy nie zjada czatu: najwyżej 60% okna… */
 export const PANEL_MAX_VW = 0.6;
+/** …a w wąskim oknie 60% to za dużo: Kacper 29.08 zbił panel do 340 px właśnie
+ * dlatego, że reszta czatu łamała tekst po trzech słowach. Kolumna czatu ma
+ * więc własną podłogę, twardszą niż procent. Przy minimalnym oknie Electrona
+ * (900 px) daje to 420 px na panel zamiast 540. */
+export const CHAT_MIN_WIDTH = 480;
 
 export type ResizeSide = "left" | "right";
 
@@ -31,10 +36,12 @@ export function panelWidthFromDrag(
   return clamp(startWidth + (side === "left" ? -deltaX : deltaX));
 }
 
-/** 60% okna, ale nigdy poniżej `min` (okno węższe niż panel przy `min`). */
+/** 60% okna albo tyle, ile zostaje po podłodze czatu — co mniejsze; nigdy
+ * poniżej `min` (okno węższe niż panel przy `min`). */
 export function viewportMaxWidth(min: number, innerWidth: number): number {
   if (!Number.isFinite(innerWidth) || innerWidth <= 0) return min;
-  return Math.max(min, Math.round(innerWidth * PANEL_MAX_VW));
+  const room = Math.min(Math.round(innerWidth * PANEL_MAX_VW), innerWidth - CHAT_MIN_WIDTH);
+  return Math.max(min, room);
 }
 
 export function readStoredWidth(key: string, fallback: number, clamp: (width: number) => number): number {
@@ -189,7 +196,13 @@ export function useResizableWidth(key: string, options: ResizableWidthOptions): 
 }
 
 /** Pasek do chwytania na krawędzi panelu. Ta sama grubość i podświetlenie co
- * w szynie botów, `touch-none` żeby palec ciągnął zamiast przewijać. */
+ * w szynie botów, `touch-none` żeby palec ciągnął zamiast przewijać.
+ *
+ * `WebkitAppRegion: no-drag` jest OBOWIĄZKOWY: w oknie bez ramki nagłówek
+ * panelu (`data-shell-header`) jest uchwytem do przeciągania okna i ma 72 px
+ * wysokości na całą szerokość panelu, więc bez tego górne 72 px uchwytu
+ * przesuwałoby okno zamiast zmieniać szerokość. Chromium składa regiony
+ * w kolejności drzewa, więc uchwyt musi stać PO nagłówku (patrz `SidePanel`). */
 export function ResizeHandle({ resize, className }: { resize: ResizableWidth; className?: string }) {
   return (
     <div
@@ -203,6 +216,7 @@ export function ResizeHandle({ resize, className }: { resize: ResizableWidth; cl
       onPointerDown={resize.onPointerDown}
       onKeyDown={resize.onKeyDown}
       onDoubleClick={resize.onDoubleClick}
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       className={cn(
         "group absolute inset-y-0 z-20 flex w-2 cursor-col-resize touch-none items-center justify-center",
         resize.side === "left" ? "left-0" : "right-0",
@@ -245,13 +259,15 @@ export function SidePanel({
       {...aside}
       className={cn(
         "animate-panel-in relative flex h-full shrink-0 flex-col bg-panel w-[var(--panel-width)]",
-        !resize.resizing && "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
         className,
       )}
       style={{ "--panel-width": `${resize.width}px` } as React.CSSProperties}
     >
-      <ResizeHandle resize={resize} className={handleClassName} />
       {children}
+      {/* Uchwyt PO zawartości: w oknie bez ramki Chromium składa regiony
+          `-webkit-app-region` w kolejności drzewa, więc postawiony wyżej
+          zostałby przykryty uchwytem do przeciągania okna z nagłówka panelu. */}
+      <ResizeHandle resize={resize} className={handleClassName} />
     </aside>
   );
 }
