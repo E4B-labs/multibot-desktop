@@ -22,7 +22,7 @@ import { cn } from "@/lib/cn";
 import { SkillRef } from "./SkillRef";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
-import { parseSkillFile } from "@/lib/skillFile";
+import { parseSkillFile, type ParsedSkillFile } from "@/lib/skillFile";
 
 // Lokalny helper jak w RoutinesPanel, plus `status` na błędzie: teach/start
 // odróżnia "brak otwartej karty" (404) od realnej awarii po kodzie, nie po treści.
@@ -467,26 +467,45 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
       .finally(() => setBusy(null));
   };
 
+  // Najpierw rozbiera się WSZYSTKIE pliki, dopiero potem leci pierwszy POST.
+  // Nie dla elegancji: udany POST rozgłasza `workspace`, App podbija
+  // `workspaceVersion`, a ten panel wisi na `key` z tej wartości — czyli
+  // przemontowuje się i gubi swój stan. Komunikat o błędzie ustawiony PO
+  // pierwszym udanym zapisie nigdy by się nie pokazał.
+  // ponytail: błąd z samego serwera (np. 409 na drugim z trzech plików) wciąż
+  // może zginąć w tym przemontowaniu; gdyby zaczęło boleć, błąd musi wyjść
+  // z panelu do store'a.
   const dropFiles = useCallback(async (files: File[]) => {
-    const markdown = files.filter((file) => /\.(md|markdown)$/i.test(file.name));
-    if (!markdown.length) {
-      setError(polish ? "Upuść plik .md z umiejętnością" : "Drop a .md skill file");
+    const wrongType = files.filter((file) => !/\.(md|markdown)$/i.test(file.name));
+    if (wrongType.length || !files.length) {
+      setError(
+        polish
+          ? `Upuść plik .md z umiejętnością${wrongType.length ? ` (odrzucone: ${wrongType.map((f) => f.name).join(", ")})` : ""}`
+          : `Drop a .md skill file${wrongType.length ? ` (rejected: ${wrongType.map((f) => f.name).join(", ")})` : ""}`,
+      );
       return;
     }
     setDropping(true);
     setError(null);
-    const failures: string[] = [];
-    for (const file of markdown) {
-      try {
-        const skill = parseSkillFile(file.name, await file.text());
+    try {
+      const parsed: ParsedSkillFile[] = [];
+      for (const file of files) {
+        try {
+          parsed.push(parseSkillFile(file.name, await file.text()));
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : String(e));
+          return;
+        }
+      }
+      for (const skill of parsed) {
         const created: Skill = await api(skillsRoot, { method: "POST", body: JSON.stringify(skill) });
         setSkills((items) => [...items, created]);
-      } catch (e: unknown) {
-        failures.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDropping(false);
     }
-    if (failures.length) setError(failures.join(" · "));
-    setDropping(false);
   }, [polish, skillsRoot]);
 
   const create = () => {

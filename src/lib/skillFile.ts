@@ -50,8 +50,7 @@ export function parseSkillFile(fileName: string, content: string): ParsedSkillFi
     .find((line) => line && !line.startsWith("#") && !line.startsWith("---")) ?? "";
   const description = (frontMatterValue(block, "description") || firstLine).slice(0, 2_000);
 
-  const instructions = body || block.trim();
-  if (!instructions) throw new Error(`${fileName || "file"} has no instructions`);
+  if (!body) throw new Error(`${fileName || "file"} has front-matter but no instructions`);
 
-  return { name, description, instructions };
+  return { name, description, instructions: body };
 }

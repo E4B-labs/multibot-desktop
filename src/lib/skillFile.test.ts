@@ -37,10 +37,14 @@ describe("parseSkillFile", () => {
     expect(() => parseSkillFile("pusty.md", "   \n\n")).toThrow(/empty/);
   });
 
-  it("front-matter bez treści nadal daje instrukcje", () => {
-    const parsed = parseSkillFile("x.md", "---\nname: solo\n---\n");
-    expect(parsed.name).toBe("solo");
-    expect(parsed.instructions).toBe("name: solo");
+  it("sam front-matter bez treści leci błędem, nie skillem z YAML-a w środku", () => {
+    expect(() => parseSkillFile("x.md", "---\nname: solo\n---\n")).toThrow(/no instructions/);
+  });
+
+  it("CRLF i BOM nie psują rozbioru", () => {
+    const parsed = parseSkillFile("x.md", "\ufeff---\r\nname: crlf\r\n---\r\nZrób coś.\r\n");
+    expect(parsed.name).toBe("crlf");
+    expect(parsed.instructions).toBe("Zrób coś.");
   });
 
   it("nazwa dłuższa niż limit serwera (80) jest przycinana", () => {
