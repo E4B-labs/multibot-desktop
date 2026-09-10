@@ -179,6 +179,9 @@ describe("push na telefon (fake ACP fleet)", () => {
         MULTIBOT_ONBOARDING_TURN: "0",
         MULTIBOT_COMPUTER: "off",
         MULTIBOT_EXPO_PUSH_URL: `http://127.0.0.1:${pushPort}/push`,
+        // takt przypomnień co pół sekundy: suita nie ma po co czekać 30 s
+        // na każde odpalenie, a ścieżka jest ta sama
+        MULTIBOT_REMINDER_TICK_MS: "500",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -223,8 +226,7 @@ describe("push na telefon (fake ACP fleet)", () => {
     const created = await api("POST", "/api/reminders", { botId, text, at });
     expect(created.status).toBe(201);
     expect(created.body.status).toBe("pending");
-    // takt przypomnień chodzi co 30 s, więc czekamy dłużej niż jeden obrót
-    await until(() => kinds(botId).includes("reminder"), 45_000);
+    await until(() => kinds(botId).includes("reminder"), 20_000);
     return pushes.find((p) => p.data?.botId === botId && p.data?.kind === "reminder")!;
   }
 
@@ -267,7 +269,7 @@ describe("push na telefon (fake ACP fleet)", () => {
     await api("PATCH", `/api/bots/${botId}`, { notifications: false });
     const at = new Date(Date.now() + 2_000).toISOString();
     expect((await api("POST", "/api/reminders", { botId, text: "kawa", at })).status).toBe(201);
-    await until(() => false, 45_000);
+    await until(() => false, 15_000);
     expect(kinds(botId)).toEqual([]);
     // rekord sam w sobie odpalił — ucichł push, nie harmonogram
     const list = (await api("GET", `/api/bots/${botId}/reminders`)).body;
@@ -304,7 +306,7 @@ describe("push na telefon (fake ACP fleet)", () => {
     expect(list[0]).toMatchObject({ text: "kawa", status: "fired" });
     expect(list[0].firedAt).not.toBeNull();
     const before = kinds(botId).filter((k) => k === "reminder").length;
-    await until(() => false, 35_000);
+    await until(() => false, 10_000);
     expect(kinds(botId).filter((k) => k === "reminder").length).toBe(before);
   }, 120_000);
 

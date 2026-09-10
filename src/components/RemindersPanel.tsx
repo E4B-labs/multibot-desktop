@@ -64,6 +64,7 @@ export function RemindersPanel() {
     api("/api/reminders").then((rs: ReminderRecord[]) => {
       setItems(rs);
       setStatus("ready");
+      setError(null);
     });
 
   useEffect(() => {
@@ -72,8 +73,14 @@ export function RemindersPanel() {
   }, [state.workspaceVersion]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    // Ten sam takt odświeża wyprzedzenie I ponawia wczytanie: bez tego panel
+    // raz pokazany jako offline zostawał offline do końca życia komponentu.
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      load().catch(() => setStatus("offline"));
+    }, 60_000);
     return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const showError = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
@@ -132,11 +139,11 @@ export function RemindersPanel() {
         {status === "offline" ? (
           <div className="mt-3 flex items-center gap-2 text-[13px] text-ink-secondary">
             <span className="size-1.5 rounded-full bg-raised-hover" />
-            {polish ? "Serwer nie odpowiada" : "Service offline"}
+            {polish ? "Usługa offline" : "Service offline"}
           </div>
         ) : status === "loading" ? (
           <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-ink-secondary">
-            <Loader2 size={14} className="animate-spin" /> {polish ? "Wczytuję…" : "Loading reminders…"}
+            <Loader2 size={14} className="animate-spin" /> {polish ? "Ładowanie przypomnień…" : "Loading reminders…"}
           </div>
         ) : items.length === 0 ? (
           <div className="mt-8 flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">

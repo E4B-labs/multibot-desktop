@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Reminders, type Reminder } from "./reminders.ts";
+import { PENDING_PER_BOT_MAX, Reminders, type Reminder } from "./reminders.ts";
 
 let dir: string;
 let file: string;
@@ -53,6 +53,7 @@ describe("Reminders", () => {
     const fired: Reminder[] = [];
     // domyślny zegar (Date.now) + własny takt 30 s, oba pod kontrolą vitest
     const reminders = new Reminders(file, (r) => fired.push(r), Date.now, 30_000);
+    reminders.start();
     reminders.create("bot-a", { text: "dentysta", at: iso(start + 60_000) });
 
     vi.advanceTimersByTime(30_000);
@@ -127,7 +128,7 @@ describe("Reminders", () => {
     expect(reminders.get(stale.id)?.status).toBe("fired");
   });
 
-  it("drzemka liczy się od TERAZ i wskrzesza odpalone przypomnienie", () => {
+  it("drzemka odpalonego liczy od TERAZ i wskrzesza je", () => {
     const time = clock(Date.UTC(2026, 8, 10, 12, 0, 0));
     const fired: Reminder[] = [];
     const reminders = new Reminders(file, (r) => fired.push(r), time.now, 0);
@@ -162,5 +163,54 @@ describe("Reminders", () => {
     writeFileSync(file, "{ to nie jest JSON");
     const reminders = new Reminders(file, () => {}, Date.now, 0);
     expect(reminders.list()).toEqual([]);
+  });
+
+  it("drzemka CZEKAJĄCEGO przesuwa jego własny termin, nie ściąga go na dziś", () => {
+    const time = clock(Date.UTC(2026, 8, 10, 12, 0, 0));
+    const reminders = new Reminders(file, () => {}, time.now, 0);
+    // przypomnienie o przyszłym wtorku: „odłóż o godzinę" ma dać wtorek + 1 h,
+    // a nie dzisiaj + 1 h — inaczej jedno kliknięcie kasuje termin
+    const week = time.now() + 7 * 86_400_000;
+    const item = reminders.create("bot-a", { text: "spotkanie", at: iso(week) });
+    const snoozed = reminders.snooze(item.id, 60);
+    expect(Date.parse(snoozed!.at)).toBe(week + 60 * 60_000);
+  });
+
+  it("sufit terminu: przypomnienie na rok 9999 to literówka, nie funkcja", () => {
+    const time = clock(Date.UTC(2026, 8, 10, 12, 0, 0));
+    const reminders = new Reminders(file, () => {}, time.now, 0);
+    expect(() => reminders.create("bot-a", { text: "x", at: "9999-12-31T23:59" }))
+      .toThrow(/too far ahead/);
+  });
+
+  it("sufit liczby czekających na bota — hamulec na bota w pętli", () => {
+    const time = clock(Date.UTC(2026, 8, 10, 12, 0, 0));
+    const reminders = new Reminders(file, () => {}, time.now, 0);
+    for (let i = 0; i < PENDING_PER_BOT_MAX; i++) {
+      reminders.create("bot-a", { text: `x${i}`, at: iso(time.now() + (i + 1) * 60_000) });
+    }
+    expect(() => reminders.create("bot-a", { text: "za dużo", at: iso(time.now() + 999_000) }))
+      .toThrow(/too many pending/);
+    // inny bot ma własny limit, a odpalone nie liczą się do sufitu
+    expect(() => reminders.create("bot-b", { text: "ok", at: iso(time.now() + 60_000) })).not.toThrow();
+  });
+
+  it("właściciel jedzie z rekordem — push ma trafić w JEGO telefon", () => {
+    const time = clock(Date.UTC(2026, 8, 10, 12, 0, 0));
+    const fired: Reminder[] = [];
+    const reminders = new Reminders(file, (r) => fired.push(r), time.now, 0);
+    reminders.create("bot-a", { text: "kawa", at: iso(time.now() + 1_000), userId: "user-1" });
+    time.advance(1_000);
+    reminders.tick();
+    expect(fired[0].userId).toBe("user-1");
+  });
+
+  it("rekord z niesparsowalną datą nie wraca z dysku jako wieczny pending", () => {
+    writeFileSync(file, JSON.stringify([
+      { id: "zly", botId: "bot-a", text: "x", at: "kiedyś", createdAt: "x", firedAt: null, status: "pending" },
+      { id: "dobry", botId: "bot-a", text: "y", at: new Date(Date.UTC(2026, 8, 11)).toISOString(), createdAt: "x", firedAt: null, status: "pending" },
+    ]));
+    const reminders = new Reminders(file, () => {}, Date.now, 0);
+    expect(reminders.list().map((r) => r.id)).toEqual(["dobry"]);
   });
 });

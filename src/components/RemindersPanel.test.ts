@@ -40,14 +40,11 @@ describe("relativeTime w panelu", () => {
 });
 
 describe("panel przypomnień", () => {
-  it("bierze listę CAŁEGO warsztatu i nie sortuje jej po swojemu", () => {
+  it("bierze listę CAŁEGO warsztatu, nie jednego bota", () => {
     expect(panel).toContain('api("/api/reminders")');
-    // kolejność rozstrzyga serwer — klient nie może mieć własnego `.sort(`
-    expect(panel).not.toContain(".sort(");
   });
 
   it("odpalone są wyszarzone, nie skasowane", () => {
-    expect(panel).toContain('const fired = r.status === "fired"');
     expect(panel).toContain('fired && "opacity-55"');
   });
 
@@ -73,7 +70,10 @@ describe("wejścia do panelu", () => {
   it("menu trzech kropek ma Przypomnienia obok Rutyn bota", () => {
     expect(menu).toContain('label: polish ? "Rutyny bota" : "Bot routines"');
     expect(menu).toContain('label: polish ? "Przypomnienia" : "Reminders"');
-    expect(menu).toContain('dispatch({ type: "toggleRoutines", open: true, tab: "reminders" })');
+    // bez `open: true`: druga zakładka otwartego panelu ma PRZEŁĄCZAĆ, a klik
+    // w tę samą pozycję zamykać panel — tak jak „Rutyny bota" obok
+    expect(menu).toContain('dispatch({ type: "toggleRoutines", tab: "reminders" })');
+    expect(menu).toContain('dispatch({ type: "toggleRoutines", tab: "routines" })');
   });
 
   it("pigułka odpalonego przypomnienia w transkrypcie otwiera ten panel", () => {

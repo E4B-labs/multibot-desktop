@@ -1556,13 +1556,15 @@ const USER_ASK_DISMISS_NOTE = "MultiBot: the user closed the question without an
 // JEDNO miejsce wysyłki powiadomień: sprawdza przełącznik bota, tytułem jest
 // nazwa bota, a `data.botId` pozwala aplikacji otworzyć po tapnięciu właśnie
 // tego bota. Wysyłka nigdy nie przerywa obsługi zdarzenia.
-function pushForBot(botId: string, kind: PushKind, body: string): void {
+function pushForBot(botId: string, kind: PushKind, body: string, only?: string[]): void {
   const bot = store.bot(botId);
   // `=== false` a nie `!`: boty zapisane zanim pole istniało nie mają go w JSON
   if (!bot || bot.notifications === false) return;
   // JEDYNA bramka „czy to w ogóle powiadomienie" — patrz `shouldNotify`
   if (!shouldNotify(kind)) return;
-  const audience = bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined;
+  // `only` wygrywa nad widocznością bota: przypomnienie należy do KONKRETNEGO
+  // człowieka, także wtedy, gdy ustawił je bot widoczny dla całego zespołu.
+  const audience = only ?? (bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined);
   void notifyPushDevices(bot.name || "Bot", body.slice(0, 300) || "…", bot.id, { botId: bot.id, kind }, audience).catch(() => {});
 }
 
@@ -1570,14 +1572,20 @@ function pushForBot(botId: string, kind: PushKind, body: string): void {
  * i `notify_user`. Push leci na telefon, ramka SSE budzi powłokę na pulpicie
  * (Electron rysuje banerkę systemową). Nie zapisuje wiadomości w czacie: tekst
  * pisze sam bot w swojej turze. */
-function notifyUser(botId: string, title: string, body: string, kind: "reminder" | "notify", pushBody?: string): void {
+function notifyUser(
+  botId: string,
+  title: string,
+  body: string,
+  kind: "reminder" | "notify",
+  options: { pushBody?: string; only?: string[] } = {},
+): void {
   // Wyciszony bot milczy na OBU drogach — push bramkuje `pushForBot`, banerkę
   // trzeba tu, bo `notifyFrame` zna tylko globalny przełącznik powłoki.
   if (store.bot(botId)?.notifications === false) return;
   // Banerka na pulpicie ma osobny nagłówek (nazwa bota + powód), a push tylko
   // jedną linię pod nazwą bota — `pushBody` pozwala napisać ją inaczej, zamiast
   // powtarzać nagłówek w treści.
-  pushForBot(botId, kind, pushBody ?? (body || title));
+  pushForBot(botId, kind, options.pushBody ?? (body || title), options.only);
   broadcast({ kind: "notify", botId, title, body });
 }
 
@@ -2954,8 +2962,21 @@ const harnessRoutines = new HarnessRoutines(join(DATA_DIR, "routines.json"), asy
 // `reminder` w transkrypcie. Tury nie zaczynamy — przypomnienie ma przypomnieć,
 // a nie wydać tokeny na komentarz do samego siebie.
 const reminders = new Reminders(join(DATA_DIR, "reminders.json"), (reminder) => {
-  notifyUser(reminder.botId, reminder.text, "", "reminder");
+  const bot = store.bot(reminder.botId);
+  // Banerka na pulpicie mówi, CO i OD KOGO — samo „kawa" nie mówi nic.
+  // Push ma nazwę bota w tytule, więc w treści zostaje sama treść.
+  notifyUser(
+    reminder.botId,
+    bot?.name ? `${t("Przypomnienie", "Reminder")} · ${bot.name}` : t("Przypomnienie", "Reminder"),
+    reminder.text,
+    "reminder",
+    { pushBody: reminder.text, only: reminder.userId ? [reminder.userId] : undefined },
+  );
   appendBotEvent(reminder.botId, { type: "reminder", value: reminder.text });
+  // Czat, który otwiera stuknięcie w powiadomienie, ma być oznaczony jako
+  // nieprzeczytany — inaczej push prowadzi do rozmowy bez żadnego śladu.
+  const updated = store.patchBot(reminder.botId, { unread: true });
+  if (updated) broadcast({ kind: "bot", bot: updated });
   broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
   console.log(`[reminders] fired ${reminder.id} (${reminder.botId}): ${reminder.text}`);
 });
@@ -3735,7 +3756,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           // „przypomnij mi jutro o 9" nie działało na żadnym świeżym bocie.
           case "reminders.create": {
             try {
-              const reminder = reminders.create(fromBotId, { text: body.text, at: body.at });
+              // Właścicielem przypomnienia jest właściciel bota: to jego telefon
+              // ma zabrzęczeć, nie telefon całego zespołu. Bez właściciela
+              // (instalacja bez kont) zostaje stare zachowanie.
+              const reminder = reminders.create(fromBotId, { text: body.text, at: body.at, userId: caller.ownerId ?? undefined });
               appendBotEvent(fromBotId, { type: "reminder-created", value: reminder.text });
               broadcast({ kind: "workspace", botId: fromBotId, resource: "reminders" });
               return json(res, 201, reminder);
@@ -3763,13 +3787,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             if (!reason) return json(res, 422, { error: "reason required" });
             const bot = store.bot(fromBotId);
             const name = bot?.name || "Bot";
+            // Nieprzeczytane zapalamy ZAWSZE — także gdy push się sklei albo
+            // bot jest wyciszony. Inaczej drugie wołanie w oknie limitu gubi
+            // sygnał całkowicie, zamiast tylko nie brzęczeć.
+            const updated = store.patchBot(fromBotId, { unread: true });
+            if (updated) broadcast({ kind: "bot", bot: updated });
+            // Wyciszony bot nie zużywa okna limitu: gdyby zużywał, odciszenie
+            // minutę później po cichu połykałoby pierwsze prawdziwe wołanie.
+            if (bot?.notifications === false) return json(res, 200, { ok: true, muted: true });
             if (!allowNotify(fromBotId)) return json(res, 200, { ok: true, collapsed: true });
             const wants = t("chce czegoś od Ciebie", "wants something from you");
             // banerka: „Atlas chce czegoś od Ciebie" / powód
             // push (tytułem jest nazwa bota): „Atlas" / „chce czegoś od Ciebie: powód"
-            notifyUser(fromBotId, `${name} ${wants}`, reason, "notify", `${wants}: ${reason}`);
-            const updated = store.patchBot(fromBotId, { unread: true });
-            broadcast({ kind: "bot", bot: updated });
+            notifyUser(fromBotId, `${name} ${wants}`, reason, "notify", { pushBody: `${wants}: ${reason}` });
             return json(res, 200, { ok: true });
           }
           // multibot: brak konektora to nie jest akapit prozy „wejdź w Plugins".
@@ -5050,8 +5080,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     // Osobny zasób obok rutyn: własny plik, własny harmonogram, własna lista.
     // Widoczność idzie po bocie — kto nie widzi bota, nie widzi jego
     // przypomnień i nie może ich ruszyć.
+    // Cudze przypomnienie nie jest cudzą sprawą: widać wyłącznie swoje (albo
+    // bezpańskie, z instalacji bez kont), i tylko po botach, które widać.
+    const myReminder = (r: { botId: string; userId?: string }) =>
+      canReadBot(store.bot(r.botId), actor) && (r.userId == null || r.userId === actor?.userId);
     if (path === "/api/reminders" && method === "GET") {
-      return json(res, 200, reminders.list().filter((r) => canReadBot(store.bot(r.botId), actor)));
+      return json(res, 200, reminders.list().filter(myReminder));
     }
     if (path === "/api/reminders" && method === "POST") {
       const body = await readBody(req);
@@ -5059,7 +5093,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const bot = store.bot(botId);
       if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
       try {
-        const reminder = reminders.create(botId, { text: body.text, at: body.at });
+        const reminder = reminders.create(botId, { text: body.text, at: body.at, userId: actor?.userId });
+        // ta sama pigułka co przy `create_reminder` bota — obie drogi zostawiają
+        // w transkrypcie ten sam ślad
+        appendBotEvent(botId, { type: "reminder-created", value: reminder.text });
         broadcast({ kind: "workspace", botId, resource: "reminders" });
         return json(res, 201, reminder);
       } catch (error) {
@@ -5069,7 +5106,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     m = path.match(/^\/api\/reminders\/([\w-]+)$/);
     if (m && method === "DELETE") {
       const reminder = reminders.get(m[1]);
-      if (!reminder || !canReadBot(store.bot(reminder.botId), actor)) return json(res, 404, { error: "no such reminder" });
+      if (!reminder || !myReminder(reminder)) return json(res, 404, { error: "no such reminder" });
       reminders.delete(reminder.id);
       broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
       return json(res, 200, { ok: true });
@@ -5077,11 +5114,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     m = path.match(/^\/api\/reminders\/([\w-]+)\/snooze$/);
     if (m && method === "POST") {
       const reminder = reminders.get(m[1]);
-      if (!reminder || !canReadBot(store.bot(reminder.botId), actor)) return json(res, 404, { error: "no such reminder" });
+      if (!reminder || !myReminder(reminder)) return json(res, 404, { error: "no such reminder" });
       const body = await readBody(req);
       const minutes = body.minutes === undefined ? SNOOZE_DEFAULT_MIN : Number(body.minutes);
       try {
+        // czytanie body oddaje pętlę zdarzeń — rekord mógł w tym czasie zniknąć
         const moved = reminders.snooze(reminder.id, minutes);
+        if (!moved) return json(res, 404, { error: "no such reminder" });
         broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
         return json(res, 200, moved);
       } catch (error) {
@@ -5092,7 +5131,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, reminders.list(m[1]));
+      return json(res, 200, reminders.list(m[1]).filter(myReminder));
     }
 
     // identity handshake for the packaged app's port fallback: the forked
@@ -5776,6 +5815,10 @@ try {
 }
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on ${SCHEME}://${HOST}:${PORT}`);
+  // multibot: zegar przypomnień rusza DOPIERO tu — drugi proces na tym samym
+  // katalogu danych (sonda portu z paczki, przypadkowy `node server/index.ts`)
+  // padnie wcześniej na EADDRINUSE i nie odpali cudzych przypomnień po raz drugi.
+  reminders.start();
   if (TLS_FINGERPRINT) console.log(`[multibot] tls fingerprint (sha256): ${TLS_FINGERPRINT}`);
   void reconcileComputers().catch((e) => console.warn("[multibot] computer reconcile failed:", e));
   // multibot (A2): rozgrzewka rusza PO podniesieniu HTTP i nie czeka na nic —

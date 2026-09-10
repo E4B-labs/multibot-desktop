@@ -133,7 +133,7 @@ export function ChatHeaderMenu({ onToggleFind }: { onToggleFind: () => void }) {
     reminders: {
       icon: Bell,
       label: polish ? "Przypomnienia" : "Reminders",
-      run: () => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" }),
+      run: () => dispatch({ type: "toggleRoutines", tab: "reminders" }),
     },
     skills: {
       icon: Wand2,

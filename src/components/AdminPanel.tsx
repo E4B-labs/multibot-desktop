@@ -61,10 +61,8 @@ type AddressReport = {
 };
 
 // „3 minutes ago" mieszka teraz w `@/lib/relativeTime` — ten sam formater
-// potrzebny był panelowi przypomnień. Re-eksport, żeby nie ruszać wołających.
+// potrzebny był panelowi przypomnień.
 import { relativeTime } from "@/lib/relativeTime";
-
-export { relativeTime };
 
 export function uptimeText(ms: number | undefined, polish: boolean): string {
   if (!ms || ms < 0) return "—";
