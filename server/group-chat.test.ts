@@ -168,7 +168,8 @@ describe("group chat: the user writes to everyone, the members pick who answers"
     for (const id of [atlas, researcher]) {
       const bot = await botOf(id);
       expect(bot.messages.map((m: any) => m.id), `prywatny czat ${id} zmieniony`).toEqual(before.get(id));
-      expect(JSON.stringify(bot.messages)).not.toContain("Group chat");
+      // Kropka „nieprzeczytane" ma iść za tym, CO WIDAĆ, a nie za rodzajem
+      // tury: skoro wyżej nic w tym czacie nie przybyło, kropki też nie ma.
       expect(bot.unread, `kropka nieprzeczytanych po turze grupowej u ${id}`).toBeFalsy();
     }
   }, 90_000);
