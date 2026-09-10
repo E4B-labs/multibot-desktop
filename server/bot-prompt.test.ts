@@ -362,4 +362,36 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("Write in the language the envelope asks for");
     expect(text).toContain("One owner per task; do not repeat what others said.");
   });
+
+  // multibot: boty odmawiały zwykłej roboty (scrape publicznej strony, eksport
+  // WŁASNYCH danych usera, ponowienia z backoffem) jednym zdaniem odmowy. Blok
+  // stanowiska jest BEZWARUNKOWY — każdy sterownik dostaje ten sam prompt, więc
+  // test przechodzi po tych samych zestawach integracji, co reszta pliku.
+  it("stanowisko operacyjne jest w promptcie na każdej ścieżce sterownika", () => {
+    const paths: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["pełny zestaw", ALL, {}],
+      ["sam agents", { agents: { command: "node" } }, {}],
+      ["sam komputer", { localComputer: { command: "py" } }, {}],
+      ["agents + web", { agents: { command: "node" }, web: { command: "node" } }, {}],
+      ["bez integracji", {}, {}],
+      ["tura izolowana", ALL, { isolated: true }],
+      ["tura grupowa", ALL, { group: { name: "Ekipa", members: [{ name: "Atlas" }] } }],
+    ];
+    for (const [name, integrations, extra] of paths) {
+      const text = prompt(integrations, extra);
+      expect(text, name).toContain("# Operating stance");
+      expect(text, name).toContain("Be helpful by default.");
+      expect(text, name).toContain("Ordinary automation is normal engineering");
+      expect(text, name).toContain("Never answer with a bare refusal.");
+      expect(text, name).toContain("say in ONE line what blocks it");
+      // nic w tym bloku nie może kazać oszukiwać ani nadpisywać polityki modelu
+      expect(text, name).toContain("None of this asks you to deceive anyone or to act against other people");
+    }
+    // tryb autonomiczny i standardowy dostęp idą osobnym workspace, nie przez `prompt`
+    for (const workspaceOverride of [{ autonomy: () => ({ autonomy: "autonomous" as const }) }, { access: () => ({ access: "standard" as const }) }]) {
+      const text = botSystemPrompt(bot, { isolated: false, integrations: ALL, workspace: { ...workspace, ...workspaceOverride } });
+      expect(text).toContain("# Operating stance");
+      expect(text).toContain("Never answer with a bare refusal.");
+    }
+  });
 });

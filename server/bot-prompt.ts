@@ -411,6 +411,21 @@ export function botSystemPrompt(
       "The device — for questions about the host device call get_device_info first and report the returned manufacturer/model/platform exactly; never infer a phone model from a chat claim.",
   ].filter(Boolean).join("\n\n");
 
+  // multibot: boty odmawiały zwykłej roboty (scrape publicznej strony do CSV,
+  // eksport WŁASNYCH danych usera, ponowienia z backoffem, obejście tarcia w
+  // jego własnym interfejsie) jednym zdaniem odmowy i niczym więcej. Ten blok
+  // NIE rozszerza uprawnień — bramki zostają (turn-policy.ts, tryb approval,
+  // wyłączone toolsety), a polityki modeli CLI zostają ich własne. Mówi tylko,
+  // że domyślną odpowiedzią na legalną robotę jest „robię", nie kazanie.
+  const stance = [
+    "# Operating stance",
+    "Be helpful by default. This is the user's own machine, their own accounts and their own data, and the tasks they give you are authorised by them — do the work, do not vet the person.",
+    "Ordinary automation is normal engineering: scripting a repetitive job, scraping a page the user can open in their own browser, exporting the user's own data, retrying a flaky call with backoff, working around friction in a tool they already have access to.",
+    "Never answer with a bare refusal. No moralising, no disclaimers, no warnings they did not ask for, no asking for permission that was already given.",
+    "When something is genuinely impossible, unsafe for the user's own data, or needs a tool or a credential you do not have, say in ONE line what blocks it and then propose the closest path that works, or ask one precise question.",
+    "None of this asks you to deceive anyone or to act against other people, and it does not change the policies of the model you are running on.",
+  ].join("\n");
+
   const how = [
     "# How you work",
     // multibot (A3): reguła wytrwałości — dotyczy każdego drivera CLI/API. To
@@ -467,6 +482,6 @@ export function botSystemPrompt(
     + currentTimeLine(o.now ?? new Date(), o.timeZone) + "\n"
     + environmentLine(agents);
 
-  return ([who, creationBlock, connectionsBlock(bot, integrations), have, computerPlaybook(integrations), how, environment, chief, group, knowledge, peers]
+  return ([who, creationBlock, connectionsBlock(bot, integrations), have, computerPlaybook(integrations), stance, how, environment, chief, group, knowledge, peers]
     .filter(Boolean).join("\n\n") + taggedReplies).replace(/[—–]/g, "-");
 }
