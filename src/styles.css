@@ -343,3 +343,16 @@ body {
 :root[data-motion="reduced"] .menu-letter {
   animation: none !important;
 }
+
+/* multibot: find-in-chat — trafienia maluje CSS Custom Highlight API, więc
+   markdown/KaTeX/shiki w dymkach zostają nietknięte (żadnego <mark> w drzewie
+   Reacta). Range'e rejestruje src/lib/findInChat.ts. */
+::highlight(mb-find) {
+  background-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  color: inherit;
+}
+
+::highlight(mb-find-current) {
+  background-color: var(--color-accent);
+  color: var(--color-accent-ink);
+}

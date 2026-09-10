@@ -1,52 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
-import { findMessageHits } from "@/lib/findInChat";
-import type { Message } from "@/state/store";
 import { useLanguage } from "@/lib/language";
+import type { ChatFind } from "@/lib/useChatFind";
 
-/** multibot: pasek szukania w transkrypcie bota. Enter/Shift+Enter skacze po
- * trafieniach, Escape zamyka. Trafienia liczy findInChat.ts (client-side). */
-export function ChatFindBar({
-  messages,
-  onClose,
-  onJump,
-}: {
-  messages: Message[];
-  onClose: () => void;
-  onJump: (messageId: string) => void;
-}) {
+/** multibot: pasek szukania w transkrypcie bota. Enter/Shift+Enter i ↑↓ skaczą
+ * po trafieniach, Escape zamyka. Trafienia zbiera i maluje `useChatFind`
+ * (CSS Custom Highlight API), pasek jest tylko polem i licznikiem. */
+export function ChatFindBar({ find, onClose }: { find: ChatFind; onClose: () => void }) {
   const polish = useLanguage() === "pl";
-  const [raw, setRaw] = useState("");
-  const [query, setQuery] = useState("");
-  const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { raw, setRaw, total, index, move } = find;
 
   useEffect(() => {
     inputRef.current?.focus();
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
   }, []);
-
-  // debounce 150 ms — pisanie nie powinno przeliczać trafień co klawisz
-  useEffect(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setQuery(raw), 150);
-  }, [raw]);
-
-  const hits = useMemo(() => findMessageHits(messages, query), [messages, query]);
-  const firstHit = hits[0];
-  useEffect(() => setIdx(0), [firstHit]);
-
-  const move = (delta: number) => {
-    if (!hits.length) return;
-    setIdx((current) => (current + delta + hits.length) % hits.length);
-  };
-
-  useEffect(() => {
-    if (hits[idx]) onJump(hits[idx]);
-  }, [idx, hits, onJump]);
 
   return (
     <div
@@ -65,18 +32,24 @@ export function ChatFindBar({
           } else if (e.key === "Enter") {
             e.preventDefault();
             move(e.shiftKey ? -1 : 1);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            move(1);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            move(-1);
           }
         }}
         placeholder={polish ? "Szukaj w rozmowie…" : "Find in chat…"}
         className="w-52 bg-transparent px-1 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60"
       />
       <span className="min-w-10 text-center text-[11.5px] tabular-nums text-ink-secondary">
-        {hits.length ? `${Math.min(idx + 1, hits.length)}/${hits.length}` : "0/0"}
+        {total ? `${index + 1}/${total}` : "0/0"}
       </span>
       <button
         type="button"
         onClick={() => move(-1)}
-        disabled={!hits.length}
+        disabled={!total}
         aria-label={polish ? "Poprzednie trafienie" : "Previous match"}
         className="rounded-md p-1 text-ink-secondary hover:bg-panel hover:text-ink disabled:opacity-40"
       >
@@ -85,7 +58,7 @@ export function ChatFindBar({
       <button
         type="button"
         onClick={() => move(1)}
-        disabled={!hits.length}
+        disabled={!total}
         aria-label={polish ? "Następne trafienie" : "Next match"}
         className="rounded-md p-1 text-ink-secondary hover:bg-panel hover:text-ink disabled:opacity-40"
       >

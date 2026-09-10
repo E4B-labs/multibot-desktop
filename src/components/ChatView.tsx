@@ -9,6 +9,7 @@ import { AttachmentCard } from "./AttachmentCard";
 import { AttachmentPreviewDialog } from "./AttachmentPreview";
 // multibot: pasek szukania w transkrypcie (port z upstreamu #437)
 import { ChatFindBar } from "./ChatFindBar";
+import { useChatFind } from "@/lib/useChatFind";
 // multibot: flat replies — cytowanie wiadomości (port z upstreamu #437)
 import { ReplyQuote, replyTargetOf } from "./ReplyQuote";
 import { routineStartName, slashCommandLabel } from "@/lib/transcriptChips";
@@ -195,6 +196,9 @@ function Bubble({
         {user ? (
           <>
             <div
+              // multibot: kotwica dla find-in-chat — walker po trafieniach
+              // schodzi TYLKO do treści dymka, nie do stopki i badge'y
+              data-mb-body=""
               className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
             >
               {envelope && <PeerBadge name={envelope.from} />}
@@ -491,10 +495,14 @@ export function ChatView({ bot }: { bot: Bot }) {
       .querySelector(`[data-mb-msg="${CSS.escape(highlightId)}"]`)
       ?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [highlightId]);
+  // multibot: trafienia w treści — podświetla je useChatFind po Range'ach
+  // (patrz lib/findInChat.ts), pasek pokazuje tylko „3/17".
+  const find = useChatFind(scrollRef, findOpen);
   const closeFind = useCallback(() => {
     setFindOpen(false);
     setHighlightId(null);
-  }, []);
+    find.reset();
+  }, [find]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -684,7 +692,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           między nagłówkiem a polem pisania i karta wyglądała na przesuniętą. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {findOpen && (
-          <ChatFindBar messages={bot.messages} onClose={closeFind} onJump={jumpToHit} />
+          <ChatFindBar find={find} onClose={closeFind} />
         )}
         {/* Messages */}
         <div
