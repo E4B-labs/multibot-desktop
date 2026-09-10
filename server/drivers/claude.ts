@@ -414,6 +414,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // (Gmail, Supabase…), o które nikt go nie prosił i których nie
         // sprawdza żadna bramka uprawnień tego harnessu.
         "--strict-mcp-config",
+        // multibot: to samo dla USTAWIEŃ. Bez tego CLI wczytuje osobisty
+        // CLAUDE.md, skille, hooki i pluginy właściciela maszyny (E2E 10.09.2026
+        // na PC Kacpra: bot odpowiadał w jego „caveman mode", przedstawiał się
+        // jego nazwą, wyliczał 171 jego skilli zamiast jednego skilla z
+        // workspace'u i zaczynał turę 20 s dłużej). Tożsamość, pamięć i skille
+        // bota niesie prompt systemowy harnessu — nic z ~/.claude nie ma do niej
+        // wstępu. Na telefonie nic się nie zmienia: ~/.claude jest tam puste.
+        "--setting-sources", "",
       ];
       // Haiku has no adaptive-effort control in Claude Code.
       if (selectedModel !== "claude-haiku-4-5") args.push("--effort", requestedReasoning || "low");
@@ -458,6 +466,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // Odcinamy je, żeby model sięgnął po `mcp__agents__ask_user`, które
         // stawia w czacie prawdziwą kartę i czeka na człowieka.
         "AskUserQuestion",
+        // multibot: skille bota to skille WORKSPACE'U (prompt „# Reusable
+        // skills" + `list_skills`/`create_skill`). Wbudowane `Skill` Claude
+        // Code'a wnosi do prompta listę skilli SAMEGO CLI (code-review, loop,
+        // schedule…) i model odpowiadał nią na „jakie masz skille?", a skilla
+        // wgranego przez użytkownika „nie widział" (E2E 10.09.2026: 13 skilli
+        // CLI, „no greeting skill", mimo że był w prompcie). Bez tego
+        // narzędzia wylicza i STOSUJE skille z workspace'u.
+        "Skill",
         ...(policy ? [
           ...(policy.permissions.terminal === false ? ["Bash"] : []),
           ...(policy.permissions.file === false ? ["Read", "Edit", "Write", "NotebookEdit", "Glob", "Grep"] : []),
