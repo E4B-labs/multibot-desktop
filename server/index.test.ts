@@ -334,18 +334,33 @@ describe("harness HTTP API", () => {
   });
 
   it("rejects groups larger than twelve bots", async () => {
-    const bots = (await api("GET", "/api/bots")).body.bots;
-    const first = bots[0].id;
-    const create = await api("POST", "/api/groups", { name: "Too many", bot_ids: Array(13).fill(first) });
-    expect(create.status).toBe(400);
-    expect(create.body).toEqual({ error: "group has at most 12 bots" });
+    // Trzynaście RÓŻNYCH botów — na powtórzonym identyfikatorze test przechodziłby
+    // tylko dlatego, że limit liczy długość tablicy, a nie prawdziwy skład.
+    const ids: string[] = [];
+    for (let i = 0; i < 13; i++) ids.push((await api("POST", "/api/bots")).body.bot.id);
 
-    const second = (await api("POST", "/api/bots")).body.bot;
-    const full = await api("POST", "/api/groups", { name: "Full", bot_ids: Array(12).fill(first) });
+    const tooMany = await api("POST", "/api/groups", { name: "Too many", bot_ids: ids });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: "group has at most 12 bots" });
+    expect((await api("GET", "/api/groups")).body).toEqual([]);
+
+    // Ten sam bot powtórzony nie zapycha limitu — skład jest odchudzany o duplikaty.
+    const dupes = await api("POST", "/api/groups", { name: "Dupes", bot_ids: Array(13).fill(ids[0]) });
+    expect(dupes.status).toBe(201);
+    expect(dupes.body.bot_ids).toHaveLength(1);
+    expect((await api("DELETE", `/api/groups/${dupes.body.id}`)).status).toBe(200);
+
+    const full = await api("POST", "/api/groups", { name: "Full", bot_ids: ids.slice(0, 12) });
     expect(full.status).toBe(201);
-    const added = await api("PATCH", `/api/groups/${full.body.id}/members`, { botId: second.id });
+    expect(full.body.bot_ids).toHaveLength(12);
+    const added = await api("PATCH", `/api/groups/${full.body.id}/members`, { botId: ids[12] });
     expect(added.status).toBe(400);
     expect(added.body).toEqual({ error: "group has at most 12 bots" });
+    // Dopisanie bota, który już jest w grupie, zostaje idempotentne mimo limitu.
+    const again = await api("PATCH", `/api/groups/${full.body.id}/members`, { botId: ids[0] });
+    expect(again.status).toBe(200);
+    expect(again.body.bot_ids).toHaveLength(12);
+    expect((await api("DELETE", `/api/groups/${full.body.id}`)).status).toBe(200);
   });
 
   it("serves a provider-neutral workspace for every harness bot", async () => {

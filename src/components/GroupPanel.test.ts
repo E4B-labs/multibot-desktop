@@ -57,17 +57,14 @@ describe("wiersz grupy w Sidebarze", () => {
   // Poziomy stos „-space-x" odrzucony 10.09.2026: rozpychał wiersz grupy i był
   // wyższy od wiersza bota. Teraz awatary siedzą w pudełku 48×48, tym samym co
   // przy bocie, a układ wybiera `groupAvatarLayout`.
-  it("skupia awatary w pudełku 48×48 zamiast poziomego stosu", () => {
+  it("nie wraca do poziomego stosu awatarów", () => {
     const start = sidebar.indexOf("groupAvatarLayout(members");
     const end = sidebar.indexOf("function GroupCreateForm", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
-    expect(row).toContain('<span className="relative size-12 shrink-0">');
-    expect(row).toContain("shown.map((member, index)");
-    expect(row).toContain('size={layout === "solo" ? 48 : 24}');
     expect(row).not.toContain("-space-x-");
-    expect(row).not.toContain('solo ? "size-12 justify-center"');
+    expect(row).not.toContain("groupAvatarStack");
     // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
     expect(row).toContain("{...groupMemberAvatarProps(member)}");
   });

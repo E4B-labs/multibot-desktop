@@ -36,7 +36,7 @@ import { authFetch } from "@/lib/auth";
 // multibot: F11 — status silnika dla warunkowej kropki w stopce
 import { getLanguage, useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { groupAvatarLayout, groupRowTitle, MAX_GROUP_MEMBERS } from "@/lib/groupRow";
+import { groupAvatarLayout, type GroupAvatarLayout, groupRowTitle, MAX_GROUP_MEMBERS } from "@/lib/groupRow";
 // multibot: kolejność sekcji i podział wierszy — czysta logika, testowana osobno
 import { moveSectionTo, sectionRows } from "@/lib/sidebarSections";
 // multibot: czerwony wykrzyknik na ikonie ustawień — jest widoczna aktualizacja
@@ -786,7 +786,7 @@ function useEngineGroups(workspaceVersion: unknown) {
 
 /** Pozycje awatarów w pudełku 48×48 wiersza grupy — indeks w `shown` wybiera
  *  slot. Pudełko jest to samo co przy bocie, więc wiersze mają równą wysokość. */
-const GROUP_AVATAR_SLOTS: Record<"solo" | "pair" | "trio" | "stack", string[]> = {
+const GROUP_AVATAR_SLOTS: Record<GroupAvatarLayout, string[]> = {
   solo: ["inset-0"],
   pair: ["left-0 top-3", "right-0 top-3"],
   trio: ["left-0 top-0", "right-0 top-0", "bottom-0 left-3"],
@@ -878,7 +878,9 @@ function GroupRow({
       {members.length > 0 ? (
         <span className="relative size-12 shrink-0">
           {shown.map((member, index) => (
-            <span key={member.id} className={cn("absolute", GROUP_AVATAR_SLOTS[layout][index])}>
+            // Klucz z indeksem, bo stare grupy mogą nieść ten sam bot_id dwa razy
+            // (dedup wszedł dopiero teraz, po stronie serwera).
+            <span key={`${member.id}-${index}`} className={cn("absolute", GROUP_AVATAR_SLOTS[layout][index])}>
               <BotAvatar
                 color={member.color}
                 avatarUrl={member.avatarUrl}
@@ -889,8 +891,9 @@ function GroupRow({
               />
             </span>
           ))}
-          {layout === "stack" && hiddenCount > 0 && (
+          {hiddenCount > 0 && (
             <span
+              role="img"
               aria-label={`${hiddenCount} more group members`}
               className="absolute bottom-0 right-0 z-10 flex size-6 items-center justify-center rounded-full bg-raised text-[11px] font-semibold text-ink-secondary ring-2 ring-panel"
             >
@@ -1025,12 +1028,16 @@ function GroupCreateForm({
           );
         })}
       </div>
-      <div className="text-[11px] text-ink-secondary">{picked.size}/{MAX_GROUP_MEMBERS}</div>
+      {/* Przy 12/12 pola wyboru gasną — licznik jest jedynym wyjaśnieniem, więc
+          czytnik ekranu musi go usłyszeć bez wracania kursorem. */}
+      <div aria-live="polite" className="text-[11px] text-ink-secondary">
+        {picked.size}/{MAX_GROUP_MEMBERS}
+      </div>
       {error && <div className="text-[12px] text-danger">{error}</div>}
       <div className="flex gap-2">
         <button
           onClick={() => void create()}
-          disabled={busy || !name.trim() || picked.size === 0 || picked.size > MAX_GROUP_MEMBERS}
+          disabled={busy || !name.trim() || picked.size === 0}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-raised py-1.5 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy && <Loader2 size={12} className="animate-spin" />}
