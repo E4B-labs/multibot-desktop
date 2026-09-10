@@ -153,6 +153,14 @@ function Bubble({
     // data-mb-msg = kotwica dla find-in-chat
     <div
       data-mb-msg={message.id}
+      // multibot: seria dymków (iMessage) — reguły w styles.css, sekcja
+      // `[data-mb-side]`. O przynależności do serii decyduje SĄSIEDZTWO W DOM,
+      // nie indeks wiadomości: między dymkami stają pigułki zdarzeń, chipy
+      // pokoju, karty, podglądy ekranu, załącznik SKILL.md i separatory sesji
+      // — każde z nich przerywa serię i przerywa ją samym tym, że stoi
+      // pomiędzy. Dlatego nie ma tu mapy „ta wiadomość jest N-ta w serii":
+      // musiałaby powtórzyć całą logikę widoczności z pętli renderującej.
+      data-mb-side={user ? "user" : "bot"}
       className={cn(
         "group/msg flex w-full rounded-2xl transition-shadow",
         user ? "justify-end" : "justify-start",
@@ -167,6 +175,7 @@ function Bubble({
           (dymek + przyciski), przyciski są `shrink-0`. */}
       <div className="flex min-w-0 max-w-[90%] items-end gap-1">
       <div
+        data-mb-bubble=""
         className={cn(
           // multibot: dymek szeroki (90%) — poprzednie 35% było dla właściciela
           // za wąskie, 29.08 poprosił o niemal pełną szerokość kolumny czatu,
@@ -486,13 +495,16 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
 
 function StreamingBubble({ text }: { text: string }) {
   return (
-    <div className="flex w-full justify-start">
+    // multibot: dymek strumienia dokleja się do serii bota tak samo jak gotowy
+    // (patrz styles.css `[data-mb-side]`) — inaczej ostatni dymek odskakiwałby
+    // w chwili, gdy strumień się kończy i Bubble go podmienia.
+    <div className="flex w-full justify-start" data-mb-side="bot">
       {/* multibot: ten sam rozmiar co Bubble — inaczej tekst „skakałby" po
           zakończeniu strumienia; wrapper-wiersz identyczny jak w Bubble
           (bez przycisków), żeby sufit szerokości liczył się w tym samym
           miejscu. */}
       <div className="flex min-w-0 max-w-[90%] items-end gap-1">
-      <div className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
+      <div data-mb-bubble="" className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
         <ChatMarkdown text={text} streaming compact />
         <span className="ml-0.5 inline-block h-[13px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
       </div>
