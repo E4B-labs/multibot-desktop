@@ -78,8 +78,10 @@ body {
       plus 8 px przerwy = 114 px). Zasłoniłyby nagłówek tego panelu, który
       akurat stoi przy prawej krawędzi — a stoi tam za każdym razem inny:
       czat, grupa, pokój, ustawienia aplikacji, skille, rutyny, komputer,
-      inspektor. Reguła wybiera go sama, więc żaden z nich nie musi o tym
-      wiedzieć ani dostawać propa.
+      inspektor, lista pokojów. Reguła wybiera go sama, więc żaden z nich nie
+      musi dostawać propa — musi tylko wystawić `data-shell-header` na swoim
+      bezpośrednim dziecku, bo w to celuje reguła. Panel bez tego atrybutu
+      jest dla niej niewidzialny i po cichu zostaje bez odstępu.
 
       „Ostatni" znaczy: ostatni `main`/`aside`, a NIE ostatnie dziecko.
       Nakładki na całą powłokę (konektory, mapa zespołu) to `div` doklejone

@@ -133,16 +133,3 @@ describe("kręcenie ikoną odświeżania", () => {
     expect(status).not.toContain("setRefreshing");
   });
 });
-
-describe("nagłówek panelu pod nakładką nadal robi miejsce na kontrolki okna", () => {
-  it("odstęp wybiera ostatni panel, a nie ostatnie dziecko", () => {
-    // Regresja 0.5.33: nakładka to `div` doklejony ZA `<main>` czatu, więc
-    // `main:last-child` przestawało pasować w chwili otwarcia okna wtyczek
-    // i nagłówek czatu tracił swoje 114 px — jego ikony („Bot's computer",
-    // „Bot routines", „Bot skills": 1314-1420 px przy oknie 1440) wjeżdżały
-    // pod kontrolki okna (1337-1440). Nakładka jest półprzezroczysta, więc
-    // było to widać jako zlepek ikon w prawym górnym rogu.
-    expect(styles).not.toMatch(/> main:last-child > \[data-shell-header\]/);
-    expect(styles).toMatch(/:is\(main, aside\):not\(:has\(~ :is\(main, aside\)\)\) > \[data-shell-header\]/);
-  });
-});

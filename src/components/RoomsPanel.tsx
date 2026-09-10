@@ -33,7 +33,12 @@ export function RoomsPanel() {
 
   return (
     <main className="animate-panel-in flex h-full min-w-0 flex-1 flex-col bg-app text-ink">
-      <header className="flex items-center gap-3 border-b border-hairline/40 px-4 py-3">
+      {/* multibot: `data-shell-header` — jako jedyny panel lista pokojów go nie
+          miała, więc w oknie bez ramki nie dostawała odstępu na kontrolki okna
+          i jej „Zamknij" (`ml-auto`, przy samej krawędzi) lądował pod
+          minimalizuj/maksymalizuj/zamknij. Reguła w styles.css celuje w ten
+          atrybut, więc panel bez niego jest dla niej niewidzialny. */}
+      <header data-shell-header className="flex items-center gap-3 border-b border-hairline/40 px-4 py-3">
         <button
           onClick={close}
           className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
