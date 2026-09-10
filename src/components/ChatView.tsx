@@ -159,10 +159,13 @@ function Bubble({
         highlighted ? "ring-2 ring-accent/70" : "",
       )}
     >
-      {/* multibot: kolumna dymek+stopka — stopka (TTS, kopiuj) wyszła z dymka
-          na tło czatu, ale zostaje pod dymkiem; hover dalej steruje `group/msg`
-          na całym wierszu, więc hitbox pokazywania przycisków bez zmian. */}
-      <div className="flex min-w-0 max-w-[90%] flex-col">
+      {/* multibot: wiersz dymek+przyciski — rząd (TTS, kopiuj) stoi na PRAWO
+          od dymka, na tle czatu, wyrównany do jego dołu; pod dymkiem nie ma
+          już stopki, więc dymki bota niemal się stykają (gap-1 listy). Hover
+          dalej steruje `group/msg` na całym wierszu, więc przejazd myszą
+          dymek→przycisk niczego nie chowa. Sufit 90% liczy się dla całości
+          (dymek + przyciski), przyciski są `shrink-0`. */}
+      <div className="flex min-w-0 max-w-[90%] items-end gap-1">
       <div
         className={cn(
           // multibot: dymek szeroki (90%) — poprzednie 35% było dla właściciela
@@ -180,7 +183,7 @@ function Bubble({
           // `min-w-0` zdejmuje blokadę, `break-words` łamie sam token.
           // `overflow-wrap` dziedziczy się w dół, więc obejmuje też markdown;
           // bloki kodu zostają nietknięte, bo `white-space:pre` nie zawija.
-          // multibot: `min-w-0 max-w-[90%]` przeniesione na wrapper kolumny wyżej
+          // multibot: `min-w-0 max-w-[90%]` przeniesione na wrapper wiersza wyżej
           "min-w-0 break-words rounded-2xl px-2 py-[5px] text-[14px] leading-[1.45]",
           user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
           message.pending && "opacity-60",
@@ -223,11 +226,11 @@ function Bubble({
           <ChatMarkdown text={text} compact />
         )}
       </div>
-      {/* multibot: stopka POD dymkiem, na tle czatu; czas sesji renderuje się
-          osobno między wiadomościami. U użytkownika stopka była pusta, więc
-          nie renderujemy jej wcale. */}
+      {/* multibot: przyciski obok dymka; czas sesji renderuje się osobno
+          między wiadomościami. U użytkownika rząd byłby pusty, więc nie
+          renderujemy go wcale. */}
       {!user && (
-        <div className="mt-1 flex items-center justify-start gap-1.5 text-[10px] leading-none">
+        <div className="flex shrink-0 items-center gap-1.5 text-[10px] leading-none">
           {/* multibot: TTS — see SpeakButton.tsx; renders null with no voice key */}
           <SpeakButton text={text} />
           {/* multibot: kopiowanie zrodla wiadomosci - patrz CopyMessageButton.tsx */}
@@ -485,9 +488,10 @@ function StreamingBubble({ text }: { text: string }) {
   return (
     <div className="flex w-full justify-start">
       {/* multibot: ten sam rozmiar co Bubble — inaczej tekst „skakałby" po
-          zakończeniu strumienia; wrapper-kolumna identyczny jak w Bubble,
-          żeby sufit szerokości liczył się w tym samym miejscu. */}
-      <div className="flex min-w-0 max-w-[90%] flex-col">
+          zakończeniu strumienia; wrapper-wiersz identyczny jak w Bubble
+          (bez przycisków), żeby sufit szerokości liczył się w tym samym
+          miejscu. */}
+      <div className="flex min-w-0 max-w-[90%] items-end gap-1">
       <div className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
         <ChatMarkdown text={text} streaming compact />
         <span className="ml-0.5 inline-block h-[13px] w-[2px] animate-pulse bg-ink-secondary align-middle" />

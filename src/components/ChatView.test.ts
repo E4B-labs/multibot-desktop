@@ -28,19 +28,19 @@ function bubbleLines(): string[] {
     .filter((line) => line.includes("rounded-2xl") && line.includes("py-[5px]"));
 }
 
-/** Linie wrappera-kolumny nad dymkiem: to na nim siedzi teraz sufit
- *  szerokości (`max-w-[…]`) — stopka (TTS/kopiuj) wyszła z dymka pod niego,
- *  więc dymek i stopka dzielą jedną kolumnę o wspólnym suficie. */
+/** Linie wrappera-wiersza nad dymkiem: to na nim siedzi teraz sufit
+ *  szerokości (`max-w-[…]`) — rząd przycisków (TTS/kopiuj) stoi na prawo
+ *  od dymka, więc dymek i przyciski dzielą jeden wiersz o wspólnym suficie. */
 function wrapperLines(): string[] {
   // Wrapper znajdujemy przez kotwicę do dymka: to najbliższa NAD dymkiem
-  // linia z `flex-col`. Sam grep po `flex-col` + `max-w-[` łapał też kolumnę
+  // linia z `items-end`. Sam grep po `max-w-[` łapał też kolumnę
   // załączników (`max-w-[70%] … gap-2`), która dymkiem nie jest.
   const lines = chat.split(/\r?\n/);
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (!(lines[i].includes("rounded-2xl") && lines[i].includes("py-[5px]"))) continue;
     for (let j = i - 1; j >= 0 && j >= i - 30; j--) {
-      if (lines[j].includes("flex-col")) {
+      if (lines[j].includes("items-end")) {
         out.push(lines[j]);
         break;
       }
@@ -49,7 +49,7 @@ function wrapperLines(): string[] {
   return out;
 }
 
-/** Szerokości z linii wrapperów kolumn dymków. */
+/** Szerokości z linii wrapperów wierszy dymków. */
 function bubbleWidths(): string[] {
   const out: string[] = [];
   for (const line of wrapperLines()) {
@@ -67,11 +67,22 @@ describe("szerokość dymków czatu", () => {
     expect(new Set(widths).size, `rozjechane szerokości dymków: ${widths.join(", ")}`).toBe(1);
   });
 
+  // multibot: rząd kopiuj/TTS stoi na PRAWO od dymka (wyrównany do dołu),
+  // nie pod nim — pod dymkiem nie ma dodatkowej wysokości, więc dymki bota
+  // niemal się stykają. Przyciski `shrink-0`, żeby nie kurczył ich sufit.
+  it("przyciski stoją obok dymka, nie pod nim", () => {
+    for (const line of wrapperLines()) {
+      expect(line, `wrapper wrócił do kolumny: ${line.trim()}`).not.toContain("flex-col");
+      expect(line, `wrapper bez wyrównania do dołu: ${line.trim()}`).toContain("items-end");
+    }
+    expect(chat).toContain('"flex shrink-0 items-center gap-1.5 text-[10px] leading-none"');
+  });
+
   it("dymek jest szeroki, nie zwężony do jednej trzeciej", () => {
     expect(Number.parseInt(bubbleWidths()[0], 10)).toBeGreaterThanOrEqual(80);
   });
 
-  // multibot: `max-w-` to sufit, nie szerokość — wrapper kolumny jest
+  // multibot: `max-w-` to sufit, nie szerokość — wrapper wiersza jest
   // elementem flexa, więc kurczy się do treści i jednoliniowa odpowiedź bota
   // („Sesja wygasła, loguję się ponownie.") zajmuje tyle, ile potrzebuje.
   // `w-full` w tej samej klasie zamienia sufit w szerokość na sztywno i każdy
