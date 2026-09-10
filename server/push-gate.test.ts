@@ -1,45 +1,46 @@
-// Jedyna bramka „czy to warte powiadomienia" (`server/push.ts`). Czysta
-// funkcja, więc test jest listą przypadków ze specyfikacji, a nie harnessem:
-// gadanie botów i start tury milczą, odpowiedź dla człowieka, przypomnienie i
-// prośba o decyzję brzęczą.
+// Jedyna bramka „czy to leci na telefon" (`server/push.ts`). Czysta funkcja,
+// więc test jest listą przypadków ze specyfikacji Kacpra (10.09.2026):
+// przypomnienie brzęczy, `notify_user` brzęczy, cała reszta MILCZY.
 import { describe, expect, it } from "vitest";
 
-import { shouldNotify } from "./push.ts";
+import { allowNotify, NOTIFY_GAP_MS, resetNotifyLimit, shouldNotify, type PushKind } from "./push.ts";
+
+const SILENT: PushKind[] = ["question", "handoff", "approval", "started", "finished", "failed", "attention"];
 
 describe("shouldNotify", () => {
-  it("wiadomość bot-bot (pokój, peer): cisza", () => {
-    expect(shouldNotify({ kind: "notify", origin: "bot" })).toBe(false);
-    expect(shouldNotify({ kind: "finished", origin: "bot" })).toBe(false);
-    expect(shouldNotify({ kind: "failed", origin: "bot" })).toBe(false);
+  it("przypomnienie: jedyny automatyczny push", () => {
+    expect(shouldNotify("reminder")).toBe(true);
   });
 
-  it("start tury: cisza niezależnie od tego, kto ją zaczął", () => {
-    expect(shouldNotify({ kind: "started", origin: "user" })).toBe(false);
-    expect(shouldNotify({ kind: "started", origin: "routine" })).toBe(false);
-    expect(shouldNotify({ kind: "started", origin: "bot" })).toBe(false);
+  it("notify_user: wyjątek, o który prosi sam bot", () => {
+    expect(shouldNotify("notify")).toBe(true);
   });
 
-  it("koniec tury człowieka w jego czacie: push", () => {
-    expect(shouldNotify({ kind: "finished", origin: "user" })).toBe(true);
-    expect(shouldNotify({ kind: "notify", origin: "user" })).toBe(true);
+  it("koniec tury, odpowiedź bota, needsAttention, prośby o zgodę: cisza", () => {
+    for (const kind of SILENT) expect(shouldNotify(kind)).toBe(false);
+  });
+});
+
+describe("allowNotify", () => {
+  it("pierwsze wołanie przechodzi, kolejne w oknie 10 minut sklejają się", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    expect(allowNotify("bot-a", t0)).toBe(true);
+    expect(allowNotify("bot-a", t0 + 1)).toBe(false);
+    expect(allowNotify("bot-a", t0 + NOTIFY_GAP_MS - 1)).toBe(false);
   });
 
-  it("przypomnienie: push także wtedy, gdy akurat trwa praca bot-bot", () => {
-    expect(shouldNotify({ kind: "reminder", origin: "routine" })).toBe(true);
-    expect(shouldNotify({ kind: "reminder", origin: "bot" })).toBe(true);
+  it("po oknie bot znów może brzęknąć", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    expect(allowNotify("bot-a", t0)).toBe(true);
+    expect(allowNotify("bot-a", t0 + NOTIFY_GAP_MS)).toBe(true);
   });
 
-  it("prośba o zgodę, sekret i przekazanie komputera: push zawsze", () => {
-    for (const origin of ["user", "routine", "bot"] as const) {
-      expect(shouldNotify({ kind: "approval", origin })).toBe(true);
-      expect(shouldNotify({ kind: "question", origin })).toBe(true);
-      expect(shouldNotify({ kind: "handoff", origin })).toBe(true);
-      expect(shouldNotify({ kind: "attention", origin })).toBe(true);
-    }
-  });
-
-  it("brak znanego pochodzenia tury nie wycisza powiadomienia", () => {
-    expect(shouldNotify({ kind: "finished" })).toBe(true);
-    expect(shouldNotify({ kind: "reminder" })).toBe(true);
+  it("limit jest per bot, nie globalny", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    expect(allowNotify("bot-a", t0)).toBe(true);
+    expect(allowNotify("bot-b", t0)).toBe(true);
   });
 });

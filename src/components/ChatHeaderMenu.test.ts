@@ -16,11 +16,12 @@ function rule(selector: string): string {
 // nagłówek czatu oddał je menu wyłącznie na pulpicie.
 describe("menu akcji w nagłówku czatu", () => {
   it("niesie widoczne funkcje, bez powtórzeń", () => {
-    expect([...CHAT_HEADER_ACTIONS].sort()).toEqual(["computer", "find", "routines", "skills"]);
+    expect([...CHAT_HEADER_ACTIONS].sort()).toEqual(["computer", "find", "reminders", "routines", "skills"]);
   });
 
   it("kolejność jest ta sama co na telefonie", () => {
-    expect([...CHAT_HEADER_ACTIONS]).toEqual(["computer", "routines", "skills", "find"]);
+    // multibot: „Przypomnienia" stoją TUŻ OBOK „Rutyn bota" (Kacper 10.09.2026)
+    expect([...CHAT_HEADER_ACTIONS]).toEqual(["computer", "routines", "reminders", "skills", "find"]);
   });
 
   // hidden per Kacper 07.09.2026, panels kept

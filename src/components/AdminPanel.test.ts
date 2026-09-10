@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ADMIN_POLL_MS, adminErrorText, isServerName, relativeTime, uptimeText } from "./AdminPanel";
+import { ADMIN_POLL_MS, adminErrorText, isServerName, uptimeText } from "./AdminPanel";
+import { relativeTime } from "@/lib/relativeTime";
 
 const source = readFileSync(new URL("./AdminPanel.tsx", import.meta.url), "utf8");
 

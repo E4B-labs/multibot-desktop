@@ -16,6 +16,7 @@ import { TeamMapPanel } from "@/components/TeamMapPanel";
 import { InspectorPanel } from "@/components/InspectorPanel";
 // multibot: F6 — panel rutyn bota
 import { RoutinesPanel } from "@/components/RoutinesPanel";
+import { RemindersPanel } from "@/components/RemindersPanel";
 // multibot: F8 — panel skilli bota
 import { SkillsPanel } from "@/components/SkillsPanel";
 // multibot: F9-FE — pokój grupowy
@@ -101,8 +102,13 @@ function Shell() {
             {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
             {state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
             {state.computerOpen && bot && <ComputerPanel bot={bot} />}
-            {/* multibot: routines are harness-owned and available for every driver. */}
-            {state.routinesOpen && bot && <RoutinesPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
+            {/* multibot: routines are harness-owned and available for every driver.
+                Ten sam slot trzyma dwie zakładki: powtarzalne rutyny i
+                jednorazowe przypomnienia (spis całego warsztatu, więc bez bota). */}
+            {state.routinesOpen && state.routinesTab === "reminders" && <RemindersPanel />}
+            {state.routinesOpen && state.routinesTab === "routines" && bot && (
+              <RoutinesPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />
+            )}
             {state.skillsOpen && bot && <SkillsPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
             {/* multibot: live team map (port z upstreamu) — globalny overlay */}
             {state.teamMapOpen && (

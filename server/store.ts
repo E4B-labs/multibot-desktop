@@ -81,7 +81,7 @@ export interface Message {
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
   /** Small durable workspace event shown as a chat pill. */
-  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "goal-progress"; value: string };
+  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "reminder" | "goal-progress"; value: string };
   /** collaboration-room chip: a clickable "X texted Y" / "X replied" pill
    * leading to the room. `event` names what just happened; without it the pill
    * describes the room as a whole. */
