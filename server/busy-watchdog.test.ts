@@ -98,6 +98,10 @@ beforeAll(async () => {
       MULTIBOT_HOST: "127.0.0.1",
       MULTIBOT_TURN_DEBOUNCE_MS: "0",
       MULTIBOT_BUSY_WATCHDOG_MS: String(WATCHDOG_MS),
+      // One slot: the second bot's turn has to WAIT for the first one before the
+      // provider says a word, which is the pre-start silence the watchdog must
+      // not mistake for a hung provider.
+      MULTIBOT_MAX_PARALLEL_TURNS: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -173,6 +177,48 @@ describe("busy watchdog", () => {
       }
       expect(done.busy).toBe(false);
       expect(done.messages.some((m: any) => m.role === "bot" && m.kind === "text" && m.text?.includes("tick"))).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    "does not time the wait for a turn slot — a turn queued behind another bot keeps busy and still answers",
+    async () => {
+      const mk = async () => {
+        const created = await api("POST", "/api/bots");
+        expect(created.status).toBe(201);
+        const id = created.body.bot.id;
+        expect((await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "fake", model: "fake-model" } })).status).toBe(200);
+        return id as string;
+      };
+      const first = await mk();
+      const second = await mk();
+      expect((await api("POST", `/api/bots/${first}/messages`, { text: "hold the only slot" })).status).toBe(202);
+      let holder = await getBot(first);
+      for (let i = 0; i < 60 && !holder.busy; i++) {
+        await wait(50);
+        holder = await getBot(first);
+      }
+      expect(holder.busy).toBe(true);
+      // The second bot is accepted at once (busy), but its provider cannot start
+      // until the first turn — ~2.4 s, several ceilings — releases the slot.
+      expect((await api("POST", `/api/bots/${second}/messages`, { text: "wait your turn" })).status).toBe(202);
+      const until = Date.now() + WATCHDOG_MS * 3;
+      while (Date.now() < until) {
+        const bot = await getBot(second);
+        expect(bot.busy, `busy was cleared while the turn was still waiting for a slot`).toBe(true);
+        await wait(WATCHDOG_MS / 4);
+      }
+      let done = await getBot(second);
+      for (let i = 0; i < 100 && done.busy; i++) {
+        await wait(100);
+        done = await getBot(second);
+      }
+      expect(done.busy).toBe(false);
+      expect(done.messages.some((m: any) => m.role === "bot" && m.kind === "text" && m.text?.includes("tick"))).toBe(true);
+      // The old code drained the queue into a thread whose turn had not even
+      // started, which the driver refused with this exact pill.
+      expect(done.messages.some((m: any) => m.kind === "activity" && /already running/.test(m.tool?.name ?? ""))).toBe(false);
     },
     60_000,
   );

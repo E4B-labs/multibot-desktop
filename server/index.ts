@@ -63,7 +63,7 @@ import {
 import * as computerControl from "./computer-control.ts";
 // multibot: the browser half of the computer — CDP tools and the teach recorder,
 // back in the harness after the Python engine took them with it.
-import { computerTool, computerToolset } from "./computer/index.ts";
+import { computerTool, computerToolset, screenshot as localScreenshot } from "./computer/index.ts";
 import * as teach from "./computer/teach.ts";
 import { filterSearchResults, searchText, type SearchResult } from "./search.ts";
 import { promptWithReply, resolveReplyTarget } from "./replies.ts";
@@ -819,6 +819,8 @@ const turnAssistantText = new Map<string, string[]>();
  * did something is answering with a result, however short — the ack brake must
  * not swallow it. Lives and dies with `turnAssistantText`. */
 const turnUsedTool = new Set<string>();
+/** Threads whose running turn touched the LOCAL computer (`mcp__computer__*`). */
+const turnUsedComputer = new Set<string>();
 /** Threads whose CURRENT turn carries text the HUMAN wrote — either it started
  * as a user turn, or the user steered a message into a running peer turn. Its
  * answer is for them, so it stays a visible bubble even when a colleague also
@@ -1709,7 +1711,18 @@ bus.subscribe((event: RuntimeEvent) => {
   // Każde zdarzenie z żywej tury przezbraja go od nowa; przezbrajamy tylko już
   // uzbrojonego (tura, którą sami wystartowaliśmy), a końce tury zdejmują go
   // niżej.
-  if (bot.busy && busyWatchdog.has(bot.id) && event.type !== "turn.completed" && event.type !== "runtime.error") {
+  //
+  // Zbrojenie zaczyna się od `turn.started`, nie od przyjęcia wiadomości: przed
+  // startem tura czeka na slot (MULTIBOT_MAX_PARALLEL_TURNS), na komputer i na
+  // zimny start CLI (na telefonie pod obciążeniem zmierzone 83 s; driver daje
+  // na to 120 s). Zbrojony przy przyjęciu, watchdog gasił `busy` po 70 s ZANIM
+  // dostawca cokolwiek powiedział, kolejka drenowała następną turę w wątek, na
+  // którym pierwsza wciąż szła („a turn is already running on this thread"), a
+  // czat grupy dostawał puste odpowiedzi od trzech botów naraz (E2E 10.09.2026).
+  // Ciszę PRZED startem pilnują własne limity drivera (firstEventMs → runtime.error).
+  if (bot.busy && event.type === "turn.started") {
+    armBusyWatchdog(bot.id);
+  } else if (bot.busy && busyWatchdog.has(bot.id) && event.type !== "turn.completed" && event.type !== "runtime.error") {
     armBusyWatchdog(bot.id);
   }
 
@@ -1809,6 +1822,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.started":
       if (event.itemType === "tool") {
         turnUsedTool.add(event.threadId);
+        if (event.title?.startsWith("mcp__computer__")) turnUsedComputer.add(event.threadId);
         // The WORK a member does for the group belongs to the group too: a row
         // of "Read file" pills in a private chat that holds no group message is
         // the same leak in a quieter shape. `turnUsedTool` above is bookkeeping
@@ -1926,6 +1940,7 @@ bus.subscribe((event: RuntimeEvent) => {
       forgetSettledGroupTurn(bot.id);
       turnAssistantText.delete(event.threadId);
       turnUsedTool.delete(event.threadId);
+      turnUsedComputer.delete(event.threadId);
       turnUserText.delete(event.threadId);
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       // multibot: wygasłe logowanie do CLI to nie awaria kodu, tylko robota dla
@@ -1974,6 +1989,15 @@ bus.subscribe((event: RuntimeEvent) => {
       const groupOnly = isGroupOnlyTurn(bot.id, event.threadId);
       const frame = stopScreenPoller(bot.id);
       if (frame && !groupOnly) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+      // The local computer has no poller (its live view is the VNC panel), so
+      // a turn that drove it left NOTHING in the chat — the screenshot went to
+      // the model only. One settled frame of the desktop the bot just used.
+      else if (!groupOnly && turnUsedComputer.has(event.threadId)) {
+        void localScreenshot()
+          .then((png) => pushMessage({ role: "bot", kind: "screen", png, mime: "image/jpeg" }))
+          .catch(() => { /* computer gone mid-turn — the reply still stands */ });
+      }
+      turnUsedComputer.delete(event.threadId);
       // The dot follows what the user can actually SEE, not what kind of turn
       // ran: a group turn that wrote nothing here leaves no dot, and a turn
       // that carried both a group envelope and a private message still does.
@@ -2670,8 +2694,8 @@ opts?: {
     turnOrigin.set(bot.id, origin);
     turnToldUser.delete(bot.id); // każda tura zaczyna od „jeszcze nic nie powiedział"
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
-    // watchdog 70s - jesli brak turn.completed (provider zawiesil sie) zwolnij busy
-    armBusyWatchdog(bot.id);
+    // Watchdog 70 s ciszy dostawcy zbroi się przy `turn.started` (handler
+    // zdarzeń) — nie tutaj, bo do startu tura potrafi czekać dłużej niż 70 s.
   }
 
   void (async () => {

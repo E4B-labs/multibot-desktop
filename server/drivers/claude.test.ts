@@ -166,6 +166,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // odpowiedzi" — pytanie nigdy nie trafiało do czatu. Musi być odcięte,
     // żeby model sięgnął po `mcp__agents__ask_user`.
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1]).toContain("AskUserQuestion");
+    // the CLI's own skill catalogue must not shadow the workspace skills the
+    // harness puts in the prompt
+    expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("Skill");
     expect(seen.argv).toContain("--effort");
     expect(seen.argv[seen.argv.indexOf("--effort") + 1]).toBe("low");
     expect(seen.argv[seen.argv.indexOf("--model") + 1]).toBe("claude-sonnet-5");
@@ -203,6 +206,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // multibot: bot dostaje tylko nasze serwery — nigdy globalnej konfiguracji
     // MCP właściciela maszyny (prywatne konektory claude.ai).
     expect(seen.argv).toContain("--strict-mcp-config");
+    // the operator's personal ~/.claude (CLAUDE.md, skills, hooks) must not
+    // reach a bot — its identity and skills come from the harness prompt
+    expect(seen.argv.slice(seen.argv.indexOf("--setting-sources"), seen.argv.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", ""]);
   });
 
   // multibot (F7): własne serwery MCP użytkownika jadą tą samą drogą co
