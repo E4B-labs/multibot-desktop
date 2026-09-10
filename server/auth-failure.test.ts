@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { authFailure, cliToolIdFor, loginExpiredNote } from "./auth-failure.ts";
+import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool } from "./auth-failure.ts";
 
 // multibot: tabela zamiast reguł per-dostawca. Nowy harness dopisuje tu wiersz,
 // nie gałąź w kodzie — a negatywy pilnują dwóch rzeczy: żeby „token" z
@@ -22,6 +22,10 @@ const MATCHES: [string, string | undefined][] = [
   ["gemini: credentials missing, please sign in", "gemini"],
   ["Please log in to continue", undefined],
   ["session invalid — re-authenticate", undefined],
+  // MultiBot podaje claude'owi `--mcp-config` w KAŻDEJ turze, więc „MCP" stoi
+  // w ogonie stderr obok prawdziwej prośby o logowanie — weto na całym tekście
+  // zjadałoby ten przypadek, dlatego sprawdzamy zdanie po zdaniu.
+  ['claude exited 1 before result: MCP server "fs" failed to connect\nInvalid API key · Please run /login', "claude"],
 ];
 
 const NEGATIVES = [
@@ -36,6 +40,10 @@ const NEGATIVES = [
   "claude exited 1 before result: fatal: Authentication failed for 'https://github.com/acme/app.git/'",
   'claude exited 1 before result: MCP server "linear" failed: Authorization header is badly formatted',
   "npm ERR! code E401 npm ERR! Incorrect or missing password",
+  // kompilator i test mówiące o logowaniu, choć nic się nie wylogowało
+  "src/session.ts(4,9): error TS2339: Property 'authError' does not exist on type 'Session'",
+  "test failed: expected credentials.expiresAt to be a number",
+  "Failed to load config; auth cache warm",
   // zwykłe awarie tury
   "spawn failed: ENOENT",
   "claude worker gave no sign of life, also after a restart",
@@ -62,8 +70,11 @@ describe("authFailure", () => {
     });
   }
 
-  it("treść dla needsAttention niesie nazwę narzędzia", () => {
+  it("treść dla needsAttention niesie nazwę narzędzia i da się ją odczytać z powrotem", () => {
     expect(loginExpiredNote("claude")).toBe("Login expired for claude. Sign in again to continue.");
+    expect(loginExpiredTool(loginExpiredNote("codex"))).toBe("codex");
+    expect(loginExpiredTool("Captcha przy logowaniu")).toBeNull();
+    expect(loginExpiredTool(null)).toBeNull();
   });
 });
 
@@ -100,5 +111,8 @@ describe("podpięcie w serwerze", () => {
 
   it("udane logowanie gasi prośbę bez czekania na następną turę", () => {
     expect(index).toContain("clearLoginExpired(tool.id)");
+    // prośbę rozpoznajemy po JEJ treści — nazwa mogła przyjść z tekstu błędu,
+    // a wtedy nie zgadza się z harnessem bota i nie dałoby się jej zgasić
+    expect(index).toContain("loginExpiredTool(bot.needsAttention) !== toolId");
   });
 });

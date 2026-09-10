@@ -46,7 +46,7 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
-import { LOGIN_EXPIRED_PREFIX, authFailure, cliToolIdFor, loginExpiredNote } from "./auth-failure.ts";
+import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool } from "./auth-failure.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
@@ -2966,8 +2966,7 @@ function validBaseUrl(value: string): boolean {
  * rusza, bo rozpoznaje własny prefiks. */
 function clearLoginExpired(toolId: string): void {
   for (const bot of store.bots) {
-    if (!bot.needsAttention?.startsWith(LOGIN_EXPIRED_PREFIX)) continue;
-    if (cliToolIdFor(bot) !== toolId) continue;
+    if (loginExpiredTool(bot.needsAttention) !== toolId) continue;
     store.patchBot(bot.id, { needsAttention: null });
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
   }
@@ -5070,11 +5069,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       });
       // multibot: udane logowanie gasi prośbę u KAŻDEGO bota na tym harnessie
       // — inaczej banerka wisiałaby do następnej tury, już po naprawie.
-      const off = setupJobs.subscribe(job.id, (next) => {
-        if (next.status === "running") return;
-        off();
-        if (next.status === "succeeded") clearLoginExpired(tool.id);
-      });
+      if (job.status === "running") {
+        const off = setupJobs.subscribe(job.id, (next) => {
+          if (next.status === "running") return;
+          off();
+          if (next.status === "succeeded") clearLoginExpired(tool.id);
+        });
+      } else if (job.status === "succeeded") {
+        // spawn padł (albo skończył) synchronicznie — nie ma na co czekać
+        clearLoginExpired(tool.id);
+      }
       return json(res, 202, { id: job.id, job });
     }
     m = path.match(/^\/api\/progress\/([\w-]+)\/(input|stop)$/);

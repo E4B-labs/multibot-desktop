@@ -374,11 +374,11 @@ function CustomModels() {
   );
 }
 
-function CommandLineTools() {
-  // multibot: banerka „logowanie wygasło” wskazuje narzędzie akcją w store
-  // (jak karta konektora w Pluginach); zużywamy ją po wczytaniu listy.
-  const { state, dispatch } = useStore();
-  const requested = state.appSettingsCliLogin;
+// `cliLogin` = narzędzie wskazane przez banerkę „logowanie wygasło”. Prośbę
+// zużywa już ekran ustawień (żeby nie przeżyła nieudanego `/api/cli-tools`),
+// tu przyjeżdża zwykłym propem.
+function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
+  const requested = cliLogin;
   type CliRow = { id: string; displayName: string; enabled: boolean; detected: boolean; authenticated?: boolean; reason?: string; version?: string; installCommand?: string | null; loginCommand?: string | null; loginAvailable?: boolean; loginMode?: "stdin" | "device"; loginHint?: string };
   type LoginSession = { toolId: string; jobId: string; output: string[]; done: boolean; mode: "stdin" | "device"; error?: string };
   type InstallSession = { toolId: string; jobId: string; output: string[]; done: boolean; error?: string };
@@ -412,9 +412,8 @@ function CommandLineTools() {
       const rows: CliRow[] = Array.isArray(tools) ? tools : [];
       setCli(rows);
       if (!requested) return;
-      // multibot: przyszliśmy z banerki „logowanie wygasło” — prośbę zużywamy
-      // (pusty `cliLogin` w akcji ją kasuje), a okno logowania otwiera się samo.
-      dispatch({ type: "toggleAppSettings", open: true });
+      // multibot: przyszliśmy z banerki „logowanie wygasło” — okno logowania
+      // tego narzędzia otwiera się samo, bez szukania go w liście.
       const tool = rows.find((item) => item.id.toLowerCase() === requested.toLowerCase());
       if (!tool) return;
       if (tool.loginAvailable) void startLogin(tool);
@@ -959,10 +958,18 @@ export function AppSettingsPanel() {
   // zakładkę, na której mieszka lista narzędzi CLI — inaczej prośba czekałaby
   // niezauważona, bo `CommandLineTools` montuje się dopiero tutaj.
   const [tab, setTab] = useState<AppSettingsTab>("general");
+  // multibot: prośba „zaloguj to CLI” z banerki. Zużywamy ją TU i od razu
+  // (pusty `cliLogin` w akcji ją kasuje), a dalej niesie ją zwykły stan tego
+  // ekranu — inaczej nieudane `/api/cli-tools` zostawiłoby ją w store i
+  // porwałoby następne, niezwiązane wejście w ustawienia.
+  const [pendingCli, setPendingCli] = useState<string | null>(null);
   const cliLogin = state.appSettingsCliLogin;
   useEffect(() => {
-    if (cliLogin) setTab("other");
-  }, [cliLogin]);
+    if (!cliLogin) return;
+    setTab("other");
+    setPendingCli(cliLogin);
+    dispatch({ type: "toggleAppSettings", open: true });
+  }, [cliLogin, dispatch]);
   // multibot: licznik kliknięć w szynę sekcji. Sam `tab` nie wystarczy —
   // ponowne kliknięcie w już wybraną ikonę nie zmienia stanu, więc animacja
   // nie miałaby czego odtworzyć. Numer idzie do `key`, co przemontowuje
@@ -1144,7 +1151,7 @@ export function AppSettingsPanel() {
               {/* multibot: G1 — custom model catalog lives at app level, never per bot. */}
               <CustomModels />
               {/* multibot: G1 — CLI allowlist UI; provisioning actions land in G3. */}
-              <CommandLineTools />
+              <CommandLineTools cliLogin={pendingCli} />
 
               <MachineResources />
               <DiagnosticsRow />

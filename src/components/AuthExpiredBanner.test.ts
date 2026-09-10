@@ -37,8 +37,11 @@ describe("banerka wygasłego logowania", () => {
 
   it("ustawienia otwierają zakładkę z listą CLI i same startują logowanie", () => {
     const panel = read("./AppSettingsPanel.tsx");
-    expect(panel).toContain('if (cliLogin) setTab("other");');
-    expect(panel).toContain("state.appSettingsCliLogin");
+    // prośba jest zużywana od razu przy wejściu w ustawienia i dalej jedzie
+    // propem — nieudane `/api/cli-tools` nie zostawia jej w store
+    expect(panel).toContain("const cliLogin = state.appSettingsCliLogin;");
+    expect(panel).toContain('setTab("other");');
+    expect(panel).toContain("<CommandLineTools cliLogin={pendingCli} />");
     expect(panel).toContain("if (tool.loginAvailable) void startLogin(tool);");
     // narzędzie bez interaktywnego logowania dostaje komendę do skopiowania
     expect(panel).toContain("setManualLogin(tool.id)");
