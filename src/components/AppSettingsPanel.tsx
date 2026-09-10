@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
+import { fetchUpdateLog, pageNumbers, type UpdateLogPage } from "@/lib/updateLog";
 import { cn } from "@/lib/cn";
 import { authFetch, clearAuthToken } from "@/lib/auth";
 import { canRemember, forgetRemembered } from "@/lib/shell";
@@ -703,6 +704,104 @@ function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
   );
 }
 
+/** Historia zmian pod wierszem aktualizacji — dokładnie to samo, co pokazuje
+ *  aplikacja na telefonie (`webui/src/components/AppSettingsPanel.tsx` w
+ *  `E4B-labs/multibot-mobile`): commity z gałęzi `main`, dziesięć na stronę,
+ *  prosto z API GitHuba. Repozytorium jest RÓŻNE po obu stronach, więc przy
+ *  `sync-webui.mjs` ten atrybut zostaje mobilny — strażnik stoi w
+ *  `webui/src/mobile-parity.test.ts` tamtego repo, a tutejszy w
+ *  `AppSettingsPanel.test.ts`. */
+function UpdateLog({ repository, polish }: { repository: string; polish: boolean }) {
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState<UpdateLogPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    void fetchUpdateLog(repository, page, controller.signal)
+      .then(setResult)
+      .catch((reason: unknown) => {
+        if (reason instanceof Error && reason.name === "AbortError") return;
+        setError(polish ? "Nie można pobrać historii zmian." : "Could not load update history.");
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
+  }, [page, polish, repository, retry]);
+
+  const current = result?.page === page ? result : null;
+  const totalPages = Math.max(page, result?.totalPages ?? 1);
+  const pages = pageNumbers(page, totalPages);
+
+  return (
+    <div data-update-log className="mt-4 rounded-xl bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[15px] font-medium text-ink">{polish ? "Historia zmian" : "Update log"}</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            {polish ? "Commity z głównej gałęzi projektu." : "Commits from the project main branch."}
+          </div>
+        </div>
+        <span className="shrink-0 text-[12px] text-ink-secondary">
+          {polish ? `Strona ${page} z ${totalPages}` : `Page ${page} of ${totalPages}`}
+        </span>
+      </div>
+
+      {loading && !current ? (
+        <div className="mt-4 text-[13px] text-ink-secondary">{polish ? "Ładowanie zmian…" : "Loading changes…"}</div>
+      ) : error && !current ? (
+        <div className="mt-4 flex items-center justify-between gap-3 text-[13px] text-danger">
+          <span>{error}</span>
+          <button type="button" onClick={() => setRetry((value) => value + 1)} className="shrink-0 rounded-lg bg-raised px-2.5 py-1.5 text-ink hover:bg-raised-hover">
+            {polish ? "Spróbuj ponownie" : "Retry"}
+          </button>
+        </div>
+      ) : current?.entries.length ? (
+        <div className="mt-3 divide-y divide-hairline/30">
+          {current.entries.map((entry) => (
+            <a key={entry.sha} href={entry.url} target="_blank" rel="noreferrer" className="flex items-start gap-3 py-3 first:pt-0 last:pb-0 hover:bg-raised/30">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium text-ink">{entry.message}</div>
+                <div className="mt-1 flex gap-2 text-[11px] text-ink-secondary">
+                  <span className="font-mono">{entry.shortSha}</span>
+                  <span aria-hidden>·</span>
+                  <time dateTime={entry.date}>{new Date(entry.date).toLocaleDateString(polish ? "pl-PL" : "en-US", { year: "numeric", month: "short", day: "numeric" })}</time>
+                </div>
+              </div>
+              <span aria-hidden className="shrink-0 text-ink-secondary">↗</span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 text-[13px] text-ink-secondary">{polish ? "Brak zmian na tej stronie." : "No changes on this page."}</div>
+      )}
+
+      {error && current && <div className="mt-3 text-[12px] text-danger">{error}</div>}
+      {totalPages > 1 && (
+        <nav aria-label={polish ? "Strony historii zmian" : "Update history pages"} className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-hairline/30 pt-3">
+          {pages.map((item, index) => item === "…" ? (
+            <span key={`ellipsis-${index}`} className="px-1 text-[13px] text-ink-secondary" aria-hidden>…</span>
+          ) : (
+            <button
+              key={item}
+              type="button"
+              aria-label={polish ? `Strona ${item}` : `Page ${item}`}
+              aria-current={item === page ? "page" : undefined}
+              onClick={() => setPage(item)}
+              className={cn("min-w-8 rounded-lg px-2 py-1.5 text-[13px] transition-colors", item === page ? "bg-accent text-white" : "bg-raised text-ink-secondary hover:bg-raised-hover hover:text-ink")}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
+      )}
+    </div>
+  );
+}
+
 /** Manual update check row — packaged app only (no bridge in dev). */
 function UpdatesRow() {
   const s = useUpdaterState();
@@ -1143,7 +1242,10 @@ export function AppSettingsPanel() {
           {tab === "admin" && role === "owner" && <AdminPanel />}
 
           {tab === "update" && (
-            <UpdatesRow />
+            <>
+              <UpdatesRow />
+              <UpdateLog repository="E4B-labs/multibot-desktop" polish={polish} />
+            </>
           )}
 
           {tab === "other" && (
