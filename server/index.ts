@@ -1586,6 +1586,7 @@ function notifyUser(
   // Wyciszony bot milczy na OBU drogach — push bramkuje `pushForBot`, banerkę
   // trzeba tu, bo `notifyFrame` zna tylko globalny przełącznik powłoki.
   if (store.bot(botId)?.notifications === false) return;
+  turnToldUser.add(botId);
   // Banerka na pulpicie ma osobny nagłówek (nazwa bota + powód), a push tylko
   // jedną linię pod nazwą bota — `pushBody` pozwala napisać ją inaczej, zamiast
   // powtarzać nagłówek w treści.
@@ -1619,6 +1620,10 @@ const toolkitLabel = (slug: string): string =>
 // (`warmBot`) omija `startTurn`, więc nie trafia do mapy i też nie pushuje.
 type TurnOrigin = "user" | "routine" | "bot";
 const turnOrigin = new Map<string, TurnOrigin>();
+/** Boty, które w tej turze odezwały się do człowieka INACZEJ niż tekstem:
+ *  banerką `notify_user` albo kartą (pytanie, zgoda, sekret, konektor). Taka
+ *  tura nie jest niema i nie dostaje znacznika „model nic nie napisał". */
+const turnToldUser = new Set<string>();
 function endTurnPush(botId: string, kind: "finished" | "failed", body: string): void {
   const origin = turnOrigin.get(botId);
   if (!origin || origin === "bot") { turnOrigin.delete(botId); return; }
@@ -1634,7 +1639,10 @@ async function askOwnerAndWait(threadId: string, card: Omit<OptionCardData, "req
   // pytanie / przekazanie komputera idzie na telefon także z tury izolowanej
   // (grupa, pokój) — o odpowiedź prosi człowieka, nie drugiego bota
   const asker = store.botByThread(threadId) ?? store.bot(isolatedTurnBots.get(threadId) ?? "");
-  if (asker) pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.title || card.subtitle);
+  if (asker) {
+    turnToldUser.add(asker.id);
+    pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.title || card.subtitle);
+  }
   return new Promise<string>((resolve) => {
     const timer = setTimeout(() => {
       if (!pendingUserAsks.delete(requestId)) return;
@@ -1642,6 +1650,9 @@ async function askOwnerAndWait(threadId: string, card: Omit<OptionCardData, "req
       // które nie mają już gdzie trafić — zamykamy ją
       const patched = store.patchMessage(threadId, message.id, { card: { ...message.card!, dismissed: true } });
       if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
+      // Bez tego wpis żyje do restartu serwera: kartę zamknął timeout, więc
+      // nikt już nie zawoła `/respond`, które normalnie zdejmuje go z mapy.
+      askMessageByRequest.delete(requestId);
       resolve(USER_ASK_TIMEOUT_NOTE);
     }, USER_ASK_TIMEOUT_MS);
     pendingUserAsks.set(requestId, (value) => {
@@ -1660,6 +1671,7 @@ async function askCredentialAndWait(bot: BotRecord, target: CredentialTargetId):
     secret: { target, ...meta, requestKey },
   });
   broadcast({ kind: "message", threadId: bot.threadId, message });
+  turnToldUser.add(bot.id);
   pushForBot(bot.id, "question", meta.label);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -1866,6 +1878,7 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         break;
       }
+      turnToldUser.add(bot.id);
       pushForBot(bot.id, permission ? "approval" : "question",
         event.summary || (permission ? t("Bot prosi o zgodę.", "The bot needs approval.") : t("Bot ma pytanie.", "The bot has a question.")));
       break;
@@ -1888,8 +1901,13 @@ bus.subscribe((event: RuntimeEvent) => {
                 : event.behavior === "allow" ? "Allow"
                   : event.behavior === "deny" ? "Deny"
                     : t("(brak odpowiedzi)", "(no answer)"),
-              // karta zamknięta przez człowieka krzyżykiem ma zostać zamknięta
-              dismissed: existing.card.dismissed === true || event.source !== "user",
+              // `answer` bez treści znaczy, że rozstrzygnął to DOSTAWCA (jego
+              // własny timeout pytania, jego droga zamknięcia) — nikt nie czeka
+              // na pokwitowanie czegoś, czego człowiek nie kliknął, a karta
+              // musi przestać przyjmować kliknięcia. Krzyżyk też zamyka.
+              dismissed: existing.card.dismissed === true
+                || event.source !== "user"
+                || !["allow", "always", "deny"].includes(event.behavior),
             },
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
@@ -1963,7 +1981,6 @@ bus.subscribe((event: RuntimeEvent) => {
       turnPushedVisible.delete(event.threadId);
       const groupHere = groupTurn.get(bot.id);
       if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
-      const lastReply = store.messagesFor(bot.threadId).filter((m) => m.role === "bot" && m.kind === "text" && m.text).at(-1)?.text ?? "";
       // Safety net for the whole bot↔bot design: a bot that was answering a
       // peer and did not call a peer tool itself still gets its prose routed
       // back. Without it the most natural thing a model does — just write the
@@ -1983,7 +2000,11 @@ bus.subscribe((event: RuntimeEvent) => {
       // dostaje widoczny ślad. Tylko w turach, na które ktoś CZEKA: rozmowa
       // bot↔bot milczy z projektu (`[NO REPLY]`).
       const origin = turnOrigin.get(bot.id);
-      const silentNote = !saidThisTurn && !frame && origin === "user"
+      // Tura, która odezwała się INNĄ drogą, nie jest niema: `notify_user`
+      // budzi telefon banerką, a karta (pytanie, zgoda, sekret, konektor) stoi
+      // w czacie i sama mówi, na czym stanęło.
+      const toldUser = turnToldUser.delete(bot.id);
+      const silentNote = !saidThisTurn && !frame && !toldUser && origin === "user"
         ? t(
           "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
           '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
@@ -2019,7 +2040,11 @@ bus.subscribe((event: RuntimeEvent) => {
       // multibot: treścią powiadomienia jest to, co bot powiedział W TEJ TURZE.
       // `lastReply` chodzi po całym wątku, więc po niemej turze telefon
       // pokazywał STARĄ odpowiedź, jakby przyszła nowa.
-      endTurnPush(bot.id, "finished", (saidThisTurn || silentNote || lastReply).slice(0, 120) || t("skończył pracę", "finished working"));
+      // multibot: treścią powiadomienia jest to, co bot powiedział W TEJ TURZE.
+      // `lastReply` chodził po całym wątku, więc po niemej turze telefon
+      // pokazywał STARĄ odpowiedź, jakby przyszła nowa; znacznik ciszy też nie
+      // jest wiadomością i nie ma po co budzić telefonu jego treścią.
+      endTurnPush(bot.id, "finished", saidThisTurn.slice(0, 120) || t("skończył pracę", "finished working"));
       clearTurnPolicy(bot.threadId);
       activeCommsDepth.delete(bot.id); // multibot (F9): tura skończona — licznik też
       turnModelByThread.delete(event.threadId); // multibot (F12): sprzątanie badge
@@ -2643,6 +2668,7 @@ opts?: {
     // bubble even if a colleague is waiting on the same turn (steering).
     if (origin !== "bot") turnUserText.add(bot.threadId);
     turnOrigin.set(bot.id, origin);
+    turnToldUser.delete(bot.id); // każda tura zaczyna od „jeszcze nic nie powiedział"
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
     // watchdog 70s - jesli brak turn.completed (provider zawiesil sie) zwolnij busy
     armBusyWatchdog(bot.id);
@@ -3832,6 +3858,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
               },
             });
             broadcast({ kind: "message", threadId: caller.threadId, message });
+            turnToldUser.add(fromBotId);
             return json(res, 200, { ok: true, connector, ...(toolkit ? { toolkit: asked.toLowerCase() } : {}) });
           }
           case "memory.list": return json(res, 200, workspace.facts(fromBotId, String(body.query ?? "")));
@@ -4576,6 +4603,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           pendingUserAsks.delete(requestId);
           pending(option === "done" ? (note ? `user finished: ${note}` : "user finished") : "user skipped");
         }
+        // Karta przekazania komputera domyka się TĘDY, nie przez `/respond`,
+        // więc wpis trzeba zdjąć tutaj — inaczej mapa rośnie do restartu.
+        askMessageByRequest.delete(requestId);
         const settled = store.patchMessage(bot.threadId, m[2], {
           card: { ...existing.card, answered: option, dismissed: option === "skip" },
         });
@@ -4735,9 +4765,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       // Odpowiedź wpisujemy PRZED oddaniem jej dostawcy: sterownik odpowiada
       // własnym `request.resolved`, które zna tylko `behavior`, i bez tego
       // wpisałoby w kartę „(brak odpowiedzi)" zamiast tego, co człowiek wybrał.
+      const cardBefore = located
+        ? store.messagesFor(located.threadId).find((msg) => msg.id === located.messageId)?.card
+        : undefined;
       const settleCard = (answered: string, dismissed = false) => {
         patchCard({ answered, ...(dismissed ? { dismissed: true } : {}) });
         askMessageByRequest.delete(String(body.requestId));
+      };
+      /** Dostawca odmówił przyjęcia odpowiedzi — karta MUSI wrócić do stanu
+       *  pytania, inaczej w transkrypcie zostaje pokwitowanie czegoś, czego bot
+       *  nigdy nie dostał. Wpis wraca na mapę, bo człowiek spróbuje jeszcze raz. */
+      const unsettleCard = () => {
+        if (!located || !cardBefore) return;
+        const patched = store.patchMessage(located.threadId, located.messageId, { card: cardBefore });
+        if (patched) broadcast({ kind: "message.patch", threadId: located.threadId, message: patched });
+        askMessageByRequest.set(String(body.requestId), located);
       };
       // multibot: pytanie z `ask_user` nie przechodzi przez drivera — czeka
       // tutaj. Rozstrzygamy je przed sięgnięciem po instancję, żeby chwilowo
@@ -4770,10 +4812,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
               : String(body.message ?? "").trim() || t("(brak odpowiedzi)", "(no answer)"),
         body.dismiss === true,
       );
-      await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
+      try {
+        await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
+          behavior: body.behavior,
+          message: body.message,
+        });
+      } catch (error) {
+        unsettleCard();
+        throw error;
+      }
       patchCard({ delivered: true }); // dostawca przyjął odpowiedź
       return json(res, 200, { ok: true });
     }

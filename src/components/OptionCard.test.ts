@@ -3,7 +3,8 @@
 // czy karta zgody nie zwija się w pokwitowanie i co to pokwitowanie mówi.
 import { describe, expect, it } from "vitest";
 
-import { deliveryLabel, isApprovalCard } from "./OptionCard";
+import { isApprovalCard } from "@/state/store";
+import { deliveryLabel } from "./OptionCard";
 
 const card = (patch: Record<string, unknown> = {}) =>
   ({ title: "Które dni?", subtitle: "", options: ["A", "B", "C", "D"], ...patch }) as any;
@@ -17,6 +18,11 @@ describe("isApprovalCard", () => {
   });
   it("karty zgody sprzed pola `kind` poznajemy po opcji „Allow for all", () => {
     expect(isApprovalCard(card({ options: ["Allow", "Deny", "Allow for all"] }))).toBe(true);
+  });
+  it("pytanie z opcją Allow zostaje pytaniem — od tego zależy, czy odpowiedź dojdzie do modelu", () => {
+    // Bez tego odpowiedź „Allow" na PYTANIE szła do dostawcy jako zgoda i model
+    // nigdy jej nie widział.
+    expect(isApprovalCard(card({ options: ["Allow", "Block"] }))).toBe(false);
   });
 });
 

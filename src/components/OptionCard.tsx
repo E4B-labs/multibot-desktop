@@ -1,19 +1,11 @@
 import { useId, useState } from "react";
 import { Check, X } from "lucide-react";
-import { useStore, type Message, type OptionCardData } from "@/state/store";
+import { isApprovalCard, useStore, type Message, type OptionCardData } from "@/state/store";
 import { botDisplayName } from "@/lib/botNames";
 import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
-
-/** Karta ZGODY, nie pytania: zostaje w starej postaci nawet po odpowiedzi, bo
- * jej podtytuł (co zatwierdzono i jaką regułą) to ślad autoweryfikacji, a
- * pokwitowanie by go skasowało. Warunek na „Allow for all" łapie karty zapisane
- * przed dodaniem `kind` — starych transkryptów nie przepisujemy. */
-export function isApprovalCard(card: OptionCardData): boolean {
-  return card.kind === "approval" || card.options.includes("Allow for all");
-}
 
 /** Stan karty po odpowiedzi: „wysłano do X" do chwili, w której serwer
  * potwierdzi, że bot ją dostał (`delivered`), potem „odebrane". */
@@ -33,6 +25,9 @@ export function OptionCard({
   const language = useLanguage();
   const polish = language === "pl";
   const [custom, setCustom] = useState("");
+  // Jedyny stan, jakiego checkboxy potrzebują: czy cokolwiek jest zaznaczone.
+  // Same zaznaczenia trzyma DOM, odczytuje je `FormData` przy zatwierdzeniu.
+  const [anyPicked, setAnyPicked] = useState(false);
   const titleId = useId();
   const card = message.card;
   if (!card || card.dismissed) return null;
@@ -100,6 +95,7 @@ export function OptionCard({
         // etykiety w kolejności opcji, więc nie ma czego trzymać w stanie, a
         // klawiatura i czytnik ekranu działają bez ani jednego `aria-*`.
         <form
+          onChange={(e) => setAnyPicked(new FormData(e.currentTarget).getAll("opt").length > 0)}
           onSubmit={(e) => {
             e.preventDefault();
             answer(new FormData(e.currentTarget).getAll("opt").join(", "));
@@ -120,7 +116,8 @@ export function OptionCard({
           </div>
           <button
             type="submit"
-            className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-[15px] font-medium text-accent-ink"
+            disabled={!anyPicked}
+            className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-[15px] font-medium text-accent-ink disabled:opacity-50"
           >
             {polish ? "Zatwierdź" : "Confirm"}
           </button>
