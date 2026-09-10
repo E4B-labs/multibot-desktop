@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ADMIN_POLL_MS, adminErrorText, isServerName, uptimeText } from "./AdminPanel";
+import { ADMIN_POLL_MS, adminErrorText, GpuRows, gpuMemoryText, isServerName, uptimeText } from "./AdminPanel";
 import { relativeTime } from "@/lib/relativeTime";
 
 const source = readFileSync(new URL("./AdminPanel.tsx", import.meta.url), "utf8");
@@ -84,5 +86,49 @@ describe("destructive actions ask first", () => {
   it("shows a once-only credential in a box that has to be dismissed by hand", () => {
     expect(source).not.toContain("window.alert");
     expect(source).toContain("SecretBox");
+  });
+});
+
+describe("GPU card", () => {
+  // `server/admin.ts` odpowiada tablicą obiektów (jeden wiersz na kartę).
+  // Zakładka typowała to jako string i renderowała wprost — React #31 kasował
+  // CAŁĄ aplikację do czarnego ekranu na każdej maszynie z nvidia-smi.
+  const card = { name: "NVIDIA GeForce RTX 4090", utilization: 37, memoryUsedMb: 4096, memoryTotalMb: 24564 };
+
+  it("renders the card's name, load and memory instead of throwing on the object", () => {
+    const html = renderToStaticMarkup(createElement(GpuRows, { gpus: [card] }));
+    expect(html).toContain("NVIDIA GeForce RTX 4090");
+    expect(html).toContain("37%");
+    expect(html).toContain("4 / 24 GB");
+  });
+
+  it("renders one row per card", () => {
+    const html = renderToStaticMarkup(createElement(GpuRows, { gpus: [card, { ...card, name: "Tesla T4" }] }));
+    expect(html).toContain("NVIDIA GeForce RTX 4090");
+    expect(html).toContain("Tesla T4");
+  });
+
+  it("renders nothing at all without a GPU — the usual case", () => {
+    expect(renderToStaticMarkup(createElement(GpuRows, { gpus: null }))).toBe("");
+    expect(renderToStaticMarkup(createElement(GpuRows, { gpus: [] }))).toBe("");
+    expect(renderToStaticMarkup(createElement(GpuRows, {}))).toBe("");
+  });
+
+  it("reads memory in GB with at most one decimal", () => {
+    expect(gpuMemoryText(4096, 24564)).toBe("4 / 24 GB");
+    expect(gpuMemoryText(1536, 8192)).toBe("1.5 / 8 GB");
+  });
+
+  it("keeps the mirrored GpuInfo shape in step with the server's", () => {
+    // Typu nie da się zaimportować z `server/` (node:child_process + importy
+    // z rozszerzeniem `.ts`), więc pilnuje go ten test: pole dodane na
+    // serwerze i pominięte tutaj przestaje być cichym rozjazdem.
+    const fields = (text: string, block: string) => {
+      const body = text.slice(text.indexOf(block) + block.length);
+      return body.slice(0, body.indexOf("}")).match(/^\s*(\w+)/gm)?.map((line) => line.trim()) ?? [];
+    };
+    expect(fields(source, "export type GpuInfo = {")).toEqual(["name", "utilization", "memoryUsedMb", "memoryTotalMb"]);
+    const server = readFileSync(new URL("../../server/admin.ts", import.meta.url), "utf8");
+    expect(fields(source, "export type GpuInfo = {")).toEqual(fields(server, "export interface GpuInfo {"));
   });
 });

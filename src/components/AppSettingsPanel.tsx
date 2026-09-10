@@ -6,6 +6,7 @@ import { ArrowLeft, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
 // ich części na kliknięcie (suwaki jeżdżą, strzałki się kręcą, klucz dokręca).
 import { RefreshTabIcon, ShieldTabIcon, SlidersTabIcon, WrenchTabIcon } from "./SettingsTabIcons";
 import { AdminPanel } from "./AdminPanel";
+import { ErrorBoundary } from "./ErrorBoundary";
 // multibot: piąta kopia tej samej linii (App.tsx, ChatView.tsx, Onboarding.tsx,
 // Sidebar.tsx). Tu decyduje o jednym: czy pokazać przełącznik akceleracji.
 const isElectron = navigator.userAgent.includes("Electron");
@@ -1195,6 +1196,7 @@ export function AppSettingsPanel() {
               <h2 className="text-[22px] font-semibold tracking-[-0.025em] text-ink">{polish ? currentTab.pl : currentTab.en}</h2>
               <p className="mt-1 text-[13px] text-ink-secondary">{polish ? currentTab.descriptionPl : currentTab.descriptionEn}</p>
             </div>
+            <ErrorBoundary key={tab}>
           {tab === "general" && (
             <>
               <div className="mt-2 flex items-center justify-between gap-4 rounded-xl bg-card p-4">
@@ -1291,6 +1293,7 @@ export function AppSettingsPanel() {
               <DiagnosticsRow />
             </>
           )}
+            </ErrorBoundary>
           </div>
         </div>
       </div>
