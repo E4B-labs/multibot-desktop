@@ -5,27 +5,29 @@ export function groupRowTitle(memberNames: string[]): string {
 
 export const MAX_GROUP_MEMBERS = 12;
 
-export type GroupAvatarLayout = "solo" | "pair" | "trio" | "stack";
+export type GroupAvatarLayout = "solo" | "pair" | "trio";
 
 /** Układ klastra awatarów w wierszu grupy.
  *
- *  `members` to bot, których sidebar potrafi narysować, `totalCount` to pełny
- *  skład z `bot_ids`. Te dwie liczby się rozjeżdżają: skasowanie bota nie
- *  wyjmuje go z grupy, więc `bot_ids` niesie identyfikatory bez bota. Dlatego
- *  układ dla składów do trzech wybieramy po tym, ile awatarów DA SIĘ narysować
- *  — inaczej para z jednym żywym botem rysowałaby jeden mały awatar przy lewej
- *  krawędzi i pustą połowę pudełka. Plakietka „+N" zostaje dokładką do stosu i
- *  zawsze domyka licznik do pełnego składu. */
+ *  `members` to boty, które sidebar potrafi narysować, `totalCount` to pełny
+ *  skład z `bot_ids`. Te dwie liczby się rozjeżdżają, bo lista grup
+ *  (`useEngineGroups`) i lista botów (`state.bots`) przychodzą osobno: dopóki
+ *  ta druga nie dogoni, grupa niesie identyfikator bez bota.
+ *
+ *  Klaster ma zawsze najwyżej TRZY elementy i układ idzie za ich liczbą, nie za
+ *  składem grupy: do trzech członków każdy dostaje własny awatar, od czterech
+ *  rysujemy dwa awatary plus plakietkę „+N". Członek, którego nie da się
+ *  narysować, wpada do plakietki. Wcześniej układ dla składów do trzech
+ *  wybierało `known`, więc trójka z jednym nieznanym botem rysowała się jak
+ *  zwykła para i trzeci członek znikał bez śladu. */
 export function groupAvatarLayout<T>(
   members: T[],
   totalCount = members.length,
 ): { layout: GroupAvatarLayout; shown: T[]; hiddenCount: number } {
   const total = Math.max(0, totalCount);
-  if (total >= 4) {
-    const shown = members.slice(0, 2);
-    return { layout: "stack", shown, hiddenCount: total - shown.length };
-  }
-  const known = Math.min(members.length, total);
-  const layout: GroupAvatarLayout = known <= 1 ? "solo" : known === 2 ? "pair" : "trio";
-  return { layout, shown: members.slice(0, known), hiddenCount: 0 };
+  const shown = members.slice(0, Math.min(total, total <= 3 ? 3 : 2));
+  const hiddenCount = total - shown.length;
+  const slots = shown.length + (hiddenCount > 0 ? 1 : 0);
+  const layout: GroupAvatarLayout = slots <= 1 ? "solo" : slots === 2 ? "pair" : "trio";
+  return { layout, shown, hiddenCount };
 }

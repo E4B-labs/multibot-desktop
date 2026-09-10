@@ -785,13 +785,19 @@ function useEngineGroups(workspaceVersion: unknown) {
   return [groups, setGroups] as const;
 }
 
-/** Pozycje awatarów w pudełku 48×48 wiersza grupy — indeks w `shown` wybiera
- *  slot. Pudełko jest to samo co przy bocie, więc wiersze mają równą wysokość. */
+/** Pozycje elementów klastra w pudełku 48×48 wiersza grupy — indeks wybiera
+ *  slot, plakietka „+N" bierze slot za ostatnim awatarem. Pudełko jest to samo
+ *  co przy bocie, więc wiersze mają równą wysokość.
+ *
+ *  Współrzędne są w pikselach, nie w skoku Tailwinda, bo klaster ma się nakładać
+ *  o ~25%: element ma 24 px, sąsiedzi stoją co 18 px, więc części wspólne mają
+ *  po 6 px. Cały klaster (42×42) siedzi wyśrodkowany w pudełku — stąd margines
+ *  3 px z każdej strony. Kolejność w DOM = kolejność malowania, więc dalszy
+ *  element zawsze leży NA bliższym; żadnego `z-*` tu nie trzeba. */
 const GROUP_AVATAR_SLOTS: Record<GroupAvatarLayout, string[]> = {
   solo: ["inset-0"],
-  pair: ["left-0 top-3", "right-0 top-3"],
-  trio: ["left-0 top-0", "right-0 top-0", "bottom-0 left-3"],
-  stack: ["left-0 top-0", "bottom-0 left-0"],
+  pair: ["left-[3px] top-[12px]", "left-[21px] top-[12px]"],
+  trio: ["left-[3px] top-[3px]", "left-[21px] top-[3px]", "left-[12px] top-[21px]"],
 };
 
 /** Wiersz grupy. Osobnej sekcji „GRUPY" już nie ma — grupa stoi w liście tam,
@@ -884,7 +890,10 @@ function GroupRow({
           {shown.map((member, index) => (
             // Klucz z indeksem, bo stare grupy mogą nieść ten sam bot_id dwa razy
             // (dedup wszedł dopiero teraz, po stronie serwera).
-            <span key={`${member.id}-${index}`} className={cn("absolute", GROUP_AVATAR_SLOTS[layout][index])}>
+            // `flex` nie jest ozdobą: bez niego slot jest inline i łapie 6 px
+            // zejścia linii pod awatarem, więc awatar 24 px zajmuje 24×30 i
+            // rozjeżdża się z plakietką, która jest blokowa.
+            <span key={`${member.id}-${index}`} className={cn("absolute flex", GROUP_AVATAR_SLOTS[layout][index])}>
               <BotAvatar
                 color={member.color}
                 avatarUrl={member.avatarUrl}
@@ -899,7 +908,14 @@ function GroupRow({
             <span
               role="img"
               aria-label={`${hiddenCount} more group members`}
-              className="absolute bottom-0 right-0 z-10 flex size-6 items-center justify-center rounded-full bg-raised text-[11px] font-semibold text-ink-secondary ring-2 ring-panel"
+              // Plakietka jest kolejnym elementem klastra, więc stoi w slocie za
+              // ostatnim awatarem i ma dokładnie jego 24 px. `ring-2` rysował się
+              // NA ZEWNĄTRZ, przez co plakietka miała 28 px i obwódkę, której
+              // żaden awatar nie ma; `border` mieści się w tych samych 24 px.
+              className={cn(
+                "absolute flex size-6 items-center justify-center rounded-full border border-hairline bg-raised text-[11px] font-semibold text-ink-secondary",
+                GROUP_AVATAR_SLOTS[layout][shown.length],
+              )}
             >
               +{hiddenCount}
             </span>
