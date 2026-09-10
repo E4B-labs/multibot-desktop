@@ -143,8 +143,13 @@ describe("group chat: the user writes to everyone, the members pick who answers"
 
   afterAll(stopHarness);
 
-  it("na powitanie odpisuje KAŻDY członek, a w prywatnym czacie zostaje ślad", async () => {
+  it("na powitanie odpisuje KAŻDY członek, a prywatny czat zostaje NIETKNIĘTY", async () => {
     const gid = await newGroup("Ekipa", [atlas, researcher]);
+    // Prywatny wątek to rozmowa człowieka z TYM botem. Ruch grupy — koperta,
+    // odpowiedź, czip — nie ma go dotykać w ogóle, więc bierzemy migawkę
+    // sprzed tury i porównujemy ją z tym, co widać po turze.
+    const before = new Map<string, string[]>();
+    for (const id of [atlas, researcher]) before.set(id, (await botOf(id)).messages.map((m: any) => m.id));
     const chat = await api("POST", `/api/groups/${gid}/chat`, { message: "hej" });
     expect(chat.status).toBe(200);
     expect(typeof chat.body.roomId).toBe("string");
@@ -157,11 +162,14 @@ describe("group chat: the user writes to everyone, the members pick who answers"
     expect(said(atlas)).toEqual(["hello from Atlas"]);
     expect(said(researcher)).toEqual(["hello from Researcher"]);
 
-    // ślad w prywatnych czatach obu członków: klikalny czip pokoju grupy
+    // ani śladu w prywatnych czatach członków: żadnej koperty, żadnego czipa,
+    // żadnej odpowiedzi — i żadnej kropki „nieprzeczytane" na czacie, w którym
+    // nic nowego nie ma.
     for (const id of [atlas, researcher]) {
       const bot = await botOf(id);
-      const chip = bot.messages.find((m: any) => m.kind === "room" && m.room?.id === room.id);
-      expect(chip, `brak czipa grupy w czacie ${id}`).toBeTruthy();
+      expect(bot.messages.map((m: any) => m.id), `prywatny czat ${id} zmieniony`).toEqual(before.get(id));
+      expect(JSON.stringify(bot.messages)).not.toContain("Group chat");
+      expect(bot.unread, `kropka nieprzeczytanych po turze grupowej u ${id}`).toBeFalsy();
     }
   }, 90_000);
 

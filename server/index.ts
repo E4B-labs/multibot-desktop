@@ -80,7 +80,7 @@ import { budgetLeft, isAcknowledgement, isDuplicateOfLast, RoomStore, ROOM_DONE_
 import { GoalStore, GOAL_DONE_MARKER, goalThreadId, parseGoalCommand, type GoalRecord } from "./goals.ts";
 import { jobProgress, SetupJobs } from "./setup-jobs.ts";
 import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): wyliczenie narzędzi tury w prompcie
-import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
+import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, withoutLegacyGroupLeak, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
 import { WorkspaceStore } from "./workspace.ts";
@@ -512,8 +512,10 @@ const IDLE_ROUNDS_LIMIT = 30;
 
 /** What a CLIENT may see of a thread. Peer envelopes and the answers a bot
  * writes to a colleague live on the thread for the transcript replay only;
- * the chat shows a room chip instead. */
-const chatMessages = (threadId: string) => store.messagesFor(threadId).filter((m) => !m.hidden);
+ * the chat shows a room chip instead. A GROUP turn shows nothing at all — a
+ * private thread is the user and this one bot, never the group's traffic. */
+const chatMessages = (threadId: string) =>
+  withoutLegacyGroupLeak(store.messagesFor(threadId)).filter((m) => !m.hidden);
 
 /**
  * Clickable "X texted Y" / "Y replied" pill on a bot's own thread, pointing at
@@ -527,6 +529,10 @@ function postRoomChip(
   room: RoomRecord,
   chip?: { from: string; to?: string; event: "texted" | "received" | "replied" },
 ) {
+  // A group room is the user's own chat and has a row of its own. Nothing that
+  // happens inside it — not a member's turn, not a handoff between two members
+  // — leaves a mark in anybody's private chat.
+  if (room.groupId) return;
   const owner = store.bot(threadBotId);
   if (!owner) return;
   const message = store.appendMessage(owner.threadId, {
@@ -539,7 +545,6 @@ function postRoomChip(
       ownerBotId: chip?.from ?? threadBotId,
       status: room.status,
       ...(chip ? { event: chip.event } : {}),
-      ...(room.groupId ? { groupId: room.groupId } : {}),
     },
   });
   broadcast({ kind: "message", threadId: owner.threadId, message });
@@ -1100,8 +1105,11 @@ async function askGroupMember(target: BotRecord, answer: Omit<GroupAnswer, "done
   // One group turn per bot at a time. Two groups sharing a member would share
   // the single slot, and the second would collect the first one's text.
   if (groupTurn.has(target.id)) return "";
-  const bubble = store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope });
-  broadcast({ kind: "message", threadId: target.threadId, message: bubble });
+  // STORED, never SHOWN — exactly like a peer envelope. The transcript replay
+  // walks the thread, so the bot has to keep reading what the group asked it;
+  // the user's private chat with this bot is not where the group's traffic
+  // belongs, and a raw envelope bubble there is what it looked like before.
+  store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope, hidden: true });
   return await new Promise<string>((resolve) => {
     let settled = false;
     const finish = (text: string) => {
@@ -1142,9 +1150,6 @@ async function runGroupChat(
     if (handedOver.has(target.id)) continue;
     const current = rooms.get(room.id);
     if (!current || current.status !== "running" || budgetLeft(current, max) <= 0) break;
-    // The trace the owner asked for: a clickable pill in the member's own chat
-    // saying it was pulled into this group, one per member per group turn.
-    postRoomChip(target.id, current);
     const raw = await askGroupMember(target, { group, roomId: room.id, members }, groupEnvelope(group.name, roster, current));
     const visible = raw.replace(DONE_MARKER_AT_END, "").trim();
     if (!visible || visible === NO_REPLY_MARKER) continue;
@@ -1679,7 +1684,16 @@ bus.subscribe((event: RuntimeEvent) => {
         const answeringPeer = (peerTurn.get(bot.id) ?? []).some((entry) => !entry.deferred && !entry.replied)
           && !turnUserText.has(event.threadId)
           && canUseIntegration(bot.threadId, "delegation");
-        if ((event.text.trim() !== NO_REPLY_MARKER && !answeringPeer) || pending?.length) {
+        // A GROUP turn is the same story with no exclusions left: `runGroupChat`
+        // is waiting for this text and appends it to the group ledger, so it is
+        // never invisible, and delegation has no say — the reply does not travel
+        // through a peer. Kacper: the user writes in the group, the members work
+        // in the group, and the private chat stays user↔bot. The one carve-out
+        // is a turn the user also wrote into: that answer is partly to him.
+        const groupEntry = groupTurn.get(bot.id);
+        const answeringGroup = !!groupEntry && !groupEntry.deferred && !turnUserText.has(event.threadId);
+        const roomOnly = answeringPeer || answeringGroup;
+        if ((event.text.trim() !== NO_REPLY_MARKER && !roomOnly) || (pending?.length && !answeringGroup)) {
           pushMessage({
             role: "bot",
             kind: "text",
@@ -1687,8 +1701,14 @@ bus.subscribe((event: RuntimeEvent) => {
             ...(replyModel ? { model: replyModel } : {}),
             ...(pending?.length ? { attachments: pending } : {}),
           });
-        } else if (answeringPeer) {
-          store.appendMessage(event.threadId, { role: "bot", kind: "text", text: event.text, hidden: true });
+        } else if (roomOnly) {
+          // ponytail: a file the bot sent during a group turn is kept on the
+          // hidden record but has no place in the group ledger, which is text
+          // only. Widen the ledger if groups ever need to pass files.
+          store.appendMessage(event.threadId, {
+            role: "bot", kind: "text", text: event.text, hidden: true,
+            ...(pending?.length ? { attachments: pending } : {}),
+          });
         }
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
@@ -1816,7 +1836,12 @@ bus.subscribe((event: RuntimeEvent) => {
       // the screenshot-in-chat moment
       const frame = stopScreenPoller(bot.id);
       if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
-      store.patchBot(bot.id, { busy: false, unread: true });
+      // A group turn leaves NOTHING in the private chat, so an unread dot there
+      // would point at a chat that has not changed. The group's own row carries
+      // that news. `deferred` means this turn was a private one that merely
+      // happened to be running when the envelope queued — that one is unread.
+      const groupHere = groupTurn.get(bot.id);
+      store.patchBot(bot.id, { busy: false, unread: !groupHere || groupHere.deferred });
       if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
       const lastReply = store.messagesFor(bot.threadId).filter((m) => m.role === "bot" && m.kind === "text" && m.text).at(-1)?.text ?? "";
       // Safety net for the whole bot↔bot design: a bot that was answering a
@@ -1834,9 +1859,8 @@ bus.subscribe((event: RuntimeEvent) => {
       // A group turn has no peer to answer: the loop that asked is waiting.
       // A turn that was ALREADY running when the envelope queued did not read
       // it, so it only clears the flag; the turn the drain starts answers.
-      const groupWaiting = groupTurn.get(bot.id);
-      if (groupWaiting?.deferred) groupWaiting.deferred = false;
-      else groupWaiting?.done(saidThisTurn);
+      if (groupHere?.deferred) groupHere.deferred = false;
+      else groupHere?.done(saidThisTurn);
       const waiting = (peerTurn.get(bot.id) ?? []).filter((entry) => !entry.replied);
       // A message that queued behind THIS turn is read by the next one; it is
       // held over instead of being answered with text written before it landed.
@@ -2438,7 +2462,11 @@ opts?: {
   const promptUser = opts?.actor
     ? { uid: opts.actor.userId, name: opts.actor.displayName }
     : (() => {
-      const lastUser = store.messagesFor(bot.threadId).reverse().find((message) => message.role === "user" && message.userId);
+      // `findLast`, not `.reverse().find`: `messagesFor` hands back the LIVE
+      // cached array, so reversing it flipped that thread's order in memory for
+      // the rest of the process — every order-dependent read after this turn
+      // (and the JSON the clients are served) saw the transcript backwards.
+      const lastUser = store.messagesFor(bot.threadId).findLast((message) => message.role === "user" && message.userId);
       return lastUser?.userId ? { uid: lastUser.userId, name: lastUser.userName } : undefined;
     })();
 

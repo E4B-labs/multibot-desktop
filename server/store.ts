@@ -198,6 +198,33 @@ export function sortMessages<T extends { id: string; at: number; order?: number 
   return [...messages].sort((a, b) => a.at - b.at || (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
 }
 
+/** A group turn from 0.5.27 and earlier was stored on the member's own thread
+ * VISIBLE: the envelope as a user bubble, the reply as a bot bubble, plus a
+ * group room chip. Those records carry no marker to filter on, so reading
+ * reconstructs the turn from its shape — the envelope opens it, and everything
+ * the bot wrote after it belonged to that turn until the next human message.
+ * New group turns are stored `hidden` and post no chip, so this only ever
+ * matches data written by an older server. */
+const LEGACY_GROUP_ENVELOPE = /^\[Group chat "/;
+export function withoutLegacyGroupLeak(messages: readonly Message[]): Message[] {
+  const drop = new Set<string>();
+  let inGroupTurn = false;
+  // The sweep needs chronological order and the caller's array is not promised
+  // to be in it, so it walks a sorted copy and removes the ids it collects from
+  // the list as given.
+  for (const m of sortMessages(messages)) {
+    if (m.role === "user") {
+      inGroupTurn = m.kind === "text" && !!m.text && LEGACY_GROUP_ENVELOPE.test(m.text);
+      if (inGroupTurn) drop.add(m.id);
+      continue;
+    }
+    // A group chip never belongs in a private chat, old or new: the group is a
+    // chat of its own and the user opens it from the sidebar.
+    if (inGroupTurn || (m.kind === "room" && m.room?.groupId)) drop.add(m.id);
+  }
+  return drop.size ? messages.filter((m) => !drop.has(m.id)) : [...messages];
+}
+
 /** Rotacja kolorow dla nowych botow — czarnego celowo nie ma, dostaje go
  *  tylko bot, ktoremu ktos go ustawi. */
 const COLORS: BotColor[] = [
