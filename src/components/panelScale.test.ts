@@ -80,10 +80,12 @@ describe("skala prawego panelu i czatu", () => {
     // klucz przygasza wiersz, ale go nie blokuje — klik otwiera pole klucza
     expect(picker).toContain("wymaga wspólnego klucza OpenCode Go");
     expect(picker).toContain("<KeyRound size={12}");
-    expect(picker).toContain('!disabled && opts.needsKey && "opacity-60"');
-    // powód siedzi na całym wierszu: niedostępność albo brakujący klucz
-    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : opts.needsKey ? keyHint : undefined}");
-    expect(picker).toContain('role="img" aria-label={keyHint}');
+    // brakujący klucz ORAZ niezalogowany CLI przygaszają ten sam wiersz
+    expect(picker).toContain('!disabled && dimmed && "opacity-60"');
+    expect(picker).toContain('const dimmed = gate === "signin" || Boolean(opts.needsKey);');
+    // powód siedzi na całym wierszu: niedostępność, brak logowania albo brakujący klucz
+    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : hint}");
+    expect(picker).toContain('role="img" aria-label={hint}');
     // licznik grupy z jednostką, nie goła liczba
     expect(picker).toContain('{group.options.length} {polish ? "modeli" : "models"}');
   });

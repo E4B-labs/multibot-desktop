@@ -1,6 +1,8 @@
 // Model picker: an instance rail + model list, backed by /api/instances.
 // Routing is by exact instanceId only — an entry is never inferred from a
 // driver kind, and unavailable instances render disabled with the reason.
+// An installed but signed-out CLI is dimmed with a shortcut to App Settings —
+// see lib/instanceGate.ts.
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, KeyRound, Loader2 } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
@@ -9,6 +11,7 @@ import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
 import { groupOpenCodeModels, isFreeModel, modelLabel } from "@/lib/opencodeModels";
+import { instanceGate } from "@/lib/instanceGate";
 
 // Nagłówkowa pigułka nigdy nie pokazuje surowego id: gdy katalog nie podał
 // `name` (fallbacki go nie mają), zostaje czytelny człon po ukośniku.
@@ -37,6 +40,10 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
     ? `${active.displayName} · ${instanceModelLabel(active, selection.model)}`
     : instanceModelLabel(active, selection.model);
   const opencodeKeyMissing = state.config?.opencode?.configured !== true;
+  const signInHint = polish
+    ? "CLI jest zainstalowany, ale niezalogowany — zaloguj w Ustawieniach aplikacji"
+    : "CLI is installed but signed out — sign in from App Settings";
+  const railGate = railInstance ? instanceGate(railInstance.snapshot, railInstance.instanceId) : "ok";
 
   useEffect(() => {
     if (!open) return;
@@ -75,22 +82,26 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
     opts: { indent?: boolean; needsKey?: boolean } = {},
   ) => {
     const current = selection.instanceId === instance.instanceId && selection.model === option.id;
-    const disabled = instance.snapshot.state !== "available";
+    const gate = instanceGate(instance.snapshot, instance.instanceId);
+    const disabled = gate === "missing";
     const keyHint = polish ? "wymaga wspólnego klucza OpenCode Go" : "needs the shared OpenCode Go key";
+    const dimmed = gate === "signin" || Boolean(opts.needsKey);
+    const hint = gate === "signin" ? signInHint : opts.needsKey ? keyHint : undefined;
     return (
       <button
         key={option.id}
         disabled={disabled}
         // Powód siedzi na całym wierszu, nie tylko na ikonce — 12 px kłódki to
         // za mały cel dla myszy i nic dla klawiatury.
-        title={disabled ? (instance.snapshot.reason ?? undefined) : opts.needsKey ? keyHint : undefined}
+        title={disabled ? (instance.snapshot.reason ?? undefined) : hint}
         onClick={() => pick(instance, option.id)}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
           opts.indent && "pl-6",
           disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
-          // brak klucza nie blokuje wiersza, tylko go przygasza — klik otwiera pole klucza
-          !disabled && opts.needsKey && "opacity-60",
+          // brak klucza ani brak logowania nie blokuje wiersza, tylko go przygasza —
+          // klik otwiera pole klucza, a logowanie może wejść bez restartu pickera
+          !disabled && dimmed && "opacity-60",
           current && "bg-raised",
         )}
       >
@@ -98,8 +109,8 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
           <span className="truncate">{modelLabel(option.id, option.label)}</span>
           {option.id === instance.models.default && badge(polish ? "domyślny" : "default")}
           {isFreeModel(option.id) && badge(polish ? "darmowy" : "free")}
-          {opts.needsKey && (
-            <span className="shrink-0 text-ink-secondary" role="img" aria-label={keyHint} title={keyHint}>
+          {hint && (
+            <span className="shrink-0 text-ink-secondary" role="img" aria-label={hint} title={hint}>
               <KeyRound size={12} aria-hidden />
             </span>
           )}
@@ -145,21 +156,24 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
           {/* instance rail */}
           <div className="flex flex-col gap-1 border-r border-hairline/40 bg-panel p-2">
             {visibleInstances.map((instance) => {
-              const unavailable = instance.snapshot.state !== "available";
+              const gate = instanceGate(instance.snapshot, instance.instanceId);
               const onRail = instance.instanceId === railInstance?.instanceId;
               return (
                 <button
                   key={instance.instanceId}
                   onClick={() => setRailId(instance.instanceId)}
                   title={
-                    unavailable
+                    gate === "missing"
                       ? `${instance.displayName} — ${instance.snapshot.reason ?? "unavailable"}`
-                      : instance.displayName
+                      : gate === "signin"
+                        ? `${instance.displayName} — ${signInHint}`
+                        : instance.displayName
                   }
                   className={cn(
                     "flex size-9 items-center justify-center rounded-lg",
                     onRail ? "bg-raised" : "hover:bg-raised/60",
-                    unavailable && "opacity-40",
+                    gate === "missing" && "opacity-40",
+                    gate === "signin" && "opacity-60",
                   )}
                 >
                   <ProviderMark driverKind={instance.driverKind} size={18} />
@@ -175,15 +189,18 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
                 <div className="px-2 pb-1 pt-1">
                   <div className="text-[13px] font-semibold text-ink">{railInstance.displayName}</div>
                   <div className="truncate text-[11px] text-ink-secondary">
-                    {railInstance.snapshot.state === "available"
-                      ? railInstance.models.updatedAt
-                        ? `${polish ? "modele zaktualizowane" : "models updated"} · ${new Date(railInstance.models.updatedAt).toLocaleString()}`
-                        : (railInstance.snapshot.version ?? "ready")
-                      : (railInstance.snapshot.reason ?? "unavailable")}
+                    {railGate === "missing"
+                      ? (railInstance.snapshot.reason ?? "unavailable")
+                      : railGate === "signin"
+                        ? (polish ? "niezalogowany" : "not signed in")
+                        : railInstance.models.updatedAt
+                          ? `${polish ? "modele zaktualizowane" : "models updated"} · ${new Date(railInstance.models.updatedAt).toLocaleString()}`
+                          : (railInstance.snapshot.version ?? "ready")}
                   </div>
-                  {/* Bez CLI cały wiersz jest martwy, a instalator siedzi w
-                      Ustawieniach aplikacji — daj skrót zamiast ślepej szarości. */}
-                  {railInstance.snapshot.state !== "available" && (
+                  {/* Bez CLI cały wiersz jest martwy, a bez logowania tura pada
+                      dopiero po wysłaniu — instalator i logowanie siedzą oba
+                      w Ustawieniach aplikacji, więc daj skrót zamiast ślepej szarości. */}
+                  {railGate !== "ok" && (
                     <button
                       type="button"
                       onClick={() => {
@@ -192,7 +209,9 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
                       }}
                       className="mt-1 text-[11px] text-accent hover:underline"
                     >
-                      {polish ? "Zainstaluj w Ustawieniach aplikacji" : "Install in App Settings"}
+                      {railGate === "signin"
+                        ? (polish ? "Zaloguj w Ustawieniach aplikacji" : "Sign in from App Settings")
+                        : (polish ? "Zainstaluj w Ustawieniach aplikacji" : "Install in App Settings")}
                     </button>
                   )}
                 </div>
