@@ -54,6 +54,27 @@ describe("static avatar pointer follow", () => {
     expect(avatar).toContain("trackPointerWhenPaused?: boolean;");
     expect(avatar).toContain("const pointerFollow = trackPointer && (animated || trackPointerWhenPaused);");
     expect(avatar).toContain("const onPointerLeave = () => setPointer({ x: 0, y: 0 });");
-    expect(avatar).toContain("onPointerLeave={pointerFollow ? onPointerLeave : undefined}");
+    expect(avatar).toContain("onPointerLeave={pointerFollow && !scoped ? onPointerLeave : undefined}");
+  });
+
+  // multibot: scope śledzenia — buźka podąża za kursorem po całym oznaczonym
+  // kontenerze (np. hover-wiersz bota w sidebarze), nie tylko nad awatarem.
+  it("follows the pointer across a data-mb-avatar-scope container", () => {
+    // Scope znajduje się przez closest() od spana awatara…
+    expect(avatar).toContain('closest<HTMLElement>("[data-mb-avatar-scope]")');
+    // …słucha natywnie na kontenerze i sprząta po sobie.
+    expect(avatar).toContain('scope.addEventListener("pointermove", onMove);');
+    expect(avatar).toContain('scope.addEventListener("pointerleave", onLeave);');
+    expect(avatar).toContain('scope.removeEventListener("pointermove", onMove);');
+    expect(avatar).toContain('scope.removeEventListener("pointerleave", onLeave);');
+    // Gaze od ŚRODKA awatara, znormalizowany do ±1 na krawędziach scope'a.
+    expect(avatar).toContain("const cx = rect.left + rect.width / 2;");
+    expect(avatar).toContain("x: Math.max(-1, Math.min(1, (event.clientX - cx) / spanX)) * range,");
+    // Wyjście kursora ze scope'a wraca do spojrzenia na wprost.
+    expect(avatar).toContain('const onLeave = () => setPointer({ x: 0, y: 0 });');
+    // W scope handlery na spanie milkną — śledzi tylko kontener.
+    expect(avatar).toContain("onPointerMove={pointerFollow && !scoped ? onPointerMove : undefined}");
+    // Bez scope'a zostaje stare zachowanie na spanie awatara.
+    expect(avatar).toContain("const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {");
   });
 });

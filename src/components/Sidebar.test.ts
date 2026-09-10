@@ -77,6 +77,20 @@ describe("bot picker avatar follow", () => {
     expect(groupRow).toContain("shape={member.mascotShape}");
     expect((sidebarSource.match(/trackPointerWhenPaused/g) ?? []).length).toBe(3);
   });
+
+  // multibot: buźka podąża po CAŁYM podświetlanym wierszu — wiersz bota,
+  // kafelek przypiętego bota i wiersz grupy (tylko z jednym awatarem) niosą
+  // scope śledzenia z Avatar.tsx. Nigdzie indziej w sidebarze.
+  it("marks each highlighted row as the gaze scope", () => {
+    const item = sidebarSource.slice(sidebarSource.indexOf("function BotListItem"), sidebarSource.indexOf("export function Sidebar"));
+    const pinned = sidebarSource.slice(sidebarSource.indexOf("const pinnedBots ="), sidebarSource.indexOf("Unified conversation list"));
+    const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
+    expect(item).toContain("data-mb-avatar-scope");
+    expect(pinned).toContain("data-mb-avatar-scope");
+    // Stos awatarów grupy NIE dostaje scope'a — tylko układ solo.
+    expect(groupRow).toContain('data-mb-avatar-scope={layout === "solo" ? "" : undefined}');
+    expect((sidebarSource.match(/data-mb-avatar-scope/g) ?? []).length).toBe(3);
+  });
 });
 
 describe("group row avatar cluster", () => {

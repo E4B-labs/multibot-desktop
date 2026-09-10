@@ -199,6 +199,51 @@ function BotAvatarComponent(
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
   const pointerFollow = trackPointer && (animated || trackPointerWhenPaused);
+  // multibot: mascot renders (and follows the pointer) unless a photo replaces it.
+  const mascotShown = !avatarUrl || shown === "thinking-dots";
+  const spanRef = useRef<HTMLSpanElement>(null);
+  // multibot: „scope" śledzenia — gdy awatar stoi w kontenerze oznaczonym
+  // `data-mb-avatar-scope` (np. hover-podświetlany wiersz bota w sidebarze),
+  // buźka podąża za kursorem po CAŁYM tym kontenerze, nie tylko nad samym
+  // awatarem. Gaze liczony od środka spana awatara i normalizowany tak, by na
+  // krawędziach scope'a dochodził do ±1 (osobno w każdej osi, clamp), razy
+  // `range`. Bez scope'a zostają handlery Reacta na spanie (niżej).
+  const [scoped, setScoped] = useState(false);
+  useEffect(() => {
+    if (!pointerFollow || !mascotShown) {
+      setScoped(false);
+      return;
+    }
+    const span = spanRef.current;
+    const scope = span?.closest<HTMLElement>("[data-mb-avatar-scope]");
+    if (!span || !scope) {
+      setScoped(false);
+      return;
+    }
+    setScoped(true);
+    const onMove = (event: PointerEvent) => {
+      const scopeRect = scope.getBoundingClientRect();
+      const rect = span.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      // Największa odległość od środka awatara do krawędzi scope'a w danej osi
+      // — dzielenie przez nią daje dokładnie ±1 na dalszej krawędzi.
+      const spanX = Math.max(cx - scopeRect.left, scopeRect.right - cx) || 1;
+      const spanY = Math.max(cy - scopeRect.top, scopeRect.bottom - cy) || 1;
+      setPointer({
+        x: Math.max(-1, Math.min(1, (event.clientX - cx) / spanX)) * range,
+        y: Math.max(-1, Math.min(1, (event.clientY - cy) / spanY)) * range,
+      });
+    };
+    const onLeave = () => setPointer({ x: 0, y: 0 });
+    scope.addEventListener("pointermove", onMove);
+    scope.addEventListener("pointerleave", onLeave);
+    return () => {
+      scope.removeEventListener("pointermove", onMove);
+      scope.removeEventListener("pointerleave", onLeave);
+      setPointer({ x: 0, y: 0 });
+    };
+  }, [pointerFollow, mascotShown, range]);
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
     if (!pointerFollow) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -230,10 +275,13 @@ function BotAvatarComponent(
 
   return (
     <span
+      ref={spanRef}
       className="relative inline-flex shrink-0"
       style={{ width: size, height: size }}
-      onPointerMove={pointerFollow ? onPointerMove : undefined}
-      onPointerLeave={pointerFollow ? onPointerLeave : undefined}
+      // multibot: w scope śledzi natywny listener na kontenerze; handlery na
+      // spanie zostają tylko dla awatarów bez scope'a (stare zachowanie).
+      onPointerMove={pointerFollow && !scoped ? onPointerMove : undefined}
+      onPointerLeave={pointerFollow && !scoped ? onPointerLeave : undefined}
     >
       <BlobAvatar
         ref={inner}

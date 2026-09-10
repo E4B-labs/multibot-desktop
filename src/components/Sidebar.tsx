@@ -561,6 +561,9 @@ function BotListItem({
       // w szynie nazwa wraca w kafelku, nie w title.
       onMouseEnter={(e) => onHover?.(bot.id, e.currentTarget.getBoundingClientRect())}
       onMouseLeave={() => onUnhover?.()}
+      // multibot: buźka podąża za kursorem po całym podświetlanym wierszu,
+      // nie tylko nad samym awatarem (scope śledzenia — patrz Avatar.tsx).
+      data-mb-avatar-scope
       className={cn(
         "flex w-full items-center rounded-xl text-left",
         collapsed ? "relative justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5",
@@ -867,6 +870,9 @@ function GroupRow({
         else setDragOver(false);
       }}
       title={g.name || g.id}
+      // multibot: scope śledzenia buźki tylko dla grupy z JEDNYM awatarem —
+      // stos kilku awatarów zostaje przy starym śledzeniu nad samym awatarem.
+      data-mb-avatar-scope={layout === "solo" ? "" : undefined}
       className={cn(
         "relative flex w-full items-center rounded-xl text-left",
         collapsed ? "justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5",
@@ -1389,6 +1395,8 @@ export function Sidebar() {
                     }}
                     onMouseEnter={(e) => showHoverCard(b.id, e.currentTarget.getBoundingClientRect())}
                     onMouseLeave={() => hideHoverCard()}
+                    // multibot: cały podświetlany kafelek to scope śledzenia buźki.
+                    data-mb-avatar-scope
                     className={cn(
                       "flex flex-col items-center gap-1.5 rounded-2xl px-2 py-2",
                       isSelected ? "bg-raised" : "hover:bg-raised/50",
