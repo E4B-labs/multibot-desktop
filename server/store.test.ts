@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
-import { BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, type BotRecord } from "./store.ts";
+import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, type BotRecord } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -97,6 +97,17 @@ describe("Store", () => {
     };
 
     expect([...names("MASCOT_SHAPES"), ...names("LEGACY_SHAPES")]).toEqual(BOT_SHAPES);
+  });
+
+  // Ta sama pulapka od strony koloru: nowa barwa w panelu, ktorej serwer nie
+  // przyjmuje, to zapis odbity bledem 400 zamiast zmiany wygladu.
+  it("accepts every colour the client offers", () => {
+    const source = readFileSync(new URL("../src/lib/mascot.ts", import.meta.url), "utf8");
+    const body = /BOT_COLOR_NAMES = \[([\s\S]*?)\] as const/.exec(source);
+    if (!body) throw new Error("BOT_COLOR_NAMES not found in src/lib/mascot.ts");
+    const names = [...body[1].matchAll(/"([a-z]+)"/g)].map((match) => match[1]);
+    expect(names).toHaveLength(14);
+    expect([...names].sort()).toEqual([...BOT_COLORS].sort());
   });
 
   it("falls unknown persisted shapes back to blob on load", () => {

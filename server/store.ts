@@ -19,6 +19,9 @@ export type BotColor =
   | "yellow"
   | "teal"
   | "coral"
+  | "lime"
+  | "indigo"
+  | "white"
   | "black";
 
 /**
@@ -215,7 +218,7 @@ const COLORS: BotColor[] = [
 
 /** Kazdy kolor, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota) i dla PATCH /api/bots/:id (UI). */
-export const BOT_COLORS: BotColor[] = [...COLORS, "black"];
+export const BOT_COLORS: BotColor[] = [...COLORS, "lime", "indigo", "white", "black"];
 
 /** Kazdy ksztalt maskotki, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota), PATCH /api/bots/:id (UI) i schematu

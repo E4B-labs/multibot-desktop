@@ -49,6 +49,28 @@ describe("statyczna maskotka ma twarz", () => {
   });
 });
 
+// PR #52 zgubił też płynną zmianę kształtu: stary CursorAvatar interpolował
+// ścieżkę przez flubber, BlobAvatar podmieniał sylwetkę z klatki na klatkę.
+// Poniżej pilnujemy, że morf wrócił i że twarz jedzie razem z nim.
+describe("zmiana kształtu morfuje, nie przeskakuje", () => {
+  it("interpoluje sylwetkę przez flubber", () => {
+    expect(blob).toContain("import { interpolate } from 'flubber'");
+    expect(blob).toMatch(/interpolate\(faceDFor\(renderedShape\), faceDFor\(shape\)/);
+  });
+
+  it("rysuje ścieżkę przejściową zamiast osiadłego ciała", () => {
+    expect(blob).toMatch(/morphD \? \(\s*<path d=\{morphD\} fill=\{paint\} \/>/);
+    // Sylwetka i obszar przycięcia muszą iść tą samą ścieżką, inaczej twarz
+    // przez pół morfa wystaje poza brzuch.
+    expect(blob).toMatch(/<clipPath id=\{`\$\{uid\}-clip`\}>\s*<path d=\{morphD\} \/>/);
+  });
+
+  it("prowadzi kotwicę twarzy z kształtu do kształtu", () => {
+    expect(blob).toContain("lerp(morphFrom.current.x, morphTo.current.x, morphT)");
+    expect(blob).toContain("anchorTransform(anchorNow)");
+  });
+});
+
 describe("static avatar pointer follow", () => {
   it("supports paused hover follow and resets gaze on leave", () => {
     expect(avatar).toContain("trackPointerWhenPaused?: boolean;");

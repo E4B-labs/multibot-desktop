@@ -21,17 +21,17 @@
 //   MULTIBOT_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 import readline from "node:readline";
 
-// Jedna lista ksztaltow dla schematu narzedzi i dla walidacji na serwerze —
-// enum rozjechany z `managedBotPatch` znaczy, ze model prosi o ksztalt, ktory
-// serwer i tak odrzuci (albo, przed walidacja, ktorego klient nie umie narysowac).
-import { BOT_SHAPES } from "../store.ts";
+// Jedna lista ksztaltow i kolorow dla schematu narzedzi i dla walidacji na
+// serwerze — enum rozjechany z `managedBotPatch` znaczy, ze model prosi o
+// wartosc, ktora serwer i tak odrzuci (albo, przed walidacja, ktorej klient nie
+// umie narysowac).
+import { BOT_COLORS, BOT_SHAPES } from "../store.ts";
 import { harnessRequest } from "./harness-request.ts";
 
 const HARNESS = process.env.MULTIBOT_HARNESS_URL ?? "https://127.0.0.1:8799";
 const BOT_ID = process.env.MULTIBOT_BOT_ID ?? "";
 const TOKEN = process.env.MULTIBOT_COMMS_TOKEN ?? "";
 
-const BOT_COLORS = ["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral"];
 const BOT_PROFILE_PROPERTIES = {
   name: { type: "string", description: "Display name (1-120 characters)." },
   title: { type: "string", description: "Short role or specialty." },

@@ -19,7 +19,10 @@
  *
  * Made with Blob Studio.
  */
-import React, { useEffect, useId, useMemo, useRef } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
+// multibot: the silhouette morph (see the "shape morph" block below) is the one
+// thing here React alone cannot do — two outlines have to become one tweened path.
+import { interpolate } from 'flubber'
 
 /* ------------------------------------------------------------------- shape */
 
@@ -2034,6 +2037,94 @@ const easeOutBack = (t: number) => {
 
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t))
 
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+
+/* ------------------------------------------------------------- shape morph */
+
+/*
+  multibot: picking another shape MORPHS the silhouette into it instead of
+  cutting. Both outlines are resampled to the same number of points in the same
+  space (`faceDFor`), flubber tweens between them, and the face anchor is lerped
+  alongside so the eyes travel with the body rather than jumping at the end.
+
+  Everything below needs a DOM (DOMParser, getTotalLength, DOMMatrix) and runs
+  only when the shape prop actually changes, so a headless render never touches it.
+*/
+
+const MORPH_SVG_NS = 'http://www.w3.org/2000/svg'
+const MORPH_MS = 420
+const faceDCache = new Map<string, string>()
+
+/** Reduces any silhouette primitive (path/circle/ellipse/rect) to a single `d`. */
+function elementToPathD(markup: string): string {
+  const doc = new DOMParser().parseFromString(`<svg xmlns="${MORPH_SVG_NS}">${markup}</svg>`, 'image/svg+xml')
+  const el = doc.documentElement.firstElementChild as SVGElement | null
+  if (!el) return ''
+  const tag = el.tagName.toLowerCase()
+  const num = (name: string, fallback = '0') => Number(el.getAttribute(name) ?? fallback)
+  if (tag === 'path') return el.getAttribute('d') || ''
+  if (tag === 'circle') {
+    const cx = num('cx')
+    const cy = num('cy')
+    const r = num('r')
+    return `M${cx - r},${cy}a${r},${r} 0 1,0 ${2 * r},0a${r},${r} 0 1,0 ${-2 * r},0Z`
+  }
+  if (tag === 'ellipse') {
+    const cx = num('cx')
+    const cy = num('cy')
+    const rx = num('rx')
+    const ry = num('ry')
+    return `M${cx - rx},${cy}a${rx},${ry} 0 1,0 ${2 * rx},0a${rx},${ry} 0 1,0 ${-2 * rx},0Z`
+  }
+  if (tag === 'rect') {
+    const x = num('x')
+    const y = num('y')
+    const w = num('width')
+    const h = num('height')
+    const rr = Math.min(num('rx'), w / 2, h / 2)
+    return (
+      `M${x + rr},${y} h${w - 2 * rr} a${rr},${rr} 0 0 1 ${rr},${rr}` +
+      ` v${h - 2 * rr} a${rr},${rr} 0 0 1 ${-rr},${rr} h${-(w - 2 * rr)}` +
+      ` a${rr},${rr} 0 0 1 ${-rr},${-rr} v${-(h - 2 * rr)} a${rr},${rr} 0 0 1 ${rr},${-rr} Z`
+    )
+  }
+  return ''
+}
+
+/** SVG `transform` (e.g. `rotate(45 cx cy)`) as CSS, so DOMMatrix can parse it. */
+function fitToCss(fit: string): string {
+  return fit
+    .replace(
+      /rotate\(([-\d.]+) ([-\d.]+) ([-\d.]+)\)/g,
+      (_, a, x, y) => `translate(${x}px, ${y}px) rotate(${a}deg) translate(${-x}px, ${-y}px)`,
+    )
+    .replace(/translate\(([-\d.]+) ([-\d.]+)\)/g, (_, x, y) => `translate(${x}px, ${y}px)`)
+}
+
+/**
+ * One polyline in face-box space — the silhouette flattened and its `fit`
+ * baked in, because the morphing path is drawn without that wrapper. Cached:
+ * the sampling costs a layout each time and the shapes never change.
+ */
+function faceDFor(shape: BlobShape): string {
+  const cached = faceDCache.get(shape.name)
+  if (cached) return cached
+  const path = document.createElementNS(MORPH_SVG_NS, 'path')
+  path.setAttribute('d', elementToPathD(shape.body))
+  const total = path.getTotalLength()
+  const matrix = shape.fit ? new DOMMatrix(fitToCss(shape.fit)) : new DOMMatrix()
+  const n = 220
+  let d = ''
+  for (let i = 0; i <= n; i++) {
+    const p = path.getPointAtLength((i / n) * total)
+    const tp = matrix.transformPoint(new DOMPoint(p.x, p.y))
+    d += (i === 0 ? 'M' : 'L') + tp.x.toFixed(2) + ' ' + tp.y.toFixed(2) + ' '
+  }
+  d += 'Z'
+  faceDCache.set(shape.name, d)
+  return d
+}
+
 /**
  * Builds the body's transform for this frame.
  *
@@ -2602,6 +2693,55 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
     }, [uid])
 
     /*
+      multibot: shape changes flow rather than cut.
+
+      `renderedShape` is the settled silhouette; while a morph runs we draw the tweened
+      outline `morphD` in its place and lerp the face anchor from the old shape's to the
+      new one's. Anything flubber refuses (an outline it cannot pair up) falls straight
+      through to the plain swap, which is what this used to do everywhere.
+    */
+    const [renderedShape, setRenderedShape] = useState(shape)
+    const [morphD, setMorphD] = useState<string | null>(null)
+    const [morphT, setMorphT] = useState(0)
+    const morphFrom = useRef(shape.anchor)
+    const morphTo = useRef(shape.anchor)
+
+    useEffect(() => {
+      if (shape.name === renderedShape.name) return
+      let tween: ((t: number) => string) | null = null
+      try {
+        tween = interpolate(faceDFor(renderedShape), faceDFor(shape), { maxSegmentLength: 2 })
+      } catch {
+        setRenderedShape(shape)
+        return
+      }
+      morphFrom.current = renderedShape.anchor
+      morphTo.current = shape.anchor
+      const start = performance.now()
+      let frame = 0
+      const settle = () => {
+        setMorphD(null)
+        setRenderedShape(shape)
+      }
+      const step = (now: number) => {
+        const t = Math.min((now - start) / MORPH_MS, 1)
+        const eased = easeInOut(t)
+        try {
+          setMorphD(tween!(eased))
+        } catch {
+          settle()
+          return
+        }
+        setMorphT(eased)
+        if (t < 1) frame = requestAnimationFrame(step)
+        else settle()
+      }
+      frame = requestAnimationFrame(step)
+      return () => cancelAnimationFrame(frame)
+      // `renderedShape` is read, but only its name decides whether a morph starts.
+    }, [shape, renderedShape])
+
+    /*
       What the extras are made of.
 
       The loading dots, the pieces shed on spawn and shutdown, and the glyph the mascot
@@ -2614,16 +2754,23 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
       body, so a `url(#…)` fill still resolves.
     */
     const paint = useMemo(() => {
-      if (shape.body.includes('{{GRADIENT}}')) return `url(#${uid}-grad)`
-      const own = shape.body.match(/fill="(?!none)([^"]+)"/)
+      if (renderedShape.body.includes('{{GRADIENT}}')) return `url(#${uid}-grad)`
+      const own = renderedShape.body.match(/fill="(?!none)([^"]+)"/)
       return own ? own[1] : `url(#${uid}-grad)`
-    }, [shape.body, uid])
+    }, [renderedShape.body, uid])
     const paintRef = useRef(paint)
     paintRef.current = paint
 
     const dimension = typeof size === 'number' ? `${size}px` : size
     const label = title === undefined ? `${shape.name} mascot` : title
-    const body = shape.body.replace(/\{\{GRADIENT\}\}/g, `url(#${uid}-grad)`)
+    const body = renderedShape.body.replace(/\{\{GRADIENT\}\}/g, `url(#${uid}-grad)`)
+    const anchorNow = morphD
+      ? {
+          x: lerp(morphFrom.current.x, morphTo.current.x, morphT),
+          y: lerp(morphFrom.current.y, morphTo.current.y, morphT),
+          scale: lerp(morphFrom.current.scale, morphTo.current.scale, morphT),
+        }
+      : renderedShape.anchor
 
     return (
       <svg
@@ -2644,11 +2791,17 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
           </linearGradient>
           {/* The fit goes on the clipPath itself: a <g> inside one is ignored by browsers,
               which is also why shape.clip is pre-flattened to bare shapes. */}
-          <clipPath
-            id={`${uid}-clip`}
-            transform={shape.fit || undefined}
-            dangerouslySetInnerHTML={{ __html: shape.clip }}
-          />
+          {morphD ? (
+            <clipPath id={`${uid}-clip`}>
+              <path d={morphD} />
+            </clipPath>
+          ) : (
+            <clipPath
+              id={`${uid}-clip`}
+              transform={renderedShape.fit || undefined}
+              dangerouslySetInnerHTML={{ __html: renderedShape.clip }}
+            />
+          )}
         </defs>
         <g transform={flip ? `translate(${FACE_BOX} 0) scale(-1 1)` : undefined}>
           {/* The far half of every orbit. Its near half is drawn after the body, which is
@@ -2662,9 +2815,13 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
               same motion but is not faded with them, since it replaces them. */}
           <g ref={bodyGroup}>
           <g ref={bodyContent}>
-          <g transform={shape.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} />
+          {morphD ? (
+            <path d={morphD} fill={paint} />
+          ) : (
+            <g transform={renderedShape.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} />
+          )}
           <g ref={faceLayer} clipPath={`url(#${uid}-clip)`}>
-            <g transform={anchorTransform(shape.anchor)}>
+            <g transform={anchorTransform(anchorNow)}>
               {showFace && (
                 <>
                   <path ref={eye0} fill={eyeColor} />

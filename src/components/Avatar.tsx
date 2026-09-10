@@ -94,9 +94,20 @@ const gradientFor = (color: BotColor): [string, string, string] => {
   // a przyciemnienie o 42% do czerni — plaska plame. Stad wlasny gradient,
   // ktory trzyma kontrast na ciemnym tle zamiast go gubic.
   if (color === "black") return ["#5A5A5A", "#2A2A2A", "#101010"];
+  // Biel z drugiej strony tej samej sciany: rozjasnienie o 55% zjada roznice
+  // miedzy stopami, wiec sylwetka gubi bryle. Wlasny gradient schodzi glebiej
+  // w szarosc, zeby na jasnym motywie bylo widac krawedz.
+  if (color === "white") return ["#FFFFFF", "#F4F4F5", "#B9B9C0"];
   const fill = BOT_COLORS[color] ?? BOT_COLORS.green;
   return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
 };
+
+/**
+ * Kolor twarzy. Domyslne biale oczy znikaja na bialej sylwetce — tak samo jak
+ * czarny potrzebowal wlasnego gradientu, biel potrzebuje wlasnej twarzy.
+ */
+const eyeColorFor = (color: BotColor): string | undefined =>
+  color === "white" ? "#3F3F46" : undefined;
 
 export type BotAvatarHandle = BlobAvatarHandle;
 
@@ -242,6 +253,7 @@ function BotAvatarComponent(
         size={size}
         shape={mascotShape(shape)}
         gradient={gradientFor(color)}
+        eyeColor={eyeColorFor(color)}
         title={label ?? null}
         lookAround={forward ? 0 : STUDIO.lookAround}
         gaze={{

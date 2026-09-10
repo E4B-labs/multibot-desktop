@@ -300,7 +300,10 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   <div className="mb-1.5 mt-3 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
                     {polish ? "Kolor" : "Color"}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  {/* Siedem kolumn pod 14 barw z BOT_COLOR_NAMES — dwa pelne
+                      rzedy. Zawijany flex zostawial w drugim rzedzie dziury po
+                      brakujacych pozycjach. */}
+                  <div className="grid grid-cols-7 justify-items-center gap-2">
                     {BOT_COLOR_NAMES.map((color) => (
                       <button
                         type="button"

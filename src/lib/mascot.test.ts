@@ -223,6 +223,31 @@ describe("paleta maskotki", () => {
     expect(Object.keys(BOT_COLORS).sort()).toEqual([...BOT_COLOR_NAMES].sort());
     for (const name of BOT_COLOR_NAMES) expect(BOT_COLORS[name]).toMatch(/^#[0-9A-Fa-f]{6}$/);
   });
+
+  // 11 barw w siatce o 7 kolumnach zostawiało trzy dziury w drugim rzędzie.
+  // Dwa pełne rzędy to warunek na wygląd panelu, nie kosmetyka testu.
+  it("wypełnia dwa rzędy po siedem, w kolejności koła barw", () => {
+    expect([...BOT_COLOR_NAMES]).toEqual([
+      "red", "coral", "orange", "yellow", "lime", "green",
+      "teal", "cyan", "blue", "indigo", "purple", "pink",
+      "white", "black",
+    ]);
+  });
+
+  // Dwa nierozróżnialne kółka w siatce to dwa kółka, w które nikt nie celuje.
+  // Próg 25 to podłoga wyznaczona przez najbliższą istniejącą parę (red/coral,
+  // 27,1) — nowa barwa bliżej czegokolwiek niż to nie jest nową barwą.
+  it("żadne dwie barwy nie leżą na sobie", () => {
+    const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+    for (const a of BOT_COLOR_NAMES) {
+      for (const b of BOT_COLOR_NAMES) {
+        if (a >= b) continue;
+        const [ar, ag, ab] = rgb(BOT_COLORS[a]);
+        const [br, bg, bb] = rgb(BOT_COLORS[b]);
+        expect(Math.hypot(ar - br, ag - bg, ab - bb), `${a} vs ${b}`).toBeGreaterThan(25);
+      }
+    }
+  });
 });
 
 describe("pickerAvatarState", () => {

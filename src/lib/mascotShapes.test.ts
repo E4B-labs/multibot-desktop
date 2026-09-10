@@ -21,4 +21,26 @@ describe("mascot shapes", () => {
     expect(mascotShape("gear")).toEqual(mascotShape("blob"));
     expect(mascotShape("shield").body).toContain('fill="{{GRADIENT}}"');
   });
+
+  // Pigułka, trójkąt i gwiazda mają mało miejsca na twarz w środku: przy
+  // domyślnym 0.86 oczy siadały na krawędzi. Sylwetka rośnie o 7% (przez
+  // `fit`, który NIE dotyczy twarzy), twarz maleje.
+  it("gives pill, triangle and star a bigger body and a smaller face", () => {
+    for (const name of ["pill", "triangle", "star"]) {
+      const shape = mascotShape(name);
+      expect(shape.fit, name).toBe("translate(-7.9989 -7.9989) scale(1.07)");
+      expect(shape.anchor.scale, name).toBe(0.81);
+    }
+    // Reszta zestawu zostaje na domyślnych — zmiana miała dotknąć trzech.
+    for (const name of ["circle", "square", "diamond", "leaf"]) {
+      expect(mascotShape(name).fit, name).toBe("");
+      expect(mascotShape(name).anchor.scale, name).toBe(0.86);
+    }
+  });
+
+  // Teczka jest niesymetryczna: zakładka nad korpusem przesuwa środek bryły
+  // w dół, więc twarz w środku pudełka lądowała na zgięciu.
+  it("centres the folder face in its body, not in the box", () => {
+    expect(mascotShape("folder").anchor).toEqual({ x: 114, y: 136, scale: 0.86 });
+  });
 });
