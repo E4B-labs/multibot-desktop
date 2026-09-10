@@ -384,12 +384,16 @@ describe("botSystemPrompt", () => {
       expect(text, name).toContain("Ordinary automation is normal engineering");
       expect(text, name).toContain("Never answer with a bare refusal.");
       expect(text, name).toContain("say in ONE line what blocks it");
-      // nic w tym bloku nie może kazać oszukiwać ani nadpisywać polityki modelu
       expect(text, name).toContain("None of this asks you to deceive anyone or to act against other people");
+      // blok NIE może rozluźniać potwierdzeń nieodwracalnych ani obiecywać pytania poza `ask_user`
+      expect(text, name).toContain("the confirmation rules below still apply to irreversible actions");
+      expect(text, name).toContain("ask one precise question through `ask_user` when you have it");
+      // stanowisko stoi PRZED \"How you work\", żeby nie wygrywać świeżością z regułami zgody
+      expect(text.indexOf("# Operating stance"), name).toBeLessThan(text.indexOf("# How you work"));
     }
-    // tryb autonomiczny i standardowy dostęp idą osobnym workspace, nie przez `prompt`
+    // tryb autonomiczny i standardowy dostęp zmieniają sekcję "How you work" — stanowisko zostaje
     for (const workspaceOverride of [{ autonomy: () => ({ autonomy: "autonomous" as const }) }, { access: () => ({ access: "standard" as const }) }]) {
-      const text = botSystemPrompt(bot, { isolated: false, integrations: ALL, workspace: { ...workspace, ...workspaceOverride } });
+      const text = prompt(ALL, { workspace: { ...workspace, ...workspaceOverride } });
       expect(text).toContain("# Operating stance");
       expect(text).toContain("Never answer with a bare refusal.");
     }
