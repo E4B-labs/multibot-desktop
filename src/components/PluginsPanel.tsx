@@ -671,16 +671,27 @@ export function PluginsPanel() {
   // multibot (F7): katalog przeładowuje się też po zapisie/usunięciu
   // własnego konektora, stąd useCallback zamiast gołego efektu. O status
   // pytamy tylko karty Composio — /api/connectors zna wyłącznie ich slugi.
+  //
+  // To JEST odświeżanie spod ikony w nagłówku: pełny obieg katalog → statusy.
+  // Wcześniej wisiało tam samo `refreshStatus(composioCards…)`, czyli statusy
+  // kart AKTUALNIE WIDOCZNYCH — przy wpisanej frazie albo pustym katalogu
+  // lista slugów była pusta, `refreshStatus` wychodziło pierwszą linią i klik
+  // nie robił nic, nawet nie zakręcił ikoną (0.5.33).
+  // Kręcenie ikoną trzyma ten sam `refreshing` co statusy i gaśnie DOPIERO po
+  // nich, stąd `return` w `then` zamiast `void`.
   const loadCatalog = useCallback(() => {
+    setRefreshing(true);
+    setError(null);
     return api("/api/connectors/catalog")
       .then((r) => {
         setCards(r.cards ?? []);
         setSource(r.source ?? "curated");
         setConfigured(Boolean(r.configured));
         const composio = (r.cards ?? []).filter((c: ToolkitCard) => c.source !== "custom");
-        if (r.configured) void refreshStatus(composio.map((c: ToolkitCard) => c.slug).slice(0, 100));
+        if (r.configured) return refreshStatus(composio.map((c: ToolkitCard) => c.slug).slice(0, 100)).then(() => undefined);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setRefreshing(false));
   }, [refreshStatus]);
 
   useEffect(() => {
@@ -823,6 +834,12 @@ export function PluginsPanel() {
 
   return (
     <div
+      // multibot: `data-shell-overlay` = w oknie bez ramki ten obszar NIE jest
+      // uchwytem do przeciągania (src/styles.css, punkt 5). Bez tego Chromium
+      // zostawiał tu region `drag` z nagłówka czatu spod spodu i górne 72 px
+      // nakładki — czyli cały ten nagłówek z „X" i odświeżaniem — zjadały
+      // każde kliknięcie (0.5.33).
+      data-shell-overlay
       className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 p-3 md:p-6"
       onClick={() => dispatch({ type: "togglePlugins", open: false })}
     >
@@ -839,8 +856,10 @@ export function PluginsPanel() {
             `min-width:auto`, więc na wąskim ekranie wiersz nagłówka rozpychał
             się i wypychał „X" poza panel. Ikon w pigułce mniej niż na
             desktopie z tego samego powodu. */}
-        <div className="flex items-center gap-3">
-          <div className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">Marketplace</div>
+        <div data-shell-overlay-header className="flex items-center gap-3">
+          <div className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">
+            {polish ? "Wtyczki" : "Plugins"}
+          </div>
           <div className="flex shrink items-center gap-2">
             {/* „N zainstalowanych ›" z ikonami połączonych aplikacji */}
             <button
@@ -858,13 +877,25 @@ export function PluginsPanel() {
               {installedCount}
               <span className="hidden sm:inline">{polish ? " zainstalowanych" : " installed"}</span> ›
             </button>
-            <RefreshCw
-              size={14}
-              className={cn("shrink-0 cursor-pointer text-ink-secondary hover:text-ink", refreshing && "animate-spin")}
-              onClick={() => refreshStatus(composioCards.map((c) => c.slug).slice(0, 100))}
-            />
+            {/* Prawdziwy <button>, nie samo <svg> z `onClick`: bez tego ikona
+                jest poza kolejnością tabulacji i nie da się jej wcisnąć
+                klawiaturą, a w oknie bez ramki nie łapie jej też wyjątek
+                `no-drag` dla przycisków w nagłówku. */}
             <button
+              type="button"
+              onClick={() => void loadCatalog()}
+              disabled={refreshing}
+              aria-label={polish ? "Odśwież" : "Refresh"}
+              title={polish ? "Odśwież" : "Refresh"}
+              className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-60"
+            >
+              <RefreshCw size={14} className={cn("shrink-0", refreshing && "animate-spin")} />
+            </button>
+            <button
+              type="button"
               onClick={() => dispatch({ type: "togglePlugins", open: false })}
+              aria-label={polish ? "Zamknij" : "Close"}
+              title={polish ? "Zamknij" : "Close"}
               className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
             >
               <X size={18} />

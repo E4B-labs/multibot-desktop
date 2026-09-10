@@ -114,6 +114,29 @@ body {
   padding-right: 114px;
 }
 
+/* 5. Nakładki na całą powłokę (konektory, mapa zespołu). Leżą NAD nagłówkiem
+      z punktu 1, ale same nie mówiły nic o regionie — a Chromium zostawia
+      wtedy w tym miejscu `drag` spod spodu. Liczy się KOLEJNOŚĆ w drzewie,
+      nie to, co leży wyżej wizualnie (ten sam mechanizm, który opisuje
+      WindowControls.test.ts). Nakładka jest w drzewie po nagłówku, więc jej
+      `no-drag` ten region zdejmuje. Bez tego górne 72 px nakładki są
+      uchwytem do przeciągania okna i klik w „X" albo w odświeżanie tylko
+      rusza oknem, zamiast zadziałać (0.5.33).
+      Cała nakładka, nie sam jej nagłówek: przy otwartym modalu okna i tak nie
+      przeciąga się po nim, a pole „Szukaj" i szyna kategorii też wchodzą
+      w te 72 px. */
+.multibot-frameless [data-shell-overlay] { -webkit-app-region: no-drag; }
+/* 6. …ale kontrolki okna wiszą jeszcze wyżej (z-90, `fixed`) i nakładka ich
+      nie zasłania. Nagłówek nakładki sięgającej górnej krawędzi musi im zejść
+      z drogi — inaczej jej „X", odświeżanie i pigułka „N zainstalowanych"
+      nachodzą na minimalizuj/maksymalizuj/zamknij. Te same 114 px co
+      w punkcie 2 (o margines nakładki za dużo — taniej niż druga stała).
+      Tylko od `md`: niżej modal jest wyśrodkowany (`max-h-[85%]`) i do górnej
+      krawędzi nie dochodzi. */
+@media (min-width: 768px) {
+  .multibot-frameless [data-shell-overlay-header] { padding-right: 114px; }
+}
+
 /* multibot: G5 — phone layout keeps bot list first, then full-width chat/panel.
    Existing desktop spacing and motion remain unchanged. */
 @media (max-width: 700px) {
