@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR, loadConfig } from "./config.ts";
-import { connectorCards, connectors, removeConnector, saveConnector } from "./mcp-connectors.ts";
+import { connectorCards, connectors, recordProbe, removeConnector, sameTransport, saveConnector } from "./mcp-connectors.ts";
 import { mcpServers } from "./mcp-servers.ts";
 
 const STDIO = { name: "Echo", transport: { type: "stdio", command: "node", args: ["echo.mjs"], env: { TOKEN: "t" } } };
@@ -74,6 +74,53 @@ describe("mcp-connectors registry", () => {
       { slug: "firma", label: "firma", blurb: "http: https://mcp.firma.dev/mcp", logo: null },
     ]);
   });
+
+  // Licznik narzędzi jest wyłącznie SERWEROWY: bierze się z udanej sondy
+  // (`POST /api/connectors/custom/:id/test`), a nie z tego, co przyśle panel.
+  it("caches the probed tool count and shows it on the card", () => {
+    saveConnector("echo", STDIO);
+    expect(connectorCards()[0].tools).toBeUndefined();
+
+    recordProbe("echo", 7);
+    expect(diskConfig().mcpConnectors.echo).toMatchObject({ name: "Echo", transport: STDIO.transport, tools: 7 });
+    expect(connectors()[0]).toMatchObject({ tools: 7 });
+    expect(typeof connectors()[0].checkedAt).toBe("number");
+    expect(connectorCards()).toEqual([
+      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, tools: 7 },
+    ]);
+
+    // sam zapis (rename) nie gubi ani licznika, ani transportu
+    const renamed = saveConnector("echo", { ...STDIO, name: "Echo 2" });
+    expect(renamed).toMatchObject({ name: "Echo 2", transport: STDIO.transport, tools: 7 });
+    expect(diskConfig().mcpConnectors.echo).toMatchObject({ name: "Echo 2", transport: STDIO.transport, tools: 7 });
+
+    recordProbe("nie-ma-takiego", 3); // no-op, nie tworzy wpisu
+    expect(Object.keys(diskConfig().mcpConnectors)).toEqual(["echo"]);
+  });
+
+  it("drops the cached count when the transport changes", () => {
+    saveConnector("echo", STDIO);
+    recordProbe("echo", 7);
+
+    const moved = saveConnector("echo", { name: "Echo", transport: { ...STDIO.transport, args: ["inny.mjs"] } });
+    expect(moved.tools).toBeUndefined();
+    expect(diskConfig().mcpConnectors.echo.tools).toBeUndefined();
+    expect(diskConfig().mcpConnectors.echo.checkedAt).toBeUndefined();
+    expect(connectorCards()[0].tools).toBeUndefined();
+  });
+
+  it("refuses a tool count injected through the HTTP payload", () => {
+    // `decodeConnector` czyta wyłącznie `name` i `transport` — wsad z panelu
+    // nie ma jak podstawić „999 narzędzi" pod konektor, którego nikt nie odpytał.
+    const saved = saveConnector("echo", { ...STDIO, tools: 999, checkedAt: 1 });
+    expect(saved.tools).toBeUndefined();
+    expect(diskConfig().mcpConnectors.echo).toEqual({ name: "Echo", transport: STDIO.transport });
+
+    recordProbe("echo", 2);
+    // …i nadpisanie z ciałem HTTP też go nie podbije
+    expect(saveConnector("echo", { ...STDIO, tools: 999 }).tools).toBe(2);
+    expect(diskConfig().mcpConnectors.echo.tools).toBe(2);
+  });
 });
 
 describe("mcp-servers", () => {
@@ -101,5 +148,25 @@ describe("mcp-servers", () => {
     saveConnector("echo", STDIO);
     expect(Object.keys(mcpServers(undefined))).toEqual(["echo"]);
     expect(mcpServers({})).toEqual({ echo: { command: "node", args: ["echo.mjs"], env: { TOKEN: "t" } } });
+  });
+});
+
+describe("sameTransport", () => {
+  it("ignores key order, because config.json gets hand-written", () => {
+    // Naglowek mcp-connectors.ts wprost zaprasza do recznej edycji configu.
+    // Porownanie wrazliwe na kolejnosc kluczy kasowalo licznik narzedzi przy
+    // KAZDYM zapisie takiego wpisu.
+    expect(sameTransport({ type: "http", url: "https://x/mcp" }, { url: "https://x/mcp", type: "http" })).toBe(true);
+    expect(
+      sameTransport(
+        { type: "stdio", command: "node", args: ["a", "b"], env: { A: "1", B: "2" } },
+        { env: { B: "2", A: "1" }, args: ["a", "b"], command: "node", type: "stdio" },
+      ),
+    ).toBe(true);
+  });
+
+  it("still sees a real difference", () => {
+    expect(sameTransport({ type: "stdio", command: "node", args: ["a"] }, { type: "stdio", command: "node", args: ["b"] })).toBe(false);
+    expect(sameTransport({ type: "http", url: "https://x/mcp" }, { type: "http", url: "https://y/mcp" })).toBe(false);
   });
 });
