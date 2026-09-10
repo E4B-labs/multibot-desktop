@@ -353,6 +353,10 @@ body {
 }
 
 ::highlight(mb-find-current) {
-  background-color: var(--color-accent);
+  /* Akcent przyciemniony o 15%: czysty --color-accent w skórce „midnight"
+     daje białemu tekstowi 3,65:1, czyli poniżej progu WCAG AA dla treści
+     dymka. Po przyciemnieniu przechodzi, a pozostałe trzy skórki i tak były
+     ponad progiem. */
+  background-color: color-mix(in srgb, var(--color-accent) 85%, black);
   color: var(--color-accent-ink);
 }

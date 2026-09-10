@@ -2,10 +2,12 @@
 // Serwer (`workspace.addSkill`) nie zna front-matteru, bierze gotowe
 // {name, description, instructions} — więc rozbiera się to tutaj.
 //
-// ponytail: własne trzy linijki zamiast `gray-matter`/`js-yaml`. Front-matter
-// skilla to płaskie `klucz: wartość`, a paczka webui jedzie na telefon jako
-// jeden string HTML z twardym limitem 6 MB (patrz scripts/bundle-webui.mjs) —
-// parser YAML-a jest tu czystym balastem.
+// ponytail: własne kilkanaście linijek zamiast `gray-matter`/`js-yaml`.
+// Front-matter skilla to płaskie `klucz: wartość`, a paczka webui jedzie na
+// telefon jako jeden string HTML z twardym limitem 6 MB (patrz
+// scripts/bundle-webui.mjs) — parser YAML-a jest tu czystym balastem.
+// Świadomie NIE obsługiwane: kotwice, listy, zagnieżdżone mapy i bloki `|`/`>`
+// (te ostatnie dają pusty opis zamiast literalnego „|”, patrz `scalarValue`).
 
 export interface ParsedSkillFile {
   name: string;
@@ -13,44 +15,69 @@ export interface ParsedSkillFile {
   instructions: string;
 }
 
-const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+const FRONT_MATTER = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/;
+const KEY_LINE = /^([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$/;
 
-const unquote = (value: string) => value.trim().replace(/^(['"])([\s\S]*)\1$/, "$2").trim();
+function unquote(value: string): string {
+  const trimmed = value.trim();
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(trimmed);
+  if (quoted) return quoted[2].trim();
+  // komentarz na końcu niecytowanej wartości: `name: deploy # tylko prod`
+  return trimmed.replace(/\s+#.*$/, "").trim();
+}
+
+/** Blok `|`/`>` (i ich warianty) zwraca pusto zamiast literalnego znaku —
+ *  lepszy brak opisu niż opis o treści „|". */
+const scalarValue = (value: string) => (/^[|>][+-]?$/.test(value.trim()) ? "" : unquote(value));
+
+/** Czy ten blok to naprawdę front-matter, czy zwykła kreska pozioma na górze
+ *  pliku? Bez tego sprawdzenia `---\n\n# Tytuł\n\ntreść\n\n---\n dalszy ciąg`
+ *  gubił wszystko do drugiej kreski, bez słowa ostrzeżenia. */
+function isFrontMatter(block: string): boolean {
+  const lines = block.split("\n").filter((line) => line.trim());
+  return lines.length > 0 && lines.every((line) => /^\s/.test(line) || KEY_LINE.test(line));
+}
 
 function frontMatterValue(block: string, key: string): string {
-  for (const line of block.split(/\r?\n/)) {
-    const match = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (match && match[1].toLowerCase() === key) return unquote(match[2]);
+  for (const line of block.split("\n")) {
+    const match = KEY_LINE.exec(line);
+    if (match && match[1].toLowerCase() === key) return scalarValue(match[2]);
   }
   return "";
 }
 
+/** Przycięcie do limitu serwera bez rozcinania pary surogatów w pół. */
+const cut = (value: string, max: number) => value.slice(0, max).replace(/[\uD800-\uDBFF]$/, "");
+
 /** Nazwa z pliku: `skill.md` w katalogu nic nie mówi, więc dla takiej nazwy
  *  (i dla pustej) zostaje pusty napis i decyduje nagłówek. */
 function nameFromFileName(fileName: string): string {
-  const base = fileName.replace(/\.(md|markdown)$/i, "").split(/[\\/]/).pop() ?? "";
-  return /^skill$/i.test(base) ? "" : base.trim();
+  // File.name z drag&dropa to sama nazwa, bez ścieżki
+  const base = fileName.replace(/\.(md|markdown)$/i, "").trim();
+  return /^skill$/i.test(base) ? "" : base;
 }
 
 export function parseSkillFile(fileName: string, content: string): ParsedSkillFile {
-  const text = content.replace(/^﻿/, "");
-  if (!text.trim()) throw new Error(`${fileName || "file"} is empty`);
+  const label = fileName || "file";
+  // BOM i CRLF na wejściu; inaczej instrukcje wieloliniowe niosły \r do serwera
+  const text = content.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  if (!text.trim()) throw new Error(`${label} is empty`);
 
   const matter = FRONT_MATTER.exec(text);
-  const block = matter ? matter[1] : "";
-  const body = (matter ? text.slice(matter[0].length) : text).trim();
+  const block = matter && isFrontMatter(matter[1]) ? matter[1] : "";
+  const body = (block ? text.slice(matter![0].length) : text).trim();
 
-  const heading = /^#{1,6}[ \t]+(.+)$/m.exec(body)?.[1]?.trim() ?? "";
-  const name = (frontMatterValue(block, "name") || heading || nameFromFileName(fileName)).slice(0, 80);
-  if (!name) throw new Error(`${fileName || "file"}: no skill name (add front-matter \`name:\` or a \`#\` heading)`);
+  const heading = /^#{1,6}[ \t]+(.+?)[ \t]*#*$/m.exec(body)?.[1]?.trim() ?? "";
+  const name = cut(frontMatterValue(block, "name") || heading || nameFromFileName(fileName), 80);
+  if (!name) throw new Error(`${label}: no skill name (add front-matter \`name:\` or a \`#\` heading)`);
 
   const firstLine = body
-    .split(/\r?\n/)
+    .split("\n")
     .map((line) => line.trim())
     .find((line) => line && !line.startsWith("#") && !line.startsWith("---")) ?? "";
-  const description = (frontMatterValue(block, "description") || firstLine).slice(0, 2_000);
+  const description = cut(frontMatterValue(block, "description") || firstLine, 2_000);
 
-  if (!body) throw new Error(`${fileName || "file"} has front-matter but no instructions`);
+  if (!body) throw new Error(`${label} has front-matter but no instructions`);
 
   return { name, description, instructions: body };
 }

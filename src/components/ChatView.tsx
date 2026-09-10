@@ -197,7 +197,8 @@ function Bubble({
           <>
             <div
               // multibot: kotwica dla find-in-chat — walker po trafieniach
-              // schodzi TYLKO do treści dymka, nie do stopki i badge'y
+              // schodzi tu i w `.chat-md`, czyli w treść dymka wraz z plakietką
+              // nadawcy, ale już nie w stopkę, badge modelu ani cytat
               data-mb-body=""
               className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
             >
@@ -498,11 +499,12 @@ export function ChatView({ bot }: { bot: Bot }) {
   // multibot: trafienia w treści — podświetla je useChatFind po Range'ach
   // (patrz lib/findInChat.ts), pasek pokazuje tylko „3/17".
   const find = useChatFind(scrollRef, findOpen);
+  const resetFind = find.reset;
   const closeFind = useCallback(() => {
     setFindOpen(false);
     setHighlightId(null);
-    find.reset();
-  }, [find]);
+    resetFind();
+  }, [resetFind]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -524,9 +526,12 @@ export function ChatView({ bot }: { bot: Bot }) {
     if (lastMessage?.role === "user") setFollow(true);
   }, [lastMessage?.id, lastMessage?.role]);
   useEffect(() => {
-    // zmiana bota zamyka find — trafienia należą do starego transkryptu
+    // zmiana bota zamyka find — trafienia należą do starego transkryptu,
+    // razem z wpisaną frazą (inaczej pasek wracał z zapytaniem poprzedniego bota)
     setFindOpen(false);
     setHighlightId(null);
+    resetFind();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bot.id]);
   useEffect(() => {
     let active = true;
@@ -709,7 +714,10 @@ export function ChatView({ bot }: { bot: Bot }) {
           else if (atEnd()) setFollow(true);
         }}
         onScroll={() => {
-          if (!follow && atEnd()) setFollow(true);
+          // przy otwartym pasku szukania NIE wracamy do trybu „goń dół": to
+          // programowe przewinięcie na trafienie dojechało do końca listy, a
+          // nie użytkownik prosił o live view
+          if (!follow && !findOpen && atEnd()) setFollow(true);
         }}
       >
         {/* multibot: `pb-16` (64 px) zamiast `pb-10` — przy dojechaniu na sam

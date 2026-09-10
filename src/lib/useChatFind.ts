@@ -21,6 +21,11 @@ export function useChatFind(scrollRef: RefObject<HTMLElement | null>, open: bool
   const [total, setTotal] = useState(0);
   const [index, setIndex] = useState(0);
   const [revision, bump] = useReducer((value: number) => value + 1, 0);
+  // Przewijanie chodzi na WŁASNYM liczniku, nie na `index`/`revision`. Inaczej
+  // każde przeliczenie po zmianie DOM (a przy strumieniowanej odpowiedzi leci
+  // co 400 ms) ściągałoby widok z powrotem na trafienie i nie dało się czytać
+  // niczego innego przy otwartym pasku.
+  const [navTick, nav] = useReducer((value: number) => value + 1, 0);
   const ranges = useRef<Range[]>([]);
   const lastQuery = useRef<string | null>(null);
 
@@ -40,7 +45,10 @@ export function useChatFind(scrollRef: RefObject<HTMLElement | null>, open: bool
     let timer: ReturnType<typeof setTimeout>;
     const observer = new MutationObserver(() => {
       clearTimeout(timer);
-      timer = setTimeout(bump, 120);
+      // ponytail: 400 ms i pełne przejście drzewa. Przy strumieniu to i tak
+      // 2,5 przebiegu na sekundę; gdyby zabolało na wielotysięcznym
+      // transkrypcie, przeliczać tylko bloki z MutationRecord.target.
+      timer = setTimeout(bump, 400);
     });
     observer.observe(root, { childList: true, subtree: true, characterData: true });
     return () => {
@@ -66,15 +74,22 @@ export function useChatFind(scrollRef: RefObject<HTMLElement | null>, open: bool
       // nowe zapytanie → start na NAJNOWSZYM trafieniu, tak czyta się rozmowę
       lastQuery.current = query;
       setIndex(found.length ? found.length - 1 : 0);
+      nav();
     } else {
       // to samo zapytanie, przeliczone po zmianie DOM — nie wyrywaj z miejsca
       setIndex((current) => (found.length ? Math.min(current, found.length - 1) : 0));
     }
   }, [open, query, revision, scrollRef]);
 
-  // malowanie + przewijanie bieżącego trafienia na środek listy
+  // Malowanie. `query` MUSI być w zależnościach: doprecyzowanie zapytania
+  // („erro" → „error") potrafi dać tyle samo trafień, więc ani `total`, ani
+  // `index` się nie ruszą i stare Range'y zostałyby na ekranie.
   useEffect(() => {
     paintHighlights(ranges.current, index);
+  }, [index, total, revision, query]);
+
+  // Przewijanie — tylko po skoku na inne trafienie albo po nowym zapytaniu.
+  useEffect(() => {
     const range = ranges.current[index];
     const root = scrollRef.current;
     if (!range || !root) return;
@@ -82,12 +97,14 @@ export function useChatFind(scrollRef: RefObject<HTMLElement | null>, open: bool
     if (!rect.width && !rect.height) return; // Range osierocony przez re-render
     const box = root.getBoundingClientRect();
     root.scrollTop += rect.top - box.top - box.height / 2 + rect.height / 2;
-  }, [index, total, revision, scrollRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navTick, scrollRef]);
 
   useEffect(() => clearHighlights, []);
 
   const move = useCallback((delta: number) => {
     setIndex((current) => wrapIndex(current, delta, ranges.current.length));
+    nav();
   }, []);
 
   const reset = useCallback(() => {

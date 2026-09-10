@@ -431,6 +431,9 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
   const [dragOver, setDragOver] = useState(false);
   const [dropping, setDropping] = useState(false);
   const dragCounter = useRef(0);
+  // ref, nie `dropping` — stan nie zdąży się odświeżyć między dwoma szybkimi
+  // zrzutami tego samego pliku, a drugi dostałby 409
+  const inFlight = useRef(false);
 
   const load = () =>
     api(skillsRoot).then((ss: Skill[]) => {
@@ -473,18 +476,37 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
   // przemontowuje się i gubi swój stan. Komunikat o błędzie ustawiony PO
   // pierwszym udanym zapisie nigdy by się nie pokazał.
   // ponytail: błąd z samego serwera (np. 409 na drugim z trzech plików) wciąż
-  // może zginąć w tym przemontowaniu; gdyby zaczęło boleć, błąd musi wyjść
-  // z panelu do store'a.
+  // może zginąć w tym przemontowaniu — `workspaceVersion` jest licznikiem
+  // GLOBALNYM, więc podbija go też bot zapisujący pamięć w tle. Gdy zacznie
+  // boleć, błąd musi wyjść z panelu do store'a (albo `key` przestać zależeć
+  // od tej wartości).
   const dropFiles = useCallback(async (files: File[]) => {
-    const wrongType = files.filter((file) => !/\.(md|markdown)$/i.test(file.name));
-    if (wrongType.length || !files.length) {
+    if (inFlight.current) return;
+    const bad = files.filter((file) => !/\.(md|markdown)$/i.test(file.name));
+    if (bad.length || !files.length) {
+      // Cały zrzut idzie do kosza, nie tylko złe pliki — komunikat musi to
+      // powiedzieć wprost, inaczej przy „a.md b.md logo.png" użytkownik jest
+      // przekonany, że dwa skille jednak weszły.
+      const names = bad.map((file) => file.name).join(", ");
       setError(
         polish
-          ? `Upuść plik .md z umiejętnością${wrongType.length ? ` (odrzucone: ${wrongType.map((f) => f.name).join(", ")})` : ""}`
-          : `Drop a .md skill file${wrongType.length ? ` (rejected: ${wrongType.map((f) => f.name).join(", ")})` : ""}`,
+          ? `Same pliki .md, proszę — nic nie dodano${names ? ` (odrzucone: ${names})` : ""}`
+          : `Only .md skill files — nothing added${names ? ` (rejected: ${names})` : ""}`,
       );
       return;
     }
+    // serwer tnie instrukcje na 100 000 znaków BŁĘDEM, nie przycięciem —
+    // lepiej powiedzieć to przed wysłaniem całego pliku
+    const big = files.find((file) => file.size > 100_000);
+    if (big) {
+      setError(
+        polish
+          ? `${big.name} jest za duży na umiejętność (limit 100 000 znaków)`
+          : `${big.name} is too large for a skill (100,000 character limit)`,
+      );
+      return;
+    }
+    inFlight.current = true;
     setDropping(true);
     setError(null);
     try {
@@ -504,6 +526,7 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      inFlight.current = false;
       setDropping(false);
     }
   }, [polish, skillsRoot]);
@@ -535,6 +558,7 @@ export function SkillsPanel({ bot }: { bot: Bot }) {
         e.dataTransfer.dropEffect = "copy";
       }}
       onDragLeave={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
         dragCounter.current = Math.max(0, dragCounter.current - 1);
         if (dragCounter.current === 0) setDragOver(false);

@@ -42,8 +42,19 @@ interface TextMap {
   text: string;
 }
 
+/** Tekst, którego użytkownik NIE widzi, a który wisi w drzewie.
+ *  Najważniejszy jest `<annotation encoding="application/x-tex">`: KaTeX
+ *  w trybie MathML wkłada tam ŹRÓDŁO LaTeX-a obok wyrenderowanego wzoru, a
+ *  `<semantics>` rysuje tylko pierwsze dziecko. Bez tego filtra każdy wzór
+ *  liczył się dwa razy, a połowa trafień miała prostokąt 0×0 — licznik szedł
+ *  do przodu, a „następne" nie ruszało widoku. */
+const HIDDEN_TEXT = "annotation, annotation-xml, [aria-hidden='true'], script, style";
+
 function textMap(root: Element): TextMap {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest(HIDDEN_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
   const nodes: Text[] = [];
   const starts: number[] = [];
   let text = "";
@@ -114,12 +125,22 @@ export function clearHighlights(): void {
  *  nakładania się nie trzeba bawić się priorytetami Highlightów. */
 export function paintHighlights(ranges: Range[], current: number): void {
   const highlights = registry();
-  const Ctor = (globalThis as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+  const Ctor = (globalThis as { Highlight?: new (...ranges: Range[]) => { add(range: Range): void } })
+    .Highlight;
   if (!highlights || !Ctor) return;
   clearHighlights();
   if (!ranges.length) return;
-  const others = ranges.filter((_, index) => index !== current);
-  if (others.length) highlights.set(ALL, new Ctor(...others));
+  // `new Ctor(...ranges)` wywraca się na limicie argumentów, a „n" w długim
+  // transkrypcie to dziesiątki tysięcy Range'ów — Highlight jest Set-like,
+  // więc dokładamy po jednym.
+  const rest = new Ctor();
+  let any = false;
+  ranges.forEach((range, index) => {
+    if (index === current) return;
+    rest.add(range);
+    any = true;
+  });
+  if (any) highlights.set(ALL, rest);
   const active = ranges[current];
   if (active) highlights.set(CURRENT, new Ctor(active));
 }

@@ -19,31 +19,36 @@ export function ChatFindBar({ find, onClose }: { find: ChatFind; onClose: () => 
     <div
       className="absolute right-4 top-2 z-30 flex items-center gap-1 rounded-xl border border-hairline/40 bg-raised px-2 py-1.5 shadow-lg"
       role="search"
-      onKeyDown={(e) => e.stopPropagation()}
+      // Klawiatura wisi na CAŁYM pasku, nie na samym polu: po kliknięciu
+      // strzałki fokus siedzi na przycisku, a `stopPropagation` niżej i tak
+      // zjadał Escape'a i Entera — pasek robił się głuchy.
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") onClose();
+        else if (e.key === "Enter") {
+          e.preventDefault();
+          move(e.shiftKey ? -1 : 1);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          move(1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          move(-1);
+        }
+      }}
     >
       <input
         ref={inputRef}
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.stopPropagation();
-            onClose();
-          } else if (e.key === "Enter") {
-            e.preventDefault();
-            move(e.shiftKey ? -1 : 1);
-          } else if (e.key === "ArrowDown") {
-            e.preventDefault();
-            move(1);
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            move(-1);
-          }
-        }}
         placeholder={polish ? "Szukaj w rozmowie…" : "Find in chat…"}
+        aria-label={polish ? "Szukaj w rozmowie" : "Find in chat"}
         className="w-52 bg-transparent px-1 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60"
       />
-      <span className="min-w-10 text-center text-[11.5px] tabular-nums text-ink-secondary">
+      <span
+        aria-live="polite"
+        className="min-w-10 text-center text-[11.5px] tabular-nums text-ink-secondary"
+      >
         {total ? `${index + 1}/${total}` : "0/0"}
       </span>
       <button
