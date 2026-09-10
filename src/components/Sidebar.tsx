@@ -496,6 +496,30 @@ function SectionPicker({
   );
 }
 
+/** Szerokość kafelka hovera (`w-72` = 18rem), jego wysokość przy dwóch liniach
+ * opisu i odstęp od krawędzi okna. Kafelek jest `fixed`, więc żaden rodzic go nie
+ * domyka — pozycję trzeba policzyć samemu. */
+const HOVER_CARD_WIDTH = 288;
+const HOVER_CARD_HEIGHT = 120;
+const HOVER_CARD_MARGIN = 8;
+
+/** Kafelek staje po prawej stronie wiersza, ale nigdy poza oknem — ani po prawej,
+ * ani (to był błąd) po lewej. W oknie węższym niż `WIDTH + 2 * MARGIN` kafelek
+ * zwęża się klasą `max-w-[calc(100vw-16px)]`, więc lewa granica `MARGIN` daje wtedy
+ * dokładnie równy margines z obu stron. */
+export function hoverCardPosition(
+  rect: { top: number; right: number },
+  innerWidth: number,
+  innerHeight: number,
+): { top: number; left: number } {
+  const clamp = (value: number, max: number) =>
+    Math.max(HOVER_CARD_MARGIN, Math.min(value, max));
+  return {
+    top: clamp(rect.top - 4, innerHeight - HOVER_CARD_HEIGHT - HOVER_CARD_MARGIN),
+    left: clamp(rect.right + 10, innerWidth - HOVER_CARD_WIDTH - HOVER_CARD_MARGIN),
+  };
+}
+
 // Kafelek hovera: te same klasy co menu kontekstowe, ale pointer-events-none —
 // musnięcie kafelka nie może go zgasić. Pozycję liczy Sidebar (clamp do viewportu).
 function BotHoverCard({ bot, top, left }: { bot: Bot; top: number; left: number }) {
@@ -504,7 +528,7 @@ function BotHoverCard({ bot, top, left }: { bot: Bot; top: number; left: number 
   return (
     <div
       style={{ top, left }}
-      className="pointer-events-none fixed z-50 w-72 rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
+      className="pointer-events-none fixed z-50 w-72 max-w-[calc(100vw-16px)] rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
     >
       <div className="flex items-center gap-2">
         <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={28} animated={false} />
@@ -1112,9 +1136,7 @@ export function Sidebar() {
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showHoverCard = (botId: string, rect: DOMRect) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    // clamp do viewportu: szerokość w-72 (288 px), wysokość ~120 px
-    const top = Math.max(8, Math.min(rect.top - 4, window.innerHeight - 128));
-    const left = Math.min(rect.right + 10, window.innerWidth - 296);
+    const { top, left } = hoverCardPosition(rect, window.innerWidth, window.innerHeight);
     hoverTimer.current = setTimeout(() => setHover({ botId, top, left }), 350);
   };
   const hideHoverCard = () => {
