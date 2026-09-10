@@ -72,6 +72,7 @@ import { broadcastWs, mountEventsWs } from "./events-ws.ts";
 import { EventBus } from "./harness/bus.ts";
 // multibot (F7): własne serwery MCP użytkownika obok Composio
 import * as mcpConnectors from "./mcp-connectors.ts";
+import { probeMcp } from "./mcp-probe.ts";
 import * as googleWorkspace from "./google-workspace.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { HarnessRoutines, oneShotAt, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
@@ -5359,6 +5360,44 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         ...mcpConnectors.connectorCards(cfg).map((c) => ({ ...c, source: "custom" as const })),
       ];
       return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards: tagged });
+    }
+    // multibot: „testuj połączenie" — jednorazowy handshake MCP. PRZED trasą
+    // `/custom/:id`, żeby `.../test` nigdy nie wpadł tam jako id konektora.
+    // Ciało to ten sam payload co PUT (`{name, transport}`), więc panel testuje
+    // SZKIC przed zapisem; bez `transport` testuje to, co już zapisane.
+    // Nieudana sonda to WYNIK, nie błąd HTTP — stąd 200 z `{ok:false}`.
+    m = path.match(/^\/api\/connectors\/custom\/([\w-]+)\/test$/);
+    if (m && method === "POST") {
+      const id = m[1];
+      const body = await readBody(req).catch(() => ({}));
+      let transport: mcpConnectors.McpConnector["transport"];
+      try {
+        const draft = body && typeof body === "object" && body.transport && typeof body.transport === "object";
+        const connector = draft
+          ? mcpConnectors.decodeConnector(id, body)
+          : mcpConnectors.connectors().find((c) => c.id === id);
+        if (!connector) return json(res, 404, { error: "no such connector" });
+        transport = connector.transport;
+      } catch (e) {
+        return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      const probe = await probeMcp(transport);
+      if (!probe.ok) return json(res, 200, { ok: false, error: probe.error });
+      // Licznik na karcie katalogu bierze się STĄD, nie z sondy przy renderze —
+      // ale tylko wtedy, gdy zmierzony transport to DOKŁADNIE ten zapisany.
+      // Inaczej szkic z ciała HTTP podstawiłby liczbę pod konektor, którego
+      // nikt nigdy nie odpytał.
+      const stored = mcpConnectors.connectors().find((c) => c.id === id);
+      if (stored && JSON.stringify(stored.transport) === JSON.stringify(transport)) {
+        mcpConnectors.recordProbe(id, probe.tools.length);
+        Object.assign(cfg, loadConfig());
+      }
+      return json(res, 200, {
+        ok: true,
+        tools: probe.tools,
+        count: probe.tools.length,
+        ...(probe.serverName ? { serverName: probe.serverName } : {}),
+      });
     }
     // multibot (F7): rejestr własnych konektorów. Osobna ścieżka `/custom/`,
     // żeby nie mieszać się z `DELETE /api/connectors/:slug` Composio.

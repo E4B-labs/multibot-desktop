@@ -4,7 +4,7 @@
 // Weryfikacja slugów: https://docs.composio.dev/toolkits/<slug> (sitemap
 // tamtych docsów to pełna lista toolkitów).
 import { describe, expect, it } from "vitest";
-import { CURATED_SLUGS } from "./composio.ts";
+import { CATEGORY_IDS, CURATED_CARDS, CURATED_SLUGS, categoryFor } from "./composio.ts";
 import { APP_ICONS } from "../src/lib/appIcons.ts";
 
 describe("curated catalog", () => {
@@ -28,5 +28,37 @@ describe("curated catalog", () => {
     // Monogram zostaje tylko dla własnych konektorów MCP użytkownika —
     // katalog kuratorowany ma komplet prawdziwych logotypów.
     expect(CURATED_SLUGS.filter((s) => !APP_ICONS[s])).toEqual([]);
+  });
+});
+
+describe("catalog categories", () => {
+  it("puts every curated app in a known section", () => {
+    for (const card of CURATED_CARDS) {
+      expect(CATEGORY_IDS, `${card.slug} has category "${card.category}"`).toContain(card.category);
+    }
+  });
+
+  it("leaves nothing curated in the catch-all", () => {
+    // `other` jest tylko dla slugów przychodzących z API Composio — kartę
+    // z naszej listy w tym worku zobaczyłby użytkownik jako sierotę.
+    expect(CURATED_CARDS.filter((c) => c.category === "other").map((c) => c.slug)).toEqual([]);
+  });
+
+  it("fills every section, so the left rail has no empty entry", () => {
+    for (const id of CATEGORY_IDS) {
+      if (id === "other") continue;
+      expect(CURATED_CARDS.some((c) => c.category === id), `section ${id} is empty`).toBe(true);
+    }
+  });
+
+  it("falls back to other for a slug outside the catalog", () => {
+    expect(categoryFor("definitely-not-a-toolkit")).toBe("other");
+  });
+
+  it("does not read the prototype for a slug like constructor", () => {
+    // Katalog potrafi przyjść z API, więc slug nie musi być z naszej listy;
+    // goły indeks obiektu zwróciłby tu funkcję zamiast kategorii.
+    expect(categoryFor("constructor")).toBe("other");
+    expect(categoryFor("toString")).toBe("other");
   });
 });

@@ -27,6 +27,11 @@ export interface McpConnector {
   id: string;
   name: string;
   transport: StdioTransport | HttpTransport;
+  /** Ile narzędzi zwrócił OSTATNI udany `probeMcp` (i kiedy). Wyłącznie z
+   * serwera — `decodeConnector` tych pól nie czyta, więc wsad HTTP nie ma jak
+   * ich podstawić. Panel pokazuje „N narzędzi" bez sondowania przy renderze. */
+  tools?: number;
+  checkedAt?: number;
 }
 
 // Id ląduje w nazwie serwera MCP, więc zostaje przy dotychczasowym regeksie —
@@ -80,7 +85,13 @@ export function decodeConnector(id: string, raw: unknown): McpConnector {
 export function connectors(cfg: AppConfig = loadConfig()): McpConnector[] {
   return Object.entries(cfg.mcpConnectors ?? {})
     .filter(([, spec]) => spec && typeof spec === "object")
-    .map(([id, spec]) => ({ id, name: spec.name || id, transport: spec.transport }))
+    .map(([id, spec]) => ({
+      id,
+      name: spec.name || id,
+      transport: spec.transport,
+      ...(typeof spec.tools === "number" ? { tools: spec.tools } : {}),
+      ...(typeof spec.checkedAt === "number" ? { checkedAt: spec.checkedAt } : {}),
+    }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -94,14 +105,31 @@ export function connectorCards(cfg: AppConfig = loadConfig()) {
         ? `stdio: ${[c.transport.command, ...(c.transport.args ?? [])].join(" ")}`.slice(0, 90)
         : `${c.transport.type}: ${c.transport.url}`.slice(0, 90),
     logo: null as string | null,
+    ...(typeof c.tools === "number" ? { tools: c.tools } : {}),
   }));
 }
 
 /** Podłącz (albo nadpisz) konektor. Zwraca zapisany wpis. */
 export function saveConnector(id: string, raw: unknown): McpConnector {
   const connector = decodeConnector(id, raw);
-  saveConfig({ mcpConnectors: { [id]: { name: connector.name, transport: connector.transport } } });
-  return connector;
+  // Licznik narzędzi należy do TRANSPORTU, na którym go zmierzono: przeżywa
+  // zmianę nazwy, ale zmiana komendy/url-a musi go skasować, inaczej panel
+  // pokazuje „12 narzędzi" dla serwera, którego nikt nigdy nie odpytał.
+  const previous = loadConfig().mcpConnectors?.[id];
+  const cached =
+    previous && typeof previous.tools === "number"
+      && JSON.stringify(previous.transport) === JSON.stringify(connector.transport)
+      ? { tools: previous.tools, ...(typeof previous.checkedAt === "number" ? { checkedAt: previous.checkedAt } : {}) }
+      : {};
+  saveConfig({ mcpConnectors: { [id]: { name: connector.name, transport: connector.transport, ...cached } } });
+  return { ...connector, ...cached };
+}
+
+/** Zapamiętaj wynik udanej sondy przy istniejącym konektorze. Brak wpisu = no-op. */
+export function recordProbe(id: string, tools: number): void {
+  const previous = loadConfig().mcpConnectors?.[id];
+  if (!previous) return;
+  saveConfig({ mcpConnectors: { [id]: { ...previous, tools, checkedAt: Date.now() } } });
 }
 
 /** Odłącz konektor. Brak wpisu = no-op. */

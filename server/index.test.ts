@@ -804,6 +804,49 @@ describe("harness HTTP API", () => {
     // sekret konektora nie wychodzi katalogiem
     expect(JSON.stringify(catalog.body)).not.toContain("sekret");
 
+    // „testuj połączenie" na SZKICU: id jeszcze nie istnieje, transport idzie
+    // ciałem, więc panel sprawdza serwer przed zapisem. Nieudana sonda też
+    // wraca 200 — to wynik testu, nie błąd API.
+    const FAKE_MCP = join(SERVER_DIR, "testing", "fake-mcp-server.ts");
+    const draft = await api("POST", "/api/connectors/custom/szkic/test", {
+      name: "Szkic",
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP] },
+    });
+    expect(draft.status).toBe(200);
+    expect(draft.body).toMatchObject({ ok: true, count: 2, serverName: "fake-echo" });
+    expect(draft.body.tools).toEqual(["echo", "ping"]);
+    // sam test niczego nie zapisuje
+    const afterDraft = await api("GET", "/api/connectors/catalog");
+    expect(afterDraft.body.cards.some((c: { slug: string }) => c.slug === "szkic")).toBe(false);
+
+    const broken = await api("POST", "/api/connectors/custom/szkic/test", {
+      transport: { type: "stdio", command: "multibot-no-such-binary-xyz" },
+    });
+    expect(broken.status).toBe(200);
+    expect(broken.body.ok).toBe(false);
+    expect(typeof broken.body.error).toBe("string");
+    expect(broken.body.tools).toBeUndefined();
+
+    // …a test ZAPISANEGO konektora (bez transportu w ciele) dokłada licznik do karty
+    await api("PUT", "/api/connectors/custom/echo", {
+      name: "Echo",
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP] },
+    });
+    const tested = await api("POST", "/api/connectors/custom/echo/test");
+    expect(tested.body).toMatchObject({ ok: true, count: 2 });
+    const counted = await api("GET", "/api/connectors/catalog");
+    expect(counted.body.cards.find((c: { slug: string }) => c.slug === "echo").tools).toBe(2);
+    expect((await api("POST", "/api/connectors/custom/nie-ma/test")).status).toBe(404);
+
+    // test SZKICU pod istniejącym id nie ma prawa przestawić licznika
+    // zapisanego konektora — inaczej ciało HTTP podstawia dowolną liczbę.
+    const spoof = await api("POST", "/api/connectors/custom/echo/test", {
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP], env: { FAKE_MCP_MODE: "one" } },
+    });
+    expect(spoof.body).toMatchObject({ ok: true, count: 1 });
+    const stillTwo = await api("GET", "/api/connectors/catalog");
+    expect(stillTwo.body.cards.find((c: { slug: string }) => c.slug === "echo").tools).toBe(2);
+
     const gone = await api("DELETE", "/api/connectors/custom/echo");
     expect(gone.status).toBe(200);
     const after = await api("GET", "/api/connectors/catalog");

@@ -124,16 +124,39 @@ describe("PluginsPanel", () => {
     expect(tile).toContain("bg-white");
   });
 
-  it("shows one flat All apps list, no Featured bucket", () => {
+  it("groups the catalog into category sections, no Featured bucket", () => {
     expect(panel).not.toContain("FEATURED_SLUGS");
     expect(panel).not.toContain("ORCHESTRATION_HINTS");
     // etykieta sekcji, nie samo słowo — komentarz obok wyjaśnia, czemu jej nie ma
     expect(panel).not.toContain('"Wyróżnione"');
-    expect(panel).toContain("Wszystkie aplikacje");
+    // kolejność sekcji i etykiety kategorii: id lecą z serwera
+    // (server/composio.ts, CATEGORY_IDS), etykiety zostają tutaj, bo panel
+    // jest dwujęzyczny, a serwer nie zna języka klienta
+    expect(panel).toContain("CATEGORY_ORDER");
+    for (const id of ["google", "productivity", "developer", "communication", "design", "data-ai", "business", "other"]) {
+      expect(panel, `${id} needs a label in CATEGORY_LABELS`).toContain(id.includes("-") ? `"${id}":` : `${id}:`);
+    }
   });
 
   it("lets the dialog shrink to a phone screen", () => {
+    // TEN SAM plik jedzie do repo mobilnego, więc kompaktowy panel musi
+    // zostać ścieżką dla wąskiego ekranu, a duży układ marketplace'u —
+    // wyłącznie za `md:`. Bez tego telefon dostałby okno na cały ekran
+    // razem z szyną kategorii.
     expect(panel).toContain("w-full max-w-[640px]");
     expect(panel).toContain("grid-cols-1 gap-2 sm:grid-cols-2");
+    expect(panel).toContain("md:h-full md:max-h-none md:max-w-[1400px]");
+    // lewa szyna kategorii jest desktopowa; na telefonie zostają pigułki
+    expect(panel).toContain("hidden w-[190px] shrink-0 flex-col gap-0.5 overflow-y-auto md:flex");
+    expect(panel).toContain("md:hidden");
+  });
+
+  it("asks for the account label in the panel, never through window.prompt", () => {
+    // Electron nie wspiera prompt() i rzuca wyjątkiem — „Połącz" wywalało
+    // się jeszcze przed żądaniem, więc w spakowanej apce nie dało się
+    // podłączyć niczego. Pole w karcie jest też jedyną drogą do DRUGIEGO
+    // konta tej samej aplikacji.
+    expect(panel).not.toContain("window.prompt");
+    expect(panel).toContain("aliasFor");
   });
 });
