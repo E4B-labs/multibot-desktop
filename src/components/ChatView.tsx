@@ -363,7 +363,8 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
   // multibot: opis to jeden rząd flexa, nie zdanie z chipami wklejonymi w tekst.
   // Chip jest `inline-flex`, więc w toku tekstu bierze linię bazową z awatara i
   // tekst obok siada 2,2 px niżej (zmierzone) — `items-center` to kasuje.
-  // `p-1 -m-1` daje `overflow-hidden` zapas na 1 px obwódki hovera.
+  // `p-1 -m-1` daje `overflow-hidden` zapas na stałą obwódkę chipa (1 px) i na
+  // obwódkę fokusu (1 px + 1 px offsetu) — razem 3 px z 4 px zapasu.
   const content = (
     <span className="flex min-w-0 items-center gap-1 overflow-hidden p-1 -m-1">
       <span className="shrink-0">{sent ? (polish ? "Napisano do" : "Messaged") : (polish ? "Wiadomość od" : "Message from")}</span>
