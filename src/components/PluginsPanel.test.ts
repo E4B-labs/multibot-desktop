@@ -6,7 +6,8 @@
 //     rzędu uchwyt do przeciągania okna, a nakładka nie mówiła o regionie nic —
 //     Chromium zostawiał wtedy w tym miejscu `drag` spod spodu (liczy się
 //     kolejność w drzewie, patrz WindowControls.test.ts) i klik szedł
-//     w przesuwanie okna zamiast w przycisk. Od 0.5.34 nakładki są `no-drag`.
+//     w przesuwanie okna zamiast w przycisk. Od 0.5.34 nakładka zaczyna się
+//     PONIŻEJ tych 72 px i dodatkowo sama jest `no-drag`.
 //  2. Sama ikona odświeżania wołała `refreshStatus` po slugach kart AKTUALNIE
 //     WIDOCZNYCH. Przy wpisanej frazie albo pustym katalogu ta lista jest
 //     pusta, `refreshStatus` wychodzi pierwszą linią i klik nie robił nic —
@@ -14,13 +15,12 @@
 //
 // Vitest chodzi w node bez jsdom (tak samo jak ResizablePanel.test.ts
 // i WindowControls.test.ts), więc sprawdzamy źródło — bo to ono się zepsuło.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const panel = readFileSync(new URL("./PluginsPanel.tsx", import.meta.url), "utf8");
-const teamMap = readFileSync(new URL("./TeamMapPanel.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-// Nagłówek nakładki: od `data-shell-overlay-header` do pola „Szukaj" pod nim.
+// Nagłówek modala: od jego rzędu do pola „Szukaj" pod nim.
 // `cut` pilnuje, żeby zniknięcie któregoś znacznika padło z nazwą tego
 // znacznika, a nie cichym pustym wycinkiem, na którym każde `toContain`
 // przechodzi w drugą stronę.
@@ -31,27 +31,55 @@ function cut(source: string, from: string, to: string): string {
   if (end <= start) throw new Error(`znacznik "${to}" nie stoi po "${from}"`);
   return source.slice(start, end);
 }
-const header = cut(panel, "data-shell-overlay-header", 'placeholder={polish ? "Szukaj');
+const header = cut(panel, 'className="flex items-center gap-3"', 'placeholder={polish ? "Szukaj');
 
-describe("nakładka na całą powłokę nie jest uchwytem do przeciągania okna", () => {
-  it("styles.css zdejmuje region drag z każdej nakładki", () => {
+describe("nakładka na całą powłokę nie wchodzi w pas tytułowy okna", () => {
+  it("styles.css spycha każdą nakładkę poniżej 72 px i zdejmuje jej region drag", () => {
+    // Odstęp od góry jest właściwą poprawką: przyciski modala przestają leżeć
+    // w pasie z `drag`, niezależnie od szerokości okna i szerokości modala.
+    expect(styles).toMatch(/\.multibot-frameless \[data-shell-overlay\]\s*{\s*padding-top:\s*72px/);
     expect(styles).toMatch(/\.multibot-frameless \[data-shell-overlay\]\s*{\s*-webkit-app-region:\s*no-drag/);
   });
 
-  it("nakładka trzyma `data-shell-overlay` na tym samym elemencie co `inset-0`", () => {
-    // Atrybut na wewnętrznym oknie modala nie wystarczy: region `drag` spod
-    // spodu idzie przez CAŁĄ szerokość okna, także obok modala.
-    for (const [name, source] of [["PluginsPanel", panel], ["TeamMapPanel", teamMap]] as const) {
-      const overlay = source.slice(source.indexOf("data-shell-overlay"), source.indexOf("data-shell-overlay") + 400);
-      expect(overlay, `${name}: nakładka bez inset-0`).toContain("inset-0");
+  it("KAŻDA nakładka na całą powłokę ma atrybut, nie tylko ta z wtyczkami", () => {
+    // Pułapka jest w kształcie „`inset-0` nad nagłówkiem", nie w tym jednym
+    // pliku. Najgorzej miał pełny ekran podglądu komputera: przy `p-[5%]`
+    // jego „X" wypada na ~53-79 px, czyli w środku pasa przeciągania.
+    // Ten test jest po to, żeby SIÓDMA nakładka nie wjechała bez atrybutu.
+    // Onboarding stoi ZAMIAST powłoki (App.tsx zwraca go, zanim powstanie
+    // `.multibot-shell`), więc `.multibot-frameless` nigdy go nie widzi —
+    // atrybut byłby tam martwy.
+    const overlays = readdirSync(new URL(".", import.meta.url))
+      .filter((f) => f.endsWith(".tsx") && f !== "Onboarding.tsx")
+      .flatMap((f) => {
+        const source = readFileSync(new URL(`./${f}`, import.meta.url), "utf8");
+        // Nakładka = `fixed`/`absolute inset-0` z własnym z-indexem. Podkłady
+        // wewnątrz kafelka (`pointer-events-none`, ikony) odpadają: nie łapią
+        // kliknięć, więc region przeciągania ich nie dotyczy.
+        return [...source.matchAll(/<(\w+)\s([^>]*?(?:fixed|absolute) inset-0[^>]*?)>/gs)]
+          // Komentarze W ŚRODKU znacznika lecą precz, zanim cokolwiek
+          // sprawdzimy: bez tego `data-shell-overlay` opisane w komentarzu
+          // nad atrybutem zaliczałoby test za sam atrybut.
+          .map(([, , attrs]) => ({ file: f, attrs: attrs.replace(/^\s*\/\/.*$/gm, "") }))
+          .filter(({ attrs }) => /\bz-\[?\d/.test(attrs) && !attrs.includes("pointer-events-none"));
+      });
+    expect(overlays.length, "wzorzec przestał cokolwiek łapać").toBeGreaterThan(4);
+    for (const { file, attrs } of overlays) {
+      expect(attrs, `${file}: nakładka bez data-shell-overlay`).toContain("data-shell-overlay");
     }
   });
 
-  it("nagłówek nakładki robi miejsce na kontrolki okna", () => {
-    // Kontrolki okna wiszą wyżej (z-90, fixed) i nakładka ich nie zasłania —
-    // bez tego odstępu „X" nakładki nachodzi na „zamknij" okna.
-    expect(header).toContain("data-shell-overlay-header");
-    expect(styles).toMatch(/\[data-shell-overlay-header\]\s*{\s*padding-right:\s*114px/);
+  it("odstęp nie zależy od szerokości okna ani od szerokości modala", () => {
+    // Poprzednie podejście rezerwowało 114 px w NAGŁÓWKU modala. Działało przy
+    // 1440 px i zostawiało 114 px dziury przy 2560 px, a dla węższego modala
+    // (mapa zespołu, 880 px) potrzebowałoby własnej stałej. Odstęp od góry nie
+    // ma tego problemu — i nie może wrócić pod media query.
+    expect(styles).not.toContain("data-shell-overlay-header");
+    expect(panel).not.toContain("data-shell-overlay-header");
+    // Reguła stoi w płaskim arkuszu, nie w media query: między nią a końcem
+    // bloku frameless nie ma otwierającego `@media`.
+    const frameless = cut(styles, ".multibot-frameless [data-shell-overlay] { padding-top", "/* multibot: G5");
+    expect(frameless).not.toContain("@media");
   });
 });
 
@@ -94,5 +122,14 @@ describe("kręcenie ikoną odświeżania", () => {
     // `return`, nie `void`: inaczej katalog kończy się przed statusami
     // i ikona mruga zamiast kręcić się do końca.
     expect(load).toMatch(/return refreshStatus\(/);
+  });
+
+  it("ma jednego właściciela — `refreshStatus` ikony nie dotyka", () => {
+    // `refreshStatus` woła też odpytywanie po OAuth (co 5 s przez minutę)
+    // i połącz/odłącz. Gdyby gasiło `refreshing`, ikona zatrzymywałaby się
+    // w środku przeładowania katalogu, a `disabled` blokowałoby przycisk na
+    // czas cudzego obiegu.
+    const status = cut(panel, "const refreshStatus", "const loadCatalog");
+    expect(status).not.toContain("setRefreshing");
   });
 });

@@ -655,17 +655,20 @@ export function PluginsPanel() {
   // Zwraca świeżą mapę statusów, żeby wołający nie musiał czytać `status`
   // ze stanu (odpytywanie po OAuth zamykało się nad starą wartością i nigdy
   // nie widziało połączenia — pętla dochodziła do limitu prób).
+  // `refreshing` NIE należy do tej funkcji: woła ją też odpytywanie po OAuth
+  // (co 5 s przez minutę) oraz połącz/odłącz, a wtedy jej `finally` gasiło
+  // ikonę w środku przeładowania katalogu i blokowało przycisk odświeżania na
+  // czas cudzego obiegu. Kręcenie ikoną ma jednego właściciela: `loadCatalog`.
+  // Postęp pojedynczej karty i tak widać po `waitingSlug` i `busySlug`.
   const refreshStatus = useCallback((slugs: string[]) => {
     if (!slugs.length) return Promise.resolve({} as Record<string, { connected: boolean; accounts?: ConnectedAccount[] }>);
-    setRefreshing(true);
     return api(`/api/connectors?services=${slugs.join(",")}`)
       .then((r) => {
         const services = r.services ?? {};
         setStatus((prev) => ({ ...prev, ...services }));
         return services as Record<string, { connected: boolean; accounts?: ConnectedAccount[] }>;
       })
-      .catch(() => ({}) as Record<string, { connected: boolean; accounts?: ConnectedAccount[] }>)
-      .finally(() => setRefreshing(false));
+      .catch(() => ({}) as Record<string, { connected: boolean; accounts?: ConnectedAccount[] }>);
   }, []);
 
   // multibot (F7): katalog przeładowuje się też po zapisie/usunięciu
@@ -856,7 +859,7 @@ export function PluginsPanel() {
             `min-width:auto`, więc na wąskim ekranie wiersz nagłówka rozpychał
             się i wypychał „X" poza panel. Ikon w pigułce mniej niż na
             desktopie z tego samego powodu. */}
-        <div data-shell-overlay-header className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">
             {polish ? "Wtyczki" : "Plugins"}
           </div>

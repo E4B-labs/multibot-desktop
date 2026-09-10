@@ -74,7 +74,7 @@ export function ScoutTeamModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
+    <div data-shell-overlay className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[86vh] w-[640px] max-w-full flex-col overflow-hidden rounded-2xl border border-hairline/40 bg-panel shadow-2xl"

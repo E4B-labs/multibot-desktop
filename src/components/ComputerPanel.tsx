@@ -496,7 +496,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       {fullscreen && (
         // K6: duży panel na środku, nie cały ekran — MultiBot pod spodem zostaje
         // widoczny (lekko przyciemnione tło), róg zaokrąglony jak w kartach.
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/50 p-[5%] backdrop-blur-[1px]">
+        <div data-shell-overlay className="fixed inset-0 z-50 flex flex-col bg-black/50 p-[5%] backdrop-blur-[1px]">
           {/* multibot: same ikony, bez tytułu — na pełnym ekranie liczy się
               obraz, a nazwa panelu i tak stoi w nagłówku panelu obok. */}
           <div className="flex items-center justify-end px-1 py-2">
