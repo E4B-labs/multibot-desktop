@@ -114,6 +114,36 @@ body {
   padding-right: 114px;
 }
 
+/* 5. Nakładki na całą powłokę (konektory, mapa zespołu, pełny ekran podglądu
+      komputera, paleta poleceń). Pas tytułowy należy do okna, więc żadna
+      z nich nie ma prawa w niego wejść — modal zaczyna się PONIŻEJ tych
+      72 px, dokładnie tam, gdzie kończą się kontrolki okna.
+
+      To jest właściwa poprawka, nie sam `no-drag` niżej. Do 0.5.33 modal
+      konektorów szedł `md:h-full` od górnej krawędzi, więc jego rząd
+      z „X" i odświeżaniem wypadał w środku pasa z punktu 1 — a tam
+      Chromium trzyma region `drag` z nagłówka spod spodu i kliknięcia idą
+      w przesuwanie okna, nie w przycisk. Ten sam pas zjadał „X" pełnego
+      ekranu podglądu komputera (`p-[5%]` = ~45 px) i „✕" okna zespołu
+      z folderu. Odstęp od góry zdejmuje to wszystkim naraz i nie zależy
+      od szerokości okna ani od tego, jak szeroki jest dany modal — inaczej
+      każdy potrzebowałby własnej stałej.
+      Przy okazji nic już nie nachodzi na minimalizuj/maksymalizuj/zamknij,
+      bo te siedzą wyżej (z-90, `fixed`) i nakładka ich nie zasłania.
+      Bez media query: `.multibot-frameless` istnieje tylko na pulpicie,
+      a okno ma `minWidth: 900` (electron/main.mjs), więc układ jest
+      zawsze `md:`. */
+.multibot-frameless [data-shell-overlay] { padding-top: 72px; }
+/* 6. …a samo tło nakładki przestaje być uchwytem do przeciągania okna, żeby
+      klik w ciemne pole nad modalem zamykał go, zamiast ruszać oknem.
+      UWAGA: to działa tylko dla nakładek montowanych w drzewie PO nagłówku
+      czatu (App.tsx). Chromium składa regiony w kolejności drzewa, więc
+      późniejszy `drag` zjada wcześniejszy `no-drag` — pilnuje tego
+      WindowControls.test.ts. Nakładka montowana z szyny botów
+      (ScoutTeamModal w Sidebar.tsx) stoi PRZED nagłówkiem i tego regionu
+      nie zdejmie; jej przyciski ratuje odstęp z punktu 5, tło nie. */
+.multibot-frameless [data-shell-overlay] { -webkit-app-region: no-drag; }
+
 /* multibot: G5 — phone layout keeps bot list first, then full-width chat/panel.
    Existing desktop spacing and motion remain unchanged. */
 @media (max-width: 700px) {

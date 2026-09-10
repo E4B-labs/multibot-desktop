@@ -127,6 +127,9 @@ describe("panele boczne montowane przez powłokę", () => {
     "RoutinesPanel",
     "SkillsPanel",
     "GroupMembersPanel",
+    // #160 dołożył go po #154 i jako jedyny został sztywną kolumną 360 px —
+    // ten test to złapał, wpis domyka listę.
+    "RemindersPanel",
   ];
 
   // Nakladki na cala powloke i ekrany renderowane ZAMIAST czatu - nie kolumny.

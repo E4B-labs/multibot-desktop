@@ -318,6 +318,7 @@ export function CmdK() {
 
   return (
     <div
+      data-shell-overlay
       className="fixed inset-0 z-50 flex items-start justify-center bg-app/80 pt-[18vh]"
       onMouseDown={() => setOpen(false)}
     >

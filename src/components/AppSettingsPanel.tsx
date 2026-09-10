@@ -638,7 +638,7 @@ function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
       </div>
     </div>
     {login && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="presentation">
+      <div data-shell-overlay className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="presentation">
         <div
           role="dialog"
           aria-modal="true"

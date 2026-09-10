@@ -49,7 +49,14 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
   const edges = buildTeamMapEdges(state.bots, snapshot);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
+    <div
+      // multibot: `data-shell-overlay` — ta sama pułapka co w PluginsPanel:
+      // bez niej okno bez ramki zostawia w górnych 72 px region `drag`
+      // z nagłówka spod spodu i kliknięcia tam nie docierają (styles.css, 5).
+      data-shell-overlay
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6"
+      onClick={onClose}
+    >
       <div
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[86vh] w-[880px] max-w-full flex-col overflow-hidden rounded-2xl border border-hairline/40 bg-panel shadow-2xl"

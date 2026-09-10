@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Download, X } from "lucide-react";
 import { useLanguage } from "@/lib/language";
+import { noDragRegion } from "@/lib/shell";
 
 export function AttachmentPreviewDialog({
   url,
@@ -26,6 +27,13 @@ export function AttachmentPreviewDialog({
 
   return createPortal(
     <div
+      // multibot: `createPortal` wynosi podgląd do `document.body`, czyli POZA
+      // `.multibot-shell` — reguła `.multibot-frameless [data-shell-overlay]`
+      // nigdy go nie dosięgnie, więc region zdejmujemy stylem wprost (tak samo
+      // robi `ResizeHandle`). Bez tego klik w górne 72 px tła przesuwa okno,
+      // zamiast zamknąć podgląd. Atrybut zostaje dla testu i dla czytelnika.
+      data-shell-overlay
+      style={noDragRegion}
       className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-3 bg-black/80 p-6"
       onClick={onClose}
       role="dialog"
