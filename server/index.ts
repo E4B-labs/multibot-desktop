@@ -46,7 +46,7 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
-import { authFailure, loginExpiredNote } from "./auth-failure.ts";
+import { LOGIN_EXPIRED_PREFIX, authFailure, cliToolIdFor, loginExpiredNote } from "./auth-failure.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
@@ -1802,13 +1802,17 @@ bus.subscribe((event: RuntimeEvent) => {
       // Bot parkuje na `needsAttention`, więc jedzie tą samą szyną co pytanie:
       // push na telefon, banerka na pulpicie, wskaźnik w pasku bocznym.
       const expired = authFailure(event.message);
-      const expiredTool = expired ? (expired.tool ?? cliToolIdFor(bot)) : null;
+      // Harness, na którym stoi bot, jest źródłem prawdy: nazwa wyłowiona z
+      // tekstu bywa cudza (ogon stderr) i wysłałaby człowieka do złego okna.
+      const expiredTool = expired ? (cliToolIdFor(bot) ?? expired.tool) : null;
       if (expiredTool) {
         const note = loginExpiredNote(expiredTool);
+        const repeat = bot.needsAttention === note;
         store.patchBot(bot.id, { needsAttention: note });
         // `attention` przechodzi bramkę `shouldNotify` także w turze bot-bot:
-        // bez człowieka ta tura i każda następna padnie tak samo.
-        pushForBot(bot.id, "attention", note);
+        // bez człowieka ta tura i każda następna padnie tak samo. Powtórka
+        // tej samej prośby już nie brzęczy.
+        if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
         turnOrigin.delete(bot.id);
         broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
       } else {
@@ -2957,13 +2961,16 @@ function validBaseUrl(value: string): boolean {
   }
 }
 
-/** multibot: który harness CLI napędza tego bota. `instanceId` bota jest
- * tożsame z `CLI_TOOLS[].id` (patrz `cliToolsStatus`), więc dopasowanie to
- * samo sprawdzenie obecności na liście — bot na własnym modelu HTTP nie ma
- * żadnego logowania do odświeżenia i dostaje `null`. */
-function cliToolIdFor(bot: { modelSelection?: { instanceId?: string } }): string | null {
-  const id = bot.modelSelection?.instanceId;
-  return id && CLI_TOOLS.some((tool) => tool.id === id) ? id : null;
+/** multibot: zdejmuje `needsAttention` z botów, które czekały na logowanie do
+ * tego narzędzia. Wołane po udanym `cli-login`; innych powodów czekania nie
+ * rusza, bo rozpoznaje własny prefiks. */
+function clearLoginExpired(toolId: string): void {
+  for (const bot of store.bots) {
+    if (!bot.needsAttention?.startsWith(LOGIN_EXPIRED_PREFIX)) continue;
+    if (cliToolIdFor(bot) !== toolId) continue;
+    store.patchBot(bot.id, { needsAttention: null });
+    broadcast({ kind: "bot", bot: store.bot(bot.id) });
+  }
 }
 
 async function cliToolsStatus() {
@@ -5060,6 +5067,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         args: tool.login.args,
         cwd: DATA_DIR,
         env: { TMP: temp, TEMP: temp },
+      });
+      // multibot: udane logowanie gasi prośbę u KAŻDEGO bota na tym harnessie
+      // — inaczej banerka wisiałaby do następnej tury, już po naprawie.
+      const off = setupJobs.subscribe(job.id, (next) => {
+        if (next.status === "running") return;
+        off();
+        if (next.status === "succeeded") clearLoginExpired(tool.id);
       });
       return json(res, 202, { id: job.id, job });
     }

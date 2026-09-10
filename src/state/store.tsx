@@ -227,6 +227,10 @@ interface AppState {
   pluginsConnector?: ConnectorTarget;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  // multibot: narzędzie CLI, którego logowanie ma się otworzyć od razu po
+  // wejściu w ustawienia (banerka wygasłego logowania). Ta sama droga co
+  // `pluginsConnector` dla kart konektorów.
+  appSettingsCliLogin?: string;
   // multibot: F6 — panel rutyn, ten sam prawy slot co settings/computer
   routinesOpen: boolean;
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
@@ -301,7 +305,7 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean; connector?: ConnectorTarget }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleAppSettings"; open?: boolean; cliLogin?: string }
   // multibot: F6 — otwarcie/zamknięcie panelu rutyn
   | { type: "toggleRoutines"; open?: boolean }
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
@@ -597,6 +601,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsCliLogin: action.cliLogin,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
