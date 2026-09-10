@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { botSystemPrompt, currentTimeLine, type WorkspaceLike } from "./bot-prompt.ts";
+import { COMPUTER_MCP_TOOLS } from "./turn-tools.ts";
 
 const workspace: WorkspaceLike = {
   markdown: () => ({ content: "Klient płaci przelewem." }),
@@ -64,6 +65,43 @@ describe("botSystemPrompt", () => {
     expect(text).not.toContain("Your computer -");
     expect(text).not.toContain("computer_exec");
     expect(text).not.toContain("Handing the computer over");
+  });
+
+  // Regresja zmierzona na żywym CLI (D:\tmp\mb-cu-evidence): na „Use your
+  // computer: open the browser, go to youtube.com…" bot BEZ zamontowanego
+  // komputera nie wołał niczego i meldował „YouTube MrBeast video open".
+  // Prompt milczał o komputerze, więc model go sobie dopowiedział.
+  it("bez komputera mówi wprost, że go nie ma, zamiast pozwolić zmyślać", () => {
+    const text = prompt({ agents: { command: "node" } });
+    expect(text).toContain("You have NO computer this turn");
+    expect(text).toContain("Never describe browsing, clicking or playing anything");
+    // `web_search` stoi za tą samą bramką `browser` co komputer, więc bez
+    // zamontowanego `web` oferta nie ma prawa paść — inaczej to zdanie
+    // popełniałoby błąd, który naprawia.
+    expect(text).not.toContain("offer `web_search`/`web_extract` instead");
+    expect(prompt({ agents: { command: "node" }, web: { command: "node" } }))
+      .toContain("offer `web_search`/`web_extract` instead");
+  });
+
+  it("z komputerem każe WOŁAĆ narzędzie, nie opowiadać o nim", () => {
+    const text = prompt(ALL);
+    expect(text).toContain("instruction to CALL a computer tool in THIS turn");
+    expect(text).toContain("unless a computer tool call returned a result");
+    // lustro tego wyżej NIE może się pojawić, gdy komputer jest
+    expect(text).not.toContain("You have NO computer this turn");
+  });
+
+  // Regresja: prompt kazał wołać `browser_navigate`/`browser_snapshot`, których
+  // serwer komputera nigdy nie serwował (jego narzędzia to `navigate`,
+  // `read_page`…). Model szukał nieistniejącej nazwy i kończył opowiadaniem.
+  // Test bierze nazwy Z PROMPTU i konfrontuje je z listą serwera, więc łapie
+  // każdą następną wymyśloną nazwę, nie tylko te dwie.
+  it("nie obiecuje nazw narzędzi, których serwer komputera nie serwuje", () => {
+    const text = prompt(ALL);
+    expect(text).not.toMatch(/browser_[a-z_]+/);
+    const listed = text.match(/navigate\/read_page\/[a-z_/]+/)?.[0].split("/") ?? [];
+    expect(listed.length).toBeGreaterThan(3);
+    for (const name of listed) expect(COMPUTER_MCP_TOOLS as readonly string[]).toContain(name);
   });
 
   it("bez serwera agents nie podpowiada hand_over_computer", () => {
@@ -178,7 +216,9 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("- mcp__computer: screenshot, navigate");
     expect(text).toContain("- agents: list_bots");
     expect(text).toContain("- composio:");
-    expect(text).toContain("Never claim you have no tools, no computer and no connections");
+    // zakaz dotyczy TEGO, CO NA LIŚCIE — bot bez komputera ma o tym powiedzieć
+    // wprost, więc dawne „never claim you have no computer" musiało się zwęzić
+    expect(text).toContain("Never deny a connection that is listed here.");
     // spis siedzi PRZED opisem jak używać narzędzi
     expect(text.indexOf("# Your connections and tools")).toBeLessThan(text.indexOf("# What you have"));
   });
