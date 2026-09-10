@@ -61,12 +61,13 @@ describe("wiersz grupy w Sidebarze", () => {
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
     expect(row).toContain('"relative flex shrink-0 items-center"');
-    expect(row).toContain('solo ? "size-12 justify-center" : "-space-x-1"');
+    expect(row).toContain('solo ? "size-12 justify-center" : "-space-x-1.5"');
     expect(row).toContain("shown.map((member)");
-    expect(row).toContain("size={solo ? 48 : 20}");
+    expect(row).toContain("size={solo ? 48 : 24}");
     expect(row).not.toContain("absolute left-0 top-0");
     expect(row).not.toContain("absolute bottom-0 right-0");
-    const avatars = row.slice(row.indexOf("{shown.map"), row.indexOf("{attention"));
+    // Tylko sam stos awatarów: odznaka „+N" za nim ma własną obwódkę i koło.
+    const avatars = row.slice(row.indexOf("{shown.map"), row.indexOf("{hiddenCount"));
     expect(avatars).not.toContain("ring-");
     expect(avatars).not.toContain("rounded-full");
     expect(row).not.toContain("+{plus}");
