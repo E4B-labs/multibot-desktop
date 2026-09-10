@@ -306,14 +306,19 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   <div className="mb-1.5 mt-3 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
                     {polish ? "Kolor" : "Color"}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  {/* Siedem kolumn pod 14 barw z BOT_COLOR_NAMES — dwa pelne
+                      rzedy. Zawijany flex zostawial w drugim rzedzie dziury po
+                      brakujacych pozycjach. */}
+                  <div className="grid grid-cols-7 justify-items-center gap-2">
                     {BOT_COLOR_NAMES.map((color) => (
                       <button
                         type="button"
                         key={color}
                         onClick={() => patch({ color })}
                         className={cn(
-                          "size-7 rounded-full border-2 border-transparent transition-transform hover:scale-110",
+                          // Obwódka, nie przezroczysta: `bg-card` na jasnych
+                          // motywach to biel, więc biała próbka bez niej znika.
+                          "size-7 rounded-full border-2 border-hairline/70 transition-transform hover:scale-110",
                           bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                         )}
                         style={{ backgroundColor: BOT_COLORS[color] }}

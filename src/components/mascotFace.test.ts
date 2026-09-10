@@ -49,6 +49,50 @@ describe("statyczna maskotka ma twarz", () => {
   });
 });
 
+// PR #52 zgubił też płynną zmianę kształtu: stary CursorAvatar interpolował
+// ścieżkę przez flubber, BlobAvatar podmieniał sylwetkę z klatki na klatkę.
+// Poniżej pilnujemy, że morf wrócił i że twarz jedzie razem z nim.
+describe("zmiana kształtu morfuje, nie przeskakuje", () => {
+  it("interpoluje sylwetkę przez flubber", () => {
+    expect(blob).toContain("from 'flubber'");
+    // Przerwany morf startuje od ścieżki, która jest NA EKRANIE, nie od kształtu
+    // sprzed poprzedniego kliknięcia — i wraca, gdy ktoś wybierze ten, z którego
+    // właśnie ucieka, bo inaczej tween zamarzłby w połowie.
+    expect(blob).toContain("morphRef.current ?? faceDFor(renderedShape)");
+    expect(blob).toContain("if (shape.name === renderedShape.name && !morphRef.current) return");
+  });
+
+  // Klatki morfa idą refami, jak każda inna animacja w tym pliku. `setState` na
+  // klatkę przerysowywałby całe wielkie SVG dwadzieścia parę razy na morfa.
+  it("pisze klatki morfa atrybutami, nie stanem", () => {
+    expect(blob).toContain("morphBody.current?.setAttribute('d', d)");
+    expect(blob).toContain("morphClip.current?.setAttribute('d', d)");
+    expect(blob).toContain("anchorLayer.current?.setAttribute('transform', anchorTransform(anchorRef.current))");
+    expect(blob).toContain("lerp(morphFrom.current.x, morphTo.current.x, eased)");
+  });
+
+  it("rysuje ścieżkę przejściową zamiast osiadłego ciała", () => {
+    expect(blob).toContain("<path ref={morphBody} d={morphD} fill={paint} />");
+    // Sylwetka i obszar przycięcia muszą iść tą samą ścieżką, inaczej twarz
+    // przez pół morfa wystaje poza brzuch.
+    expect(blob).toContain("<path ref={morphClip} d={morphD} />");
+  });
+
+  // Skasowanie `dangerouslySetInnerHTML` jest w ReactDOM operacją pustą, więc
+  // bez osobnych kluczy stary obszar przycięcia przeżywa pod morfującą ścieżką.
+  it("przemontowuje clipPath zamiast go nadpisywać w miejscu", () => {
+    expect(blob).toContain('<clipPath key="morph"');
+    expect(blob).toContain('key="settled"');
+  });
+
+  // Dwa źródła: przełącznik w aplikacji (`data-motion`, czytany na żywo) i
+  // ustawienie systemu. Sama `useMemo` nie zauważyłaby przestawienia suwaka.
+  it("kto prosił o mniej ruchu, dostaje podmianę", () => {
+    expect(blob).toContain("if (prefersReducedMotion || motionIsReduced()) {");
+    expect(blob).toContain("import { motionIsReduced } from '@/lib/motion'");
+  });
+});
+
 describe("static avatar pointer follow", () => {
   it("supports paused hover follow and resets gaze on leave", () => {
     expect(avatar).toContain("trackPointerWhenPaused?: boolean;");

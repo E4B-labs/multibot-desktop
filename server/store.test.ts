@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
-import { BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, withoutLegacyGroupLeak, type BotRecord, type Message } from "./store.ts";
+import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, Store, sortMessages, withoutLegacyGroupLeak, type BotRecord, type Message } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -97,6 +97,20 @@ describe("Store", () => {
     };
 
     expect([...names("MASCOT_SHAPES"), ...names("LEGACY_SHAPES")]).toEqual(BOT_SHAPES);
+  });
+
+  // Ta sama pulapka od strony koloru: nowa barwa w panelu, ktorej serwer nie
+  // przyjmuje, to zapis odbity bledem 400 zamiast zmiany wygladu.
+  it("accepts every colour the client offers", () => {
+    // Zrodlo, nie import: `src/lib/mascot.ts` ciagnie za soba React i `@/`,
+    // ktorych tsconfig serwera nie zna. Komentarze lecą przed dopasowaniem —
+    // cytowane slowo w komentarzu wewnatrz tablicy udawaloby kolor.
+    const source = readFileSync(new URL("../src/lib/mascot.ts", import.meta.url), "utf8")
+      .replace(/\/\/[^\n]*/g, "");
+    const body = /BOT_COLOR_NAMES = \[([\s\S]*?)\] as const/.exec(source);
+    if (!body) throw new Error("BOT_COLOR_NAMES not found in src/lib/mascot.ts");
+    const names = [...body[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    expect([...names].sort()).toEqual([...BOT_COLORS].sort());
   });
 
   it("falls unknown persisted shapes back to blob on load", () => {

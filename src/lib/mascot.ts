@@ -46,35 +46,48 @@ export const STATE_GROUPS: Record<string, BotState[]> = {
   ],
 };
 
+/**
+ * Paleta maskotki — 12 barw uporzadkowanych po kole barw (czerwony -> rozowy),
+ * na koncu dwa neutralne. Kolejnosc jest kolejnoscia pokazu w ustawieniach:
+ * przy 7 kolumnach 14 pozycji wypelnia dokladnie dwa rzedy, bez dziur.
+ *
+ * multibot: `white`, `black`, `lime` i `indigo` sa wybieralne, ale nie wchodza
+ * do rotacji nowych botow (serwerowe COLORS w `server/store.ts`) — bot dostaje
+ * je tylko wtedy, gdy ktos je ustawi.
+ */
 export const BOT_COLOR_NAMES = [
-  "green",
-  "blue",
   "red",
-  "orange",
-  "purple",
-  "cyan",
-  "pink",
-  "yellow",
-  "teal",
   "coral",
-  // multibot: czarny jest wybieralny, ale nie wchodzi do rotacji nowych botow
-  // (serwerowe COLORS) — bot dostaje go tylko wtedy, gdy ktos go ustawi.
+  "orange",
+  "yellow",
+  "lime",
+  "green",
+  "teal",
+  "cyan",
+  "blue",
+  "indigo",
+  "purple",
+  "pink",
+  "white",
   "black",
 ] as const;
 
 export type BotColor = (typeof BOT_COLOR_NAMES)[number];
 
 export const BOT_COLORS: Record<BotColor, string> = {
-  green: "#009957",
-  blue: "#377FE6",
   red: "#D94B52",
-  orange: "#E78531",
-  purple: "#8057C8",
-  cyan: "#0EA5C6",
-  pink: "#D84F8B",
-  yellow: "#D8A729",
-  teal: "#01A492",
   coral: "#E5634E",
+  orange: "#E78531",
+  yellow: "#D8A729",
+  lime: "#8CBF2A",
+  green: "#009957",
+  teal: "#01A492",
+  cyan: "#0EA5C6",
+  blue: "#377FE6",
+  indigo: "#5B54D6",
+  purple: "#8057C8",
+  pink: "#D84F8B",
+  white: "#F4F4F5",
   black: "#1A1A1A",
 };
 

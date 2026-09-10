@@ -20,6 +20,7 @@ import {
   type BotState,
 } from "@/lib/mascot";
 import { EXPRESSION_COUNT } from "@/components/BlobAvatar";
+import { MASCOT_SHAPES, type MascotShape } from "@/lib/mascotShapes";
 import "./styles.css";
 import "./mascot-preview.css";
 
@@ -300,6 +301,7 @@ function Preview() {
   const [state, setState] = useState<BotState>("idle");
   const [expression, setExpression] = useState<number | undefined>(undefined);
   const [color, setColor] = useState<BotColor>("green");
+  const [shape, setShape] = useState<MascotShape>("blob");
   const [forward, setForward] = useState(true);
 
   useEffect(() => {
@@ -350,10 +352,40 @@ function Preview() {
         ))}
       </section>
 
+      <section className="expression-library" aria-labelledby="shape-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Silhouettes · {MASCOT_SHAPES.length} shapes</p>
+            <h2 id="shape-heading">Shapes and face fit</h2>
+          </div>
+          <p>Click a tile: the big Bot morphs into it. Sizes are the two the app actually draws.</p>
+        </div>
+
+        <div className="shape-stage">
+          <BotAvatar color={color} shape={shape} state="idle" size={200} label={`${shape} bot`} />
+          <code>{shape}</code>
+        </div>
+
+        <div className="shape-grid">
+          {MASCOT_SHAPES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={s === shape ? "shape-cell on" : "shape-cell"}
+              onClick={() => setShape(s)}
+            >
+              <BotAvatar color={color} shape={s} state="idle" size={96} animated={false} label={`${s} 96`} />
+              <BotAvatar color={color} shape={s} state="idle" size={48} animated={false} label={`${s} 48`} />
+              <span>{s}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="expression-library" aria-labelledby="expression-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Identity system · 100 combinations</p>
+            <p className="eyebrow">Identity system · {BOT_COLOR_NAMES.length * PICKABLE_STATES.length} combinations</p>
             <h2 id="expression-heading">Colors and states</h2>
           </div>
           <p>Move your pointer over any Bot to test the responsive eyes.</p>
