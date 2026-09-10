@@ -76,11 +76,26 @@ describe("bot picker avatar follow", () => {
   });
 });
 
-describe("group picker avatar stack", () => {
+describe("group row avatar cluster", () => {
+  const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
+
+  // Wymaganie Kacpra: wiersz grupy ma to samo pudełko awatara (48 px) i te same
+  // odstępy co wiersz bota, więc oba wiersze są dokładnie tej samej wysokości.
+  it("keeps the 48px avatar box and the bot row padding", () => {
+    expect(groupRow).toContain('<span className="relative size-12 shrink-0">');
+    expect(groupRow).toContain('collapsed ? "justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5"');
+    expect(groupRow).toContain('size={layout === "solo" ? 48 : 24}');
+    // Każdy slot jest pozycjonowany wewnątrz pudełka — nic nie wystaje poza 48 px.
+    expect(sidebarSource).toContain('solo: ["inset-0"]');
+    expect(sidebarSource).toContain('pair: ["left-0 top-3", "right-0 top-3"]');
+    expect(sidebarSource).toContain('trio: ["left-0 top-0", "right-0 top-0", "bottom-0 left-3"]');
+    expect(sidebarSource).toContain('stack: ["left-0 top-0", "bottom-0 left-0"]');
+    expect(groupRow).toContain('cn("absolute", GROUP_AVATAR_SLOTS[layout][index])');
+  });
+
   it("renders the overflow badge and keeps selected and hover states", () => {
-    const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
-    expect(groupRow).toContain("const { shown, hiddenCount } = groupAvatarStack(members, g.bot_ids.length)");
-    expect(groupRow).toContain("hiddenCount > 0");
+    expect(groupRow).toContain("const { layout, shown, hiddenCount } = groupAvatarLayout(members, g.bot_ids.length)");
+    expect(groupRow).toContain('layout === "stack" && hiddenCount > 0');
     expect(groupRow).toContain("+{hiddenCount}");
     expect(groupRow).toContain("aria-label={`${hiddenCount} more group members`}");
     expect(groupRow).toContain('state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50"');

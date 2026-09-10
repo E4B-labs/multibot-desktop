@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupAvatarStack, groupRowTitle } from "./groupRow";
+import { groupAvatarLayout, groupRowTitle, MAX_GROUP_MEMBERS } from "./groupRow";
 
 describe("groupRowTitle", () => {
   it("joins member names with a comma", () => {
@@ -11,29 +11,15 @@ describe("groupRowTitle", () => {
   });
 });
 
-describe("groupAvatarStack", () => {
-  it("keeps both known avatars in the horizontal stack", () => {
-    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
+describe("groupAvatarLayout", () => {
+  it("covers solo, pair, trio, and stack layouts", () => {
+    expect(groupAvatarLayout(["a"])).toEqual({ layout: "solo", shown: ["a"], hiddenCount: 0 });
+    expect(groupAvatarLayout(["a", "b"])).toEqual({ layout: "pair", shown: ["a", "b"], hiddenCount: 0 });
+    expect(groupAvatarLayout(["a", "b", "c"])).toEqual({ layout: "trio", shown: ["a", "b", "c"], hiddenCount: 0 });
+    expect(groupAvatarLayout(["a", "b", "c", "d"])).toEqual({ layout: "stack", shown: ["a", "b"], hiddenCount: 2 });
   });
-
-  it("shows at most three avatars and counts every remaining member", () => {
-    expect(groupAvatarStack(["a", "b", "c"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 0 });
-    expect(groupAvatarStack(["a", "b", "c", "d"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 1 });
-    expect(groupAvatarStack(["a", "b", "c", "d", "e"])).toEqual({ shown: ["a", "b", "c"], hiddenCount: 2 });
+  it("does not invent unknown members", () => {
+    expect(groupAvatarLayout(["a"], 4)).toEqual({ layout: "stack", shown: ["a"], hiddenCount: 2 });
   });
-
-  it("counts overflow from the full membership when not every bot is known", () => {
-    expect(groupAvatarStack(["a", "b", "c", "d"], 5)).toEqual({
-      shown: ["a", "b", "c"],
-      hiddenCount: 2,
-    });
-  });
-
-  it("does not invent avatars for unknown bots", () => {
-    expect(groupAvatarStack(["a", "b"])).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
-  });
-
-  it("shows a single avatar for a one-member group", () => {
-    expect(groupAvatarStack(["a"])).toEqual({ shown: ["a"], hiddenCount: 0 });
-  });
+  it("exports the twelve-member cap", () => expect(MAX_GROUP_MEMBERS).toBe(12));
 });

@@ -54,22 +54,20 @@ describe("GroupMembersPanel", () => {
 });
 
 describe("wiersz grupy w Sidebarze", () => {
-  it("pokazuje wszystkie znane awatary w jednym poziomym stosie", () => {
-    const start = sidebar.indexOf("groupAvatarStack(members");
+  // Poziomy stos „-space-x" odrzucony 10.09.2026: rozpychał wiersz grupy i był
+  // wyższy od wiersza bota. Teraz awatary siedzą w pudełku 48×48, tym samym co
+  // przy bocie, a układ wybiera `groupAvatarLayout`.
+  it("skupia awatary w pudełku 48×48 zamiast poziomego stosu", () => {
+    const start = sidebar.indexOf("groupAvatarLayout(members");
     const end = sidebar.indexOf("function GroupCreateForm", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const row = sidebar.slice(start, end);
-    expect(row).toContain('"relative flex shrink-0 items-center"');
-    expect(row).toContain('solo ? "size-12 justify-center" : "-space-x-1"');
-    expect(row).toContain("shown.map((member)");
-    expect(row).toContain("size={solo ? 48 : 20}");
-    expect(row).not.toContain("absolute left-0 top-0");
-    expect(row).not.toContain("absolute bottom-0 right-0");
-    const avatars = row.slice(row.indexOf("{shown.map"), row.indexOf("{attention"));
-    expect(avatars).not.toContain("ring-");
-    expect(avatars).not.toContain("rounded-full");
-    expect(row).not.toContain("+{plus}");
+    expect(row).toContain('<span className="relative size-12 shrink-0">');
+    expect(row).toContain("shown.map((member, index)");
+    expect(row).toContain('size={layout === "solo" ? 48 : 24}');
+    expect(row).not.toContain("-space-x-");
+    expect(row).not.toContain('solo ? "size-12 justify-center"');
     // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
     expect(row).toContain("{...groupMemberAvatarProps(member)}");
   });

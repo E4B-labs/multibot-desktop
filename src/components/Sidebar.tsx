@@ -36,7 +36,7 @@ import { authFetch } from "@/lib/auth";
 // multibot: F11 — status silnika dla warunkowej kropki w stopce
 import { getLanguage, useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { groupAvatarStack, groupRowTitle } from "@/lib/groupRow";
+import { groupAvatarLayout, groupRowTitle, MAX_GROUP_MEMBERS } from "@/lib/groupRow";
 // multibot: kolejność sekcji i podział wierszy — czysta logika, testowana osobno
 import { moveSectionTo, sectionRows } from "@/lib/sidebarSections";
 // multibot: czerwony wykrzyknik na ikonie ustawień — jest widoczna aktualizacja
@@ -784,6 +784,15 @@ function useEngineGroups(workspaceVersion: unknown) {
   return [groups, setGroups] as const;
 }
 
+/** Pozycje awatarów w pudełku 48×48 wiersza grupy — indeks w `shown` wybiera
+ *  slot. Pudełko jest to samo co przy bocie, więc wiersze mają równą wysokość. */
+const GROUP_AVATAR_SLOTS: Record<"solo" | "pair" | "trio" | "stack", string[]> = {
+  solo: ["inset-0"],
+  pair: ["left-0 top-3", "right-0 top-3"],
+  trio: ["left-0 top-0", "right-0 top-0", "bottom-0 left-3"],
+  stack: ["left-0 top-0", "bottom-0 left-0"],
+};
+
 /** Wiersz grupy. Osobnej sekcji „GRUPY" już nie ma — grupa stoi w liście tam,
  *  gdzie wskazuje jej `section`, dokładnie tak samo jak bot. */
 function GroupRow({
@@ -826,10 +835,7 @@ function GroupRow({
   const members = g.bot_ids
     .map((id) => bots.find((b) => "mb-" + b.threadId === id))
     .filter((b): b is Bot => b != null);
-  const { shown, hiddenCount } = groupAvatarStack(members, g.bot_ids.length);
-  // Jeden czlonek zachowuje rozmiar awatara bota; wiekszy sklad pokazuje
-  // najwyzej trzy prawdziwe awatary oraz licznik pozostalych czlonkow.
-  const solo = shown.length === 1;
+  const { layout, shown, hiddenCount } = groupAvatarLayout(members, g.bot_ids.length);
   const last = g.messages?.[g.messages.length - 1];
   const attention = members.find((b) => b.needsAttention != null)?.needsAttention;
 
@@ -870,22 +876,23 @@ function GroupRow({
       )}
     >
       {members.length > 0 ? (
-        <span className={cn("relative flex shrink-0 items-center", solo ? "size-12 justify-center" : "-space-x-1.5")}>
-          {shown.map((member) => (
-            <BotAvatar
-              key={member.id}
-              color={member.color}
-              avatarUrl={member.avatarUrl}
-              shape={member.mascotShape}
-              size={solo ? 48 : 24}
-              {...groupMemberAvatarProps(member)}
-              trackPointerWhenPaused
-            />
+        <span className="relative size-12 shrink-0">
+          {shown.map((member, index) => (
+            <span key={member.id} className={cn("absolute", GROUP_AVATAR_SLOTS[layout][index])}>
+              <BotAvatar
+                color={member.color}
+                avatarUrl={member.avatarUrl}
+                shape={member.mascotShape}
+                size={layout === "solo" ? 48 : 24}
+                {...groupMemberAvatarProps(member)}
+                trackPointerWhenPaused
+              />
+            </span>
           ))}
-          {hiddenCount > 0 && (
+          {layout === "stack" && hiddenCount > 0 && (
             <span
               aria-label={`${hiddenCount} more group members`}
-              className="relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full bg-raised text-[11px] font-semibold text-ink-secondary ring-2 ring-panel"
+              className="absolute bottom-0 right-0 z-10 flex size-6 items-center justify-center rounded-full bg-raised text-[11px] font-semibold text-ink-secondary ring-2 ring-panel"
             >
               +{hiddenCount}
             </span>
@@ -942,7 +949,7 @@ function GroupCreateForm({
     setPicked((cur) => {
       const next = new Set(cur);
       if (next.has(engineBotId)) next.delete(engineBotId);
-      else next.add(engineBotId);
+      else if (next.size < MAX_GROUP_MEMBERS) next.add(engineBotId);
       return next;
     });
 
@@ -1011,17 +1018,19 @@ function GroupCreateForm({
                 checked={picked.has(engineBotId)}
                 onChange={() => toggle(engineBotId)}
                 className="accent-accent"
+                disabled={!picked.has(engineBotId) && picked.size >= MAX_GROUP_MEMBERS}
               />
               <span className="truncate">{botDisplayName(b, lang)}</span>
             </label>
           );
         })}
       </div>
+      <div className="text-[11px] text-ink-secondary">{picked.size}/{MAX_GROUP_MEMBERS}</div>
       {error && <div className="text-[12px] text-danger">{error}</div>}
       <div className="flex gap-2">
         <button
           onClick={() => void create()}
-          disabled={busy || !name.trim() || picked.size === 0}
+          disabled={busy || !name.trim() || picked.size === 0 || picked.size > MAX_GROUP_MEMBERS}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-raised py-1.5 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy && <Loader2 size={12} className="animate-spin" />}

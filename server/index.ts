@@ -3014,7 +3014,10 @@ async function deleteBotRecord(bot: BotRecord): Promise<void> {
 
 // multibot: grupa mieszka w harnessie — rozmowa grupowa idzie przez
 // deliverPeerMessage/askBotAndWait, a skład i transkrypt trzyma groupStore.
+const MAX_GROUP_MEMBERS = 12;
+
 async function createGroupRecord(name: string, memberIds: string[], section?: string): Promise<{ status: number; body: unknown }> {
+  if (memberIds.length > MAX_GROUP_MEMBERS) return { status: 400, body: { error: "group has at most 12 bots" } };
   const group = groupStore.upsert({ name, bot_ids: memberIds, section });
   broadcast({ kind: "group", group });
   return { status: 201, body: group };
@@ -3027,6 +3030,7 @@ async function addGroupMemberRecord(id: string, botId: string): Promise<{ status
   if (!group || !bot) return { status: 404, body: { error: "no such group or bot" } };
   const memberId = groupMemberId(bot.threadId);
   if (group.bot_ids.includes(memberId)) return { status: 200, body: group };
+  if (group.bot_ids.length >= MAX_GROUP_MEMBERS) return { status: 400, body: { error: "group has at most 12 bots" } };
   const updated = groupStore.upsert({ id: group.id, name: group.name, bot_ids: [...group.bot_ids, memberId] });
   broadcast({ kind: "group", group: updated });
   return { status: 200, body: updated };
