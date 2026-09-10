@@ -143,7 +143,8 @@ describe("PluginsPanel", () => {
     // wyłącznie za `md:`. Bez tego telefon dostałby okno na cały ekran
     // razem z szyną kategorii.
     expect(panel).toContain("w-full max-w-[640px]");
-    expect(panel).toContain("grid-cols-1 gap-2 sm:grid-cols-2");
+    // jedna kolumna na wąskim, dwie od `sm` — trzecia dopiero od `lg`
+    expect(panel).toMatch(/grid-cols-1[^"]*sm:grid-cols-2/);
     expect(panel).toContain("md:max-w-[1400px]");
     // lewa szyna kategorii jest desktopowa; na telefonie zostają pigułki
     expect(panel).toContain("w-[190px]");
