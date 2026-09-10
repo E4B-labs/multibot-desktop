@@ -93,11 +93,6 @@ function Shell() {
                 <div className="text-[14px]">
                   {state.connected ? (polish ? "Brak botów" : "No bots yet") : polish ? "Łączenie z serwerem botów…" : "Connecting to the bot server…"}
                 </div>
-                {!state.connected && (
-                  <div className="text-[12px]">
-                    {polish ? "Uruchom:" : "Start it with"} <code className="rounded bg-raised px-1.5 py-0.5">pnpm dev:server</code>
-                  </div>
-                )}
               </main>
             )}
             {/* multibot: wejscie w grupe od razu pokazuje sklad po prawej,

@@ -76,13 +76,37 @@ describe("bot picker avatar follow", () => {
   });
 });
 
-describe("group picker avatar stack", () => {
+describe("group row avatar cluster", () => {
+  const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
+
+  const botRow = sidebarSource.slice(sidebarSource.indexOf("function BotListItem"), sidebarSource.indexOf("export function Sidebar"));
+
+  // Wymaganie Kacpra: wiersz grupy ma to samo pudełko awatara (48 px) i te same
+  // odstępy co wiersz bota, więc oba wiersze są dokładnie tej samej wysokości.
+  // Zmierzone headless: obie wysokości 68 px (D:\tmp\mb-grp-shots\rows.json).
+  it("keeps the 48px avatar box and the bot row padding", () => {
+    expect(groupRow).toContain('<span className="relative size-12 shrink-0">');
+    expect(groupRow).toContain('size={layout === "solo" ? 48 : 24}');
+    expect(botRow).toContain("gap-3 px-3 py-2.5");
+    expect(groupRow).toContain("gap-3 px-3 py-2.5");
+    // Awatary siedzą w pudełku przez tabelę slotów, nie przez własne marginesy.
+    expect(groupRow).toContain('cn("absolute", GROUP_AVATAR_SLOTS[layout][index])');
+  });
+
   it("renders the overflow badge and keeps selected and hover states", () => {
-    const groupRow = sidebarSource.slice(sidebarSource.indexOf("function GroupRow"), sidebarSource.indexOf("function GroupCreateForm"));
-    expect(groupRow).toContain("const { shown, hiddenCount } = groupAvatarStack(members, g.bot_ids.length)");
+    expect(groupRow).toContain("const { layout, shown, hiddenCount } = groupAvatarLayout(members, g.bot_ids.length)");
     expect(groupRow).toContain("hiddenCount > 0");
     expect(groupRow).toContain("+{hiddenCount}");
     expect(groupRow).toContain("aria-label={`${hiddenCount} more group members`}");
     expect(groupRow).toContain('state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50"');
+  });
+
+  // Limit 12 nie ma testu renderującego (repo nie ma jsdom), więc pilnujemy, że
+  // formularz w ogóle sięga po stałą i pokazuje licznik.
+  it("caps the create form at twelve picks", () => {
+    const form = sidebarSource.slice(sidebarSource.indexOf("function GroupCreateForm"));
+    expect(form).toContain("else if (next.size < MAX_GROUP_MEMBERS) next.add(engineBotId)");
+    expect(form).toContain("disabled={!picked.has(engineBotId) && picked.size >= MAX_GROUP_MEMBERS}");
+    expect(form).toContain("{picked.size}/{MAX_GROUP_MEMBERS}");
   });
 });
