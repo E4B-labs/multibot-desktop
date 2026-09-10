@@ -60,6 +60,16 @@ export interface OptionCardData {
   delivered?: boolean;
 }
 
+/** Karta ZGODY, nie pytania. Rozstrzyga DWIE rzeczy: czy odpowiedź jedzie do
+ * dostawcy jako decyzja (`allow`/`deny`/`always`) czy jako tekst dla modelu, i
+ * czy po odpowiedzi karta zwija się w pokwitowanie. Podtytuł karty zgody to
+ * ślad autoweryfikacji (co zatwierdzono i jaką regułą), więc zwinąć jej nie
+ * wolno. Warunek na „Allow for all" łapie karty zapisane przed dodaniem
+ * `kind` — starych transkryptów nie przepisujemy. */
+export function isApprovalCard(card: OptionCardData): boolean {
+  return card.kind === "approval" || card.options.includes("Allow for all");
+}
+
 /** Skill widziany przez czat: nazwa do podświetlenia + opis do popovera. */
 export interface SkillRefInfo {
   name: string;
@@ -443,7 +453,9 @@ function reducer(state: AppState, action: Action): AppState {
       );
     }
     case "cardAnswerFailed":
-      return patchCard(state, action.botId, action.messageId, { answered: undefined });
+      // `dismissed` też wraca: karta bez `requestId` chowa się już przy
+      // kliknięciu, więc samo skasowanie odpowiedzi zostawiłoby ją niewidoczną.
+      return patchCard(state, action.botId, action.messageId, { answered: undefined, dismissed: false });
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "botAdded":
@@ -966,8 +978,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // Kartę domyka serwer (`answered` + `delivered` w `POST /respond`),
             // więc klient jej nie zapisuje — dwa zapisy bez kolejności potrafiły
             // przepisać cudzą odpowiedź w drugim otwartym oknie.
-            const behavior =
-              action.answer === "Allow" ? "allow"
+            // Rodzaj karty, nie treść odpowiedzi: pytanie, którego opcja brzmi
+            // akurat „Allow", szło do dostawcy jako ZGODA i nigdy nie docierało
+            // do modelu jako odpowiedź.
+            const behavior = !isApprovalCard(card)
+              ? "answer"
+              : action.answer === "Allow" ? "allow"
                 : action.answer === "Allow for all" ? "always"
                   : action.answer === "Deny" ? "deny"
                     : "answer";
