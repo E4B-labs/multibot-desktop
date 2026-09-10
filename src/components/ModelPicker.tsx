@@ -43,7 +43,14 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
   const signInHint = polish
     ? "CLI jest zainstalowany, ale niezalogowany — zaloguj w Ustawieniach aplikacji"
     : "CLI is installed but signed out — sign in from App Settings";
-  const railGate = railInstance ? instanceGate(railInstance.snapshot, railInstance.instanceId) : "ok";
+  const railGate = railInstance ? instanceGate(railInstance.snapshot, railInstance.driverKind) : "ok";
+  // Pigułka w nagłówku czatu jest jedyną rzeczą widoczną bez otwierania listy —
+  // w trybie zwartym jedyną w ogóle. Bez tego trzeba było otworzyć picker, żeby
+  // się dowiedzieć, że wybrany dostawca nie ma logowania.
+  const activeGate = active ? instanceGate(active.snapshot, active.driverKind) : "ok";
+  const activeNote = activeGate === "missing"
+    ? (active?.snapshot.reason ?? undefined)
+    : activeGate === "signin" ? signInHint : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -82,7 +89,7 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
     opts: { indent?: boolean; needsKey?: boolean } = {},
   ) => {
     const current = selection.instanceId === instance.instanceId && selection.model === option.id;
-    const gate = instanceGate(instance.snapshot, instance.instanceId);
+    const gate = instanceGate(instance.snapshot, instance.driverKind);
     const disabled = gate === "missing";
     const keyHint = polish ? "wymaga wspólnego klucza OpenCode Go" : "needs the shared OpenCode Go key";
     const dimmed = gate === "signin" || Boolean(opts.needsKey);
@@ -136,13 +143,17 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
         )}
         // Bez podpisu nazwa modelu musi być choć w dymku — inaczej nie da się
         // sprawdzić, na czym bot pracuje, bez otwierania listy.
-        title={activeLabel || selection.model}
-        aria-label={activeLabel || selection.model}
+        title={[activeLabel || selection.model, activeNote].filter(Boolean).join(" — ")}
+        aria-label={[activeLabel || selection.model, activeNote].filter(Boolean).join(" — ")}
       >
         {/* W wersji zwartej znak dostawcy jest jedyną treścią przycisku, więc
             rysujemy go ZAWSZE. Bez tego zostałby sam daszek. */}
         {(compact || active) && (
-          <ProviderMark driverKind={active?.driverKind ?? "openaiCompatible"} size={14} />
+          <ProviderMark
+            driverKind={active?.driverKind ?? "openaiCompatible"}
+            size={14}
+            className={cn(activeGate === "missing" && "opacity-40", activeGate === "signin" && "opacity-60")}
+          />
         )}
         {!compact && <span className="max-w-[190px] truncate">{activeLabel}</span>}
         <ChevronDown size={14} className="text-ink-secondary" />
@@ -156,7 +167,7 @@ export function ModelPicker({ bot, className, compact }: { bot: Bot; className?:
           {/* instance rail */}
           <div className="flex flex-col gap-1 border-r border-hairline/40 bg-panel p-2">
             {visibleInstances.map((instance) => {
-              const gate = instanceGate(instance.snapshot, instance.instanceId);
+              const gate = instanceGate(instance.snapshot, instance.driverKind);
               const onRail = instance.instanceId === railInstance?.instanceId;
               return (
                 <button

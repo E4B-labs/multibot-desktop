@@ -397,6 +397,16 @@ function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
   // dowieźć na ekran, inaczej „Odśwież logowanie” wygląda na nic nie robiące.
   const manualRef = useRef<HTMLDivElement>(null);
   const polish = useLanguage() === "pl";
+  // Instalacja i logowanie zmieniają `state`/`authenticated` w snapshotcie
+  // instancji, a picker modeli przygasza na tym niezalogowane CLI
+  // (lib/instanceGate.ts). Bez tego odświeżenia „niezalogowany" wisiałby
+  // w pickerze do najbliższej ramki `config`, reconnectu SSE albo
+  // 12-godzinnej ankiety klienta.
+  const { dispatch } = useStore();
+  const syncInstances = () =>
+    api("/api/instances")
+      .then(({ instances }) => dispatch({ type: "instances", instances }))
+      .catch(() => {});
   const deviceLogin = (() => {
     if (login?.mode !== "device") return null;
     const output = login.output.join("\n").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
@@ -471,6 +481,7 @@ function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
       await followLogin(response.id, tool.id);
       const refreshed = await api("/api/cli-tools").catch(() => ({ tools: [] }));
       setCli(refreshed.tools ?? []);
+      syncInstances();
     } catch (error) {
       setLogin((current) => current ? { ...current, done: true, error: error instanceof Error ? error.message : String(error) } : null);
     }
@@ -546,6 +557,7 @@ function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
       setInstalling(null);
       const refreshed = await api("/api/cli-tools").catch(() => ({ tools: [] }));
       setCli(refreshed.tools ?? []);
+      syncInstances();
     }
   };
 

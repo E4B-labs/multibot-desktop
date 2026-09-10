@@ -48,7 +48,7 @@ const support: AcpSupport = {
   spawnArgs: (_config, turn) => qwenAcpArgs(turn.model),
   pickAuthMethod: (methods) => methods.find((method) => typeof method.id === "string")?.id ?? null,
   authFailure: "continue",
-  isAuthenticated: (env) => qwenIsAuthenticated(env),
+  isAuthenticated: (env) => qwenIsAuthenticated(env, env.HOME ?? homedir()),
   buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
 };
 

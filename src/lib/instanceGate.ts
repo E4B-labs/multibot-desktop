@@ -16,10 +16,15 @@ interface GateSnapshot {
 // OpenCode Go, a darmowe modele Zen chodzą anonimowo (PR #73). Ten wpis ma własną
 // bramkę klucza per model (`needsKey` w ModelPicker), więc bramka logowania
 // zdusiłaby całą listę Zen bez powodu.
+//
+// Wyjątek idzie po `driverKind`, NIE po `instanceId`: `config.json` może
+// postawić drugą instancję tego samego drivera pod dowolnym id
+// (`instances: { "opencode-zapas": { driver: "opencode" } }`), a ona ma
+// dokładnie tę samą półdarmową naturę.
 const OWN_KEY_GATE = new Set(["opencode"]);
 
-export function instanceGate(snapshot: GateSnapshot, instanceId: string): InstanceGate {
+export function instanceGate(snapshot: GateSnapshot, driverKind: string): InstanceGate {
   if (snapshot.state !== "available") return "missing";
-  if (snapshot.authenticated === false && !OWN_KEY_GATE.has(instanceId)) return "signin";
+  if (snapshot.authenticated === false && !OWN_KEY_GATE.has(driverKind)) return "signin";
   return "ok";
 }

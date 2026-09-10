@@ -61,7 +61,8 @@ describe("skala prawego panelu i czatu", () => {
     // nazwa modelu musi zostać w dymku, inaczej nie da się sprawdzić,
     // na czym bot pracuje, bez otwierania listy
     expect(picker).toContain("{!compact && <span");
-    expect(picker).toContain("aria-label={activeLabel || selection.model}");
+    // nazwa zostaje pierwsza, a brak logowania/CLI dokleja się za myślnikiem
+    expect(picker).toContain('aria-label={[activeLabel || selection.model, activeNote].filter(Boolean).join(" — ")}');
   });
 
   it("OpenCode ma jedną ikonę, grupy Go/Zen i formularz klucza", () => {
