@@ -13,6 +13,7 @@ import { useLanguage } from "@/lib/language";
 import { botDisplayName, botDisplayTitle } from "@/lib/botNames";
 import { AvatarCropper } from "./AvatarCropper";
 import { Spinner } from "./Loading";
+import { SidePanel } from "./ResizablePanel";
 
 function Field({
   label,
@@ -168,7 +169,12 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[320px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <SidePanel
+      storageKey="multibot.panelWidth.settings"
+      defaultWidth={320}
+      label={polish ? "Zmień szerokość panelu bota" : "Resize bot panel"}
+      className="border-l border-hairline/40"
+    >
       <div data-shell-header className="flex items-center justify-between px-3 py-2.5">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
@@ -416,6 +422,6 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           </div>
         </div>
       </div>
-    </aside>
+    </SidePanel>
   );
 }
