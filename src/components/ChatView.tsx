@@ -251,11 +251,13 @@ function SessionSeparator({ at, polish }: { at: number; polish: boolean }) {
 function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   const { dispatch } = useStore();
   if (!message.event) return null;
-  // przypomnienie jest rutyną z jednorazową datą, więc prowadzi w to samo miejsce
-  const routineEvent = message.event.type === "routine-created" || message.event.type === "reminder-created";
+  // Rutyna prowadzi w panel rutyn; przypomnienie — ustawione i odpalone — w
+  // panel przypomnień (od 10.09.2026 to osobny rekord, nie rutyna z datą).
+  const routineEvent = message.event.type === "routine-created";
+  const reminderEvent = message.event.type === "reminder-created" || message.event.type === "reminder";
   const labels = polish
-    ? { renamed: "Zmieniono nazwę na", "skill-created": "Utworzono umiejętność", "routine-created": "Utworzono rutynę", "reminder-created": "Przypomnienie", "goal-progress": "Cel" }
-    : { renamed: "Renamed to", "skill-created": "Created skill", "routine-created": "Created routine", "reminder-created": "Reminder", "goal-progress": "Goal" };
+    ? { renamed: "Zmieniono nazwę na", "skill-created": "Utworzono umiejętność", "routine-created": "Utworzono rutynę", "reminder-created": "Przypomnienie", reminder: "Przypomnienie", "goal-progress": "Cel" }
+    : { renamed: "Renamed to", "skill-created": "Created skill", "routine-created": "Created routine", "reminder-created": "Reminder", reminder: "Reminder", "goal-progress": "Goal" };
   // multibot: wspólna pigułka zamiast własnego markupu — patrz EventChip.tsx.
   // Rutyna dostaje ikonę zegara, zmiana nazwy zostaje czystym tekstem.
   // skill-created → wyśrodkowany SkillRef: ta sama nazwa, ten sam kolor i ten
@@ -270,14 +272,26 @@ function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   return (
     <EventChip
       icon={
-        message.event.type === "routine-created" ? <CalendarClock size={13} />
-          : message.event.type === "reminder-created" ? <Bell size={13} />
+        routineEvent ? <CalendarClock size={13} />
+          : reminderEvent ? <Bell size={13} />
             : message.event.type === "goal-progress" ? <Crosshair size={13} /> : undefined
       }
       label={labels[message.event.type]}
       value={message.event.value}
-      onClick={routineEvent ? () => dispatch({ type: "toggleRoutines", open: true }) : undefined}
-      title={routineEvent ? "Otwórz rutyny / Open routines" : undefined}
+      onClick={
+        routineEvent
+          ? () => dispatch({ type: "toggleRoutines", open: true })
+          : reminderEvent
+            ? () => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" })
+            : undefined
+      }
+      title={
+        routineEvent
+          ? "Otwórz rutyny / Open routines"
+          : reminderEvent
+            ? "Otwórz przypomnienia / Open reminders"
+            : undefined
+      }
     />
   );
 }

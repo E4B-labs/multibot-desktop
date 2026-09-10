@@ -68,6 +68,8 @@ export const AGENTS_MCP_TOOLS = [
   "delete_routine",
   "run_routine",
   "create_reminder",
+  "list_reminders",
+  "delete_reminder",
   "notify_user",
   "request_connection",
   "create_agent",

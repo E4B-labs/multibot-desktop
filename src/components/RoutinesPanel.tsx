@@ -395,6 +395,19 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
         </div>
       </div>
 
+      {/* Dwie zakładki jednego slotu — rutyna powtarza się, przypomnienie odpala raz */}
+      <div className="flex gap-1 px-5 pb-3">
+        <button className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink" aria-current="page">
+          {polish ? "Rutyny" : "Routines"}
+        </button>
+        <button
+          onClick={() => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" })}
+          className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          {polish ? "Przypomnienia" : "Reminders"}
+        </button>
+      </div>
+
       <div className="flex-1 overflow-y-auto px-5 pb-5">
         {status === "offline" ? (
           // Konwencja local runtime controls

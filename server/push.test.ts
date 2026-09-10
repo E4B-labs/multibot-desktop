@@ -1,10 +1,13 @@
 // Powiadomienia push, end to end: prawdziwy harness (jak w comms.test.ts) z
 // atrapą CLI, a zamiast exp.host lokalny serwerek, który zbiera payloady
-// (`MULTIBOT_EXPO_PUSH_URL`) i odpowiada ticketami jak exp.host. Pinuje
-// przypadki ze specyfikacji: pytanie do człowieka, start pracy, koniec pracy,
-// ciszę tam, gdzie powiadomienie byłoby szumem (tura bot-bot, wyłączony
-// przełącznik bota), ładunek dostarczalny na Androidzie oraz sprzątanie
-// urządzenia po tickecie `DeviceNotRegistered`.
+// (`MULTIBOT_EXPO_PUSH_URL`) i odpowiada ticketami jak exp.host.
+//
+// Od 10.09.2026 telefon brzęczy TYLKO od przypomnień i od `notify_user` —
+// reguła siedzi w `shouldNotify` (test jednostkowy: push-gate.test.ts), a ta
+// suita pilnuje, że tak jest naprawdę na całej drodze: pytanie do człowieka,
+// koniec tury i tura bot-bot milczą, przypomnienie i `notify_user` brzęczą,
+// wyłączony przełącznik bota ucisza także je, ładunek jest dostarczalny na
+// Androidzie, a ticket `DeviceNotRegistered` kasuje urządzenie z configu.
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -139,6 +142,18 @@ describe("push na telefon (fake ACP fleet)", () => {
             environment: { FAKE_ACP_MODE: "notify-user" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
+          // bot woła `create_reminder` — ta sama droga, którą idzie model
+          // proszony o „przypomnij mi o X"; termin podaje env, żeby test
+          // wiedział, kiedy czekać
+          grokReminder: {
+            driver: "grokAgent",
+            environment: {
+              FAKE_ACP_MODE: "create-reminder",
+              FAKE_ACP_REMINDER_TEXT: "dentysta",
+              FAKE_ACP_REMINDER_IN_MS: "120000",
+            },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
           grokConnect: {
             driver: "grokAgent",
             environment: { FAKE_ACP_MODE: "request-connection" },
@@ -200,77 +215,33 @@ describe("push na telefon (fake ACP fleet)", () => {
     }
   });
 
-  it("pyta o człowieka → push `question`, a start tury milczy", async () => {
+  /** Ustawia przypomnienie za `seconds` sekund i czeka, aż odpali. Jedyna
+   * ścieżka, która w ogóle wywołuje push — reszta suity używa jej, gdy
+   * potrzebuje prawdziwego ładunku do obejrzenia. */
+  async function fireReminder(botId: string, text: string, seconds = 2): Promise<Push> {
+    const at = new Date(Date.now() + seconds * 1_000).toISOString();
+    const created = await api("POST", "/api/reminders", { botId, text, at });
+    expect(created.status).toBe(201);
+    expect(created.body.status).toBe("pending");
+    // takt przypomnień chodzi co 30 s, więc czekamy dłużej niż jeden obrót
+    await until(() => kinds(botId).includes("reminder"), 45_000);
+    return pushes.find((p) => p.data?.botId === botId && p.data?.kind === "reminder")!;
+  }
+
+  it("pytanie do człowieka NIE brzęczy telefonu (ani start tury)", async () => {
     const botId = await newBot("Pytacz", "grokAsk");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zdecyduj coś" })).status).toBe(202);
-    await until(() => kinds(botId).includes("question"));
-    const question = pushes.find((p) => p.data?.botId === botId && p.data?.kind === "question");
-    expect(question?.title).toBe("Pytacz");
-    expect(question?.body.length).toBeGreaterThan(0);
-    // tura wisi na karcie dłużej niż 5 s — kiedyś wychodził z tego push „zaczyna
-    // pracę"; start tury nie jest zdarzeniem, więc nie wychodzi już nigdy
-    await until(() => false, 7_000);
-    expect(kinds(botId)).not.toContain("started");
-  }, 40_000);
-
-  it("koniec tury użytkownika: `finished`, nigdy `started`", async () => {
-    const botId = await newBot("Szybki", "happy");
-    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "cześć" })).status).toBe(202);
-    await until(() => kinds(botId).includes("finished"));
-    expect(kinds(botId)).toContain("finished");
-    expect(kinds(botId)).not.toContain("started");
-  }, 40_000);
-
-  it("wyłączony przełącznik bota: zero pushy", async () => {
-    const botId = await newBot("Cichy", "happy");
-    await api("PATCH", `/api/bots/${botId}`, { notifications: false });
-    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "cześć" })).status).toBe(202);
-    await until(() => false, 6_000);
+    // karta czeka na człowieka dłużej niż 8 s — gdyby cokolwiek pushowało,
+    // zdążyłoby w tym oknie
+    await until(() => false, 8_000);
     expect(kinds(botId)).toEqual([]);
   }, 40_000);
 
-  it("tura bot-bot: pytany bot nie pushuje ani startu, ani końca", async () => {
-    const helperId = await newBot("Pomocnik", "happy");
-    const askerId = await newBot("Wolacz", "grokPeer");
-    expect((await api("POST", `/api/bots/${askerId}/messages`, { text: "hey @Pomocnik ping" })).status).toBe(202);
-    await until(() => kinds(askerId).includes("finished"), 30_000);
-    expect(kinds(helperId)).toEqual([]);
-  }, 60_000);
-
-  it("ładunek dla Androida: high priority, kanał `default`, dźwięk i ttl", async () => {
-    const botId = await newBot("Ładunek", "happy");
+  it("koniec tury użytkownika: cisza", async () => {
+    const botId = await newBot("Szybki", "happy");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "cześć" })).status).toBe(202);
-    await until(() => kinds(botId).includes("finished"));
-    const push = pushes.find((p) => p.data?.botId === botId);
-    expect(push?.priority).toBe("high");
-    expect(push?.channelId).toBe("default");
-    expect(push?.sound).toBe("default");
-    // koniec tury jest nieaktualny po godzinie; pytanie do człowieka żyje dobę
-    expect(push?.ttl).toBe(3600);
-    expect(push?.data).toMatchObject({ botId, kind: "finished" });
-  }, 40_000);
-
-  // multibot: przypomnienie = rutyna z jednorazową datą ISO. W chwili odpalenia
-  // człowiek dostaje push `reminder` (żyje dobę, jak pytanie), a bot dostaje
-  // swoją turę i pisze o tym w czacie.
-  it("przypomnienie na za dwie sekundy: push `reminder` + wiadomość bota", async () => {
-    const botId = await newBot("Budzik", "happy");
-    const at = new Date(Date.now() + 2_000);
-    const iso = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}T${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}:${String(at.getSeconds()).padStart(2, "0")}`;
-    const created = await api("POST", `/api/bots/${botId}/routines`, { name: "kawa", prompt: "przypomnij o kawie", schedule: iso });
-    expect(created.status).toBe(201);
-    expect(created.body.next_run_at).toBeGreaterThan(Date.now());
-
-    // tick rutyn chodzi co 15 s, więc czekamy na nie dłużej niż jeden obrót
-    await until(() => kinds(botId).includes("reminder"), 40_000);
-    const reminder = pushes.find((p) => p.data?.botId === botId && p.data?.kind === "reminder");
-    expect(reminder?.title).toBe("Budzik");
-    expect(reminder?.body).toBe("kawa");
-    // przypomnienie ma dożyć do rana, a nie wygasnąć po godzinie
-    expect(reminder?.ttl).toBe(24 * 3600);
-
-    // tura rutyny leci normalnie: bot odpowiada w swoim wątku
-    const deadline = Date.now() + 20_000;
+    // bot naprawdę odpowiedział…
+    const deadline = Date.now() + 30_000;
     let said = false;
     while (!said && Date.now() < deadline) {
       const bot = await botState(botId);
@@ -278,25 +249,116 @@ describe("push na telefon (fake ACP fleet)", () => {
       if (!said) await new Promise((r) => setTimeout(r, 200));
     }
     expect(said).toBe(true);
+    // …i nikomu przez to nie zabrzęczał telefon
+    expect(kinds(botId)).toEqual([]);
+  }, 60_000);
 
-    // odpaliła raz i zgasła — brak kolejnego terminu
-    const routines = (await api("GET", `/api/bots/${botId}/routines`)).body;
-    expect(routines[0].next_run_at).toBeNull();
+  it("tura bot-bot: żaden z botów nie pushuje", async () => {
+    const helperId = await newBot("Pomocnik", "happy");
+    const askerId = await newBot("Wolacz", "grokPeer");
+    expect((await api("POST", `/api/bots/${askerId}/messages`, { text: "hey @Pomocnik ping" })).status).toBe(202);
+    await until(() => false, 15_000);
+    expect(kinds(helperId)).toEqual([]);
+    expect(kinds(askerId)).toEqual([]);
+  }, 60_000);
+
+  it("wyłączony przełącznik bota ucisza nawet przypomnienie", async () => {
+    const botId = await newBot("Cichy", "happy");
+    await api("PATCH", `/api/bots/${botId}`, { notifications: false });
+    const at = new Date(Date.now() + 2_000).toISOString();
+    expect((await api("POST", "/api/reminders", { botId, text: "kawa", at })).status).toBe(201);
+    await until(() => false, 45_000);
+    expect(kinds(botId)).toEqual([]);
+    // rekord sam w sobie odpalił — ucichł push, nie harmonogram
+    const list = (await api("GET", `/api/bots/${botId}/reminders`)).body;
+    expect(list[0].status).toBe("fired");
   }, 70_000);
 
-  // multibot: `notify_user` — bot ma coś do POWIEDZENIA, nie o co zapytać.
-  it("notify_user: push `notify` i bot oznaczony jako nieprzeczytany", async () => {
+  // multibot: przypomnienie to OSOBNY rekord (nie rutyna z datą ISO). Odpala
+  // raz: push na telefon i pigułka `reminder` w transkrypcie bota.
+  it("przypomnienie: push `reminder`, pigułka w czacie, i tylko RAZ", async () => {
+    const botId = await newBot("Budzik", "happy");
+    const reminder = await fireReminder(botId, "kawa");
+    expect(reminder?.title).toBe("Budzik");
+    expect(reminder?.body).toBe("kawa");
+    // przypomnienie ma dożyć do rana, a nie wygasnąć po godzinie
+    expect(reminder?.ttl).toBe(24 * 3600);
+    // ładunek dostarczalny na Androidzie
+    expect(reminder?.priority).toBe("high");
+    expect(reminder?.channelId).toBe("default");
+    expect(reminder?.sound).toBe("default");
+    expect(reminder?.data).toMatchObject({ botId, kind: "reminder" });
+
+    // pigułka zdarzenia w wątku bota
+    const deadline = Date.now() + 15_000;
+    let pill: any;
+    while (!pill && Date.now() < deadline) {
+      const bot = await botState(botId);
+      pill = (bot?.messages ?? []).find((m: any) => m.event?.type === "reminder");
+      if (!pill) await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(pill?.event).toMatchObject({ type: "reminder", value: "kawa" });
+
+    // rekord zostaje jako odpalony i nie odpala drugi raz przez kolejny takt
+    const list = (await api("GET", `/api/bots/${botId}/reminders`)).body;
+    expect(list[0]).toMatchObject({ text: "kawa", status: "fired" });
+    expect(list[0].firedAt).not.toBeNull();
+    const before = kinds(botId).filter((k) => k === "reminder").length;
+    await until(() => false, 35_000);
+    expect(kinds(botId).filter((k) => k === "reminder").length).toBe(before);
+  }, 120_000);
+
+  it("przypomnienie w przeszłości: 422, bez martwego rekordu", async () => {
+    const botId = await newBot("Spóźnialski", "happy");
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const res = await api("POST", "/api/reminders", { botId, text: "wczoraj", at: past });
+    expect(res.status).toBe(422);
+    expect((await api("GET", `/api/bots/${botId}/reminders`)).body).toEqual([]);
+  }, 40_000);
+
+  it("drzemka przesuwa przypomnienie, kasowanie je usuwa", async () => {
+    const botId = await newBot("Drzemiący", "happy");
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    const created = (await api("POST", "/api/reminders", { botId, text: "spotkanie", at })).body;
+    const snoozed = (await api("POST", `/api/reminders/${created.id}/snooze`, { minutes: 60 })).body;
+    expect(Date.parse(snoozed.at)).toBeGreaterThan(Date.now() + 55 * 60_000);
+    expect(snoozed.status).toBe("pending");
+    expect((await api("DELETE", `/api/reminders/${created.id}`)).status).toBe(200);
+    expect((await api("GET", `/api/bots/${botId}/reminders`)).body).toEqual([]);
+  }, 40_000);
+
+  // multibot: droga bota — „przypomnij mi o dentyście" kończy się REKORDEM
+  // przypomnienia, nie rutyną z datą.
+  it("create_reminder z tury bota zakłada przypomnienie i pigułkę w czacie", async () => {
+    const botId = await newBot("Sekretarz", "grokReminder");
+    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "przypomnij mi o dentyście" })).status).toBe(202);
+    const deadline = Date.now() + 40_000;
+    let list: any[] = [];
+    while (list.length === 0 && Date.now() < deadline) {
+      list = (await api("GET", `/api/bots/${botId}/reminders`)).body ?? [];
+      if (list.length === 0) await new Promise((r) => setTimeout(r, 300));
+    }
+    expect(list[0]).toMatchObject({ text: "dentysta", botId, status: "pending" });
+    // rekord przypomnienia, NIE rutyna — rutyny bota mają zostać puste
+    expect((await api("GET", `/api/bots/${botId}/routines`)).body).toEqual([]);
+    // pigułka „ustawiłem przypomnienie" w transkrypcie
+    const bot = await botState(botId);
+    expect((bot?.messages ?? []).some((m: any) => m.event?.type === "reminder-created" && m.event.value === "dentysta")).toBe(true);
+  }, 70_000);
+
+  // multibot: `notify_user` — jedyny push, o który prosi sam bot.
+  it("notify_user: push z powodem i bot oznaczony jako nieprzeczytany", async () => {
     const botId = await newBot("Krzykacz", "grokNotify");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zrób raport" })).status).toBe(202);
     await until(() => kinds(botId).includes("notify"), 30_000);
     const notification = pushes.find((p) => p.data?.botId === botId && p.data?.kind === "notify");
     expect(notification?.title).toBe("Krzykacz");
-    expect(notification?.body).toBe("Zebrałem dane z wczoraj.");
+    // „<bot> chce czegoś od Ciebie: <powód>" — nazwa bota jest tytułem pusha
+    expect(notification?.body).toContain("Zebrałem dane z wczoraj.");
+    expect(notification?.body.toLowerCase()).toMatch(/wants something from you|chce czegoś od ciebie/);
     expect((await botState(botId))?.unread).toBe(true);
   }, 60_000);
 
-  // multibot: brak konektora → karta z przyciskiem, nie akapit prozy. Karta NIE
-  // blokuje tury, więc bot kończy pracę mimo niepodłączonego Google Workspace.
   it("request_connection: karta `connect` w czacie, tura kończy się bez czekania", async () => {
     const botId = await newBot("Prosiciel", "grokConnect");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "wyślij maila" })).status).toBe(202);
@@ -334,10 +396,12 @@ describe("push na telefon (fake ACP fleet)", () => {
     expect((await api("POST", "/api/devices/dead-phone/push", { token: DEAD_TOKEN })).status).toBe(200);
     expect(pushDevices()["dead-phone"]).toBeDefined();
     const botId = await newBot("Sprzątacz", "happy");
-    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "cześć" })).status).toBe(202);
+    // trzeba czegoś, co NAPRAWDĘ leci na telefon — po zawężeniu bramki
+    // zwykła tura już nie wystarcza
+    await fireReminder(botId, "sprzątanie");
     await until(() => pushDevices()["dead-phone"] === undefined);
     expect(pushDevices()["dead-phone"]).toBeUndefined();
     // żywe urządzenie zostaje — kasujemy tylko to, które Expo odrzuciło
     expect(pushDevices()["test-phone"]).toBeDefined();
-  }, 40_000);
+  }, 90_000);
 });

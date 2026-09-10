@@ -19,7 +19,7 @@
 // Tylko pulpit: w przeglądarce i na serwerze telefonu nagłówek zostaje
 // z pięcioma ikonami, bo tam nic ich nie ściska.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CalendarClock, MessagesSquare, Monitor, MoreVertical, ScanSearch, Search, Users, Wand2 } from "lucide-react";
+import { Bell, CalendarClock, MessagesSquare, Monitor, MoreVertical, ScanSearch, Search, Users, Wand2 } from "lucide-react";
 import { useStore } from "@/state/store";
 import { useLanguage } from "@/lib/language";
 import { cn } from "@/lib/cn";
@@ -27,7 +27,7 @@ import { motionIsReduced } from "@/lib/motion";
 
 /** Kolejność jak na telefonie. Lista jest jawna, żeby po schowaniu ikon żadna
  * funkcja nie wyparowała — pilnuje tego ChatHeaderMenu.test.ts. */
-const ALL_CHAT_HEADER_ACTIONS = ["computer", "routines", "skills", "find", "inspector", "rooms", "team"] as const;
+const ALL_CHAT_HEADER_ACTIONS = ["computer", "routines", "reminders", "skills", "find", "inspector", "rooms", "team"] as const;
 export type ChatHeaderAction = (typeof ALL_CHAT_HEADER_ACTIONS)[number];
 /** hidden per Kacper 07.09.2026, panels kept */
 export const HIDDEN_CHAT_HEADER_ACTIONS: readonly ChatHeaderAction[] = ["inspector", "rooms", "team"];
@@ -126,7 +126,14 @@ export function ChatHeaderMenu({ onToggleFind }: { onToggleFind: () => void }) {
     routines: {
       icon: CalendarClock,
       label: polish ? "Rutyny bota" : "Bot routines",
-      run: () => dispatch({ type: "toggleRoutines" }),
+      run: () => dispatch({ type: "toggleRoutines", tab: "routines" }),
+    },
+    // multibot: przypomnienia stoją OBOK rutyn, bo to inna rzecz — rutyna
+    // powtarza się, przypomnienie odpala raz i przychodzi pushem na telefon.
+    reminders: {
+      icon: Bell,
+      label: polish ? "Przypomnienia" : "Reminders",
+      run: () => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" }),
     },
     skills: {
       icon: Wand2,

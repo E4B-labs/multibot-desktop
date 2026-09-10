@@ -60,25 +60,11 @@ type AddressReport = {
   portMapping: { state: string };
 };
 
-const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-  ["year", 31_536_000_000],
-  ["month", 2_592_000_000],
-  ["day", 86_400_000],
-  ["hour", 3_600_000],
-  ["minute", 60_000],
-  ["second", 1_000],
-];
+// „3 minutes ago" mieszka teraz w `@/lib/relativeTime` — ten sam formater
+// potrzebny był panelowi przypomnień. Re-eksport, żeby nie ruszać wołających.
+import { relativeTime } from "@/lib/relativeTime";
 
-/** "3 minutes ago" in whichever language the app is in. Timestamps straight
- * from the database mean nothing to the person reading the table. */
-export function relativeTime(at: number | undefined | null, now: number, locale: string): string {
-  if (!at) return "—";
-  const delta = at - now;
-  const absolute = Math.abs(delta);
-  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  for (const [unit, ms] of UNITS) if (absolute >= ms) return format.format(Math.round(delta / ms), unit);
-  return format.format(0, "second");
-}
+export { relativeTime };
 
 export function uptimeText(ms: number | undefined, polish: boolean): string {
   if (!ms || ms < 0) return "—";

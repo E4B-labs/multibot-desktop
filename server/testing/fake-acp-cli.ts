@@ -6,8 +6,9 @@
 // turn. Failure modes mirror how real ACP agents misbehave:
 //
 //   FAKE_ACP_MODE   happy (default) | exit-early | crash-mid-turn | hang | slow | no-auth | permission
-//                   | notify-user/request-connection (call the matching agents tool once
-//                     and finish the turn — neither of them waits for the human)
+//                   | notify-user/create-reminder/request-connection (call the
+//                     matching agents tool once and finish the turn — none of
+//                     them waits for the human)
 //                   | ask-peer/send-mail (spawn the injected "agents" MCP server from
 //                     session/new's mcpServers, call list_bots + ask_bot on a
 //                     peer, and reply with what the peer said — the comms e2e)
@@ -466,10 +467,20 @@ function handle(msg: any) {
       }
       // notify-user / request-connection: narzędzia, które NIE czekają na
       // człowieka — bot woła jedno z nich i od razu kończy turę
-      if ((mode === "notify-user" || mode === "request-connection") && agentsMcp) {
+      if ((mode === "notify-user" || mode === "create-reminder" || mode === "request-connection") && agentsMcp) {
         const call =
           mode === "notify-user"
-            ? { name: "notify_user", args: () => ({ title: "Raport gotowy", body: "Zebrałem dane z wczoraj." }) }
+            ? { name: "notify_user", args: () => ({ reason: "Zebrałem dane z wczoraj." }) }
+            : mode === "create-reminder"
+            // FAKE_ACP_REMINDER_IN_MS: za ile ma odpalić, liczone od CHWILI
+            // TURY — nie stała data w configu, bo ta zdąży się zestarzeć,
+            // zanim suita dojdzie do tego testu, i serwer odrzuci ją jako
+            // termin w przeszłości. Model w prawdziwym życiu liczy datę sam
+            // z bloku środowiska; atrapa robi to samo, tylko arytmetycznie.
+            ? { name: "create_reminder", args: () => ({
+                text: process.env.FAKE_ACP_REMINDER_TEXT ?? "kawa",
+                at: new Date(Date.now() + (Number(process.env.FAKE_ACP_REMINDER_IN_MS) || 120_000)).toISOString(),
+              }) }
             : {
               name: "request_connection",
               // FAKE_ACP_CONNECTOR: the model names the APP it needs

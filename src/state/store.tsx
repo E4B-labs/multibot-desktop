@@ -75,7 +75,7 @@ export interface Message {
   secret?: { target: string; label: string; description: string; placeholder?: string; helpUrl?: string; requestKey: string; provided?: boolean; dismissed?: boolean };
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
-  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "goal-progress"; value: string };
+  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "reminder" | "goal-progress"; value: string };
   /** collaboration-room chip: "X texted Y" / "X replied" → opens the read-only room */
   room?: { id: string; name: string; bot_ids: string[]; ownerBotId: string; status: string; event?: "texted" | "received" | "replied"; groupId?: string };
   /** screen messages: a frame of the bot's computer (base64) */
@@ -238,6 +238,10 @@ interface AppState {
   appSettingsCliLogin?: string;
   // multibot: F6 — panel rutyn, ten sam prawy slot co settings/computer
   routinesOpen: boolean;
+  /** multibot: prawy slot trzyma dwa spisy planów bota — powtarzalne rutyny i
+   * jednorazowe przypomnienia. Jedna zakładka zamiast drugiego panelu, bo i tak
+   * wykluczałyby się wzajemnie. */
+  routinesTab: "routines" | "reminders";
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
   memoryOpen: boolean;
   skillsOpen: boolean;
@@ -315,7 +319,7 @@ type Action =
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean; cliLogin?: string }
   // multibot: F6 — otwarcie/zamknięcie panelu rutyn
-  | { type: "toggleRoutines"; open?: boolean }
+  | { type: "toggleRoutines"; open?: boolean; tab?: "routines" | "reminders" }
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
   | { type: "toggleMemory"; open?: boolean }
   | { type: "toggleSkills"; open?: boolean; skill?: string }
@@ -633,10 +637,16 @@ function reducer(state: AppState, action: Action): AppState {
     }
     // multibot: F6 — panel rutyn wypycha pozostałych lokatorów prawego slotu
     case "toggleRoutines": {
-      const open = action.open ?? !state.routinesOpen;
+      // Bez `open` to przełącznik, ALE kliknięcie w drugą zakładkę otwartego
+      // panelu ma ją PRZEŁĄCZYĆ, a nie zamknąć panel.
+      const open = action.open
+        ?? (!state.routinesOpen || (action.tab !== undefined && action.tab !== state.routinesTab));
       return {
         ...state,
         routinesOpen: open,
+        // bez `tab` panel wraca na rutyny — „Rutyny bota" z menu ma otwierać
+        // rutyny także wtedy, gdy ostatnio oglądane były przypomnienia
+        routinesTab: open ? action.tab ?? "routines" : state.routinesTab,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
@@ -810,6 +820,7 @@ const initialState: AppState = {
   computerOpen: false,
   appSettingsOpen: false,
   routinesOpen: false,
+  routinesTab: "routines",
   memoryOpen: false,
   skillsOpen: false,
   teamMapOpen: false,

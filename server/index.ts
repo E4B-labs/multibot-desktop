@@ -31,7 +31,7 @@ import {
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
 import * as composio from "./composio.ts";
 // multibot (U28): powiadomienia push, gdy bot wchodzi w needsAttention.
-import { registerPushDevice, notifyPushDevices, shouldNotify, type PushKind } from "./push.ts";
+import { registerPushDevice, notifyPushDevices, shouldNotify, allowNotify, type PushKind } from "./push.ts";
 import {
   BUILT_IN_CLI_IDS,
   DEFAULT_INSTANCE_CONFIGS,
@@ -76,6 +76,7 @@ import * as mcpConnectors from "./mcp-connectors.ts";
 import * as googleWorkspace from "./google-workspace.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { HarnessRoutines, oneShotAt, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
+import { Reminders, SNOOZE_DEFAULT_MIN } from "./reminders.ts";
 import { GroupStore, groupMemberId, threadIdOfGroupMember } from "./group-store.ts";
 import { budgetLeft, isAcknowledgement, isDuplicateOfLast, RoomStore, ROOM_DONE_MARKER, type RoomRecord } from "./rooms.ts";
 import { GoalStore, GOAL_DONE_MARKER, goalThreadId, parseGoalCommand, type GoalRecord } from "./goals.ts";
@@ -1560,7 +1561,7 @@ function pushForBot(botId: string, kind: PushKind, body: string): void {
   // `=== false` a nie `!`: boty zapisane zanim pole istniało nie mają go w JSON
   if (!bot || bot.notifications === false) return;
   // JEDYNA bramka „czy to w ogóle powiadomienie" — patrz `shouldNotify`
-  if (!shouldNotify({ kind, origin: turnOrigin.get(botId) })) return;
+  if (!shouldNotify(kind)) return;
   const audience = bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined;
   void notifyPushDevices(bot.name || "Bot", body.slice(0, 300) || "…", bot.id, { botId: bot.id, kind }, audience).catch(() => {});
 }
@@ -1569,11 +1570,14 @@ function pushForBot(botId: string, kind: PushKind, body: string): void {
  * i `notify_user`. Push leci na telefon, ramka SSE budzi powłokę na pulpicie
  * (Electron rysuje banerkę systemową). Nie zapisuje wiadomości w czacie: tekst
  * pisze sam bot w swojej turze. */
-function notifyUser(botId: string, title: string, body: string, kind: "reminder" | "notify"): void {
+function notifyUser(botId: string, title: string, body: string, kind: "reminder" | "notify", pushBody?: string): void {
   // Wyciszony bot milczy na OBU drogach — push bramkuje `pushForBot`, banerkę
   // trzeba tu, bo `notifyFrame` zna tylko globalny przełącznik powłoki.
   if (store.bot(botId)?.notifications === false) return;
-  pushForBot(botId, kind, body || title);
+  // Banerka na pulpicie ma osobny nagłówek (nazwa bota + powód), a push tylko
+  // jedną linię pod nazwą bota — `pushBody` pozwala napisać ją inaczej, zamiast
+  // powtarzać nagłówek w treści.
+  pushForBot(botId, kind, pushBody ?? (body || title));
   broadcast({ kind: "notify", botId, title, body });
 }
 
@@ -2015,6 +2019,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // z nim zamiast odpalać turę na rekordzie, który za chwilę zniknie.
         stopScreenPoller(bot.id);
         harnessRoutines.deleteBot(bot.id);
+        reminders.deleteBot(bot.id);
         attachments.deleteBot(bot.id);
         workspace.deleteBot(bot.id);
         store.deleteBot(bot.id);
@@ -2943,6 +2948,18 @@ const harnessRoutines = new HarnessRoutines(join(DATA_DIR, "routines.json"), asy
   await startTurn(routine.botId, routineTurnText(routine.name, routine.prompt, payload), { origin: "routine", routineName: routine.name });
 });
 
+// multibot: przypomnienia — OSOBNY rekord obok rutyn (Kacper, 10.09.2026).
+// Odpalenie to dwie rzeczy i nic więcej: powiadomienie na telefon i pulpit
+// (niesie `botId`, więc stuknięcie otwiera czat tego bota) oraz pigułka
+// `reminder` w transkrypcie. Tury nie zaczynamy — przypomnienie ma przypomnieć,
+// a nie wydać tokeny na komentarz do samego siebie.
+const reminders = new Reminders(join(DATA_DIR, "reminders.json"), (reminder) => {
+  notifyUser(reminder.botId, reminder.text, "", "reminder");
+  appendBotEvent(reminder.botId, { type: "reminder", value: reminder.text });
+  broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+  console.log(`[reminders] fired ${reminder.id} (${reminder.botId}): ${reminder.text}`);
+});
+
 // ── multibot (webhook): publiczny inbound rutyn harnessu ──────────────
 // Surowe body (Buffer) czytamy TU, nie przez `readBody` (JSON.parse) — HMAC
 // liczy się nad bajtami wchodzącymi na wejście, a nie nad sparsowanym JSON-em.
@@ -3169,6 +3186,7 @@ async function deleteBotRecord(bot: BotRecord): Promise<void> {
   await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
   stopScreenPoller(bot.id);
   harnessRoutines.deleteBot(bot.id);
+  reminders.deleteBot(bot.id);
   attachments.deleteBot(bot.id);
   workspace.deleteBot(bot.id);
   store.deleteBot(bot.id);
@@ -3624,7 +3642,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         const privateBot = caller.visibility === "private";
         const teamActions = new Set(["team.memory.list", "team.memory.graph", "team.memory.markdown.get", "team.memory.add"]);
         if (privateBot && teamActions.has(action)) return json(res, 404, { error: "team scope unavailable to private bot" });
-        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "groups.list", "device.info", "file.read"]);
+        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "reminders.list", "groups.list", "device.info", "file.read"]);
         if (access === "read-only" && !readOnlyActions.has(action)) return json(res, 403, { error: "read-only access" });
         const requireFull = () => {
           if (access !== "full") throw Object.assign(new Error("Full Access required for this action"), { status: 403 });
@@ -3709,33 +3727,47 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const answer = await askCredentialAndWait(caller, target);
             return json(res, 200, { answer });
           }
-          // multibot: przypomnienie to rutyna z jednorazową datą (ISO), nie cron
-          // raz na rok. Prompt każe botowi POWIEDZIEĆ o tym w chwili odpalenia.
+          // multibot: przypomnienie to OSOBNY rekord, nie rutyna z datą
+          // (Kacper, 10.09.2026). Rutyna powtarza się; to odpala raz.
+          // NIE `requireFull()`: domyślny profil bota to „approval", a
+          // przypomnienie nie jest władzą — to notatka, o którą poprosił sam
+          // człowiek, plus powiadomienie do niego. Pod pełnym dostępem
+          // „przypomnij mi jutro o 9" nie działało na żadnym świeżym bocie.
           case "reminders.create": {
-            requireFull();
-            const text = String(body.text ?? "").trim().slice(0, 100);
-            const at = String(body.at ?? "").trim();
-            if (!text || !at) return json(res, 422, { error: "text and at required" });
             try {
-              const routine = harnessRoutines.create(fromBotId, {
-                name: text,
-                prompt: `Reminder for the user: ${text}. Tell them now, in one short line, and do the task if it is something you can do yourself.`,
-                schedule: at,
-              });
-              appendBotEvent(fromBotId, { type: "reminder-created", value: text });
-              broadcast({ kind: "workspace", botId: fromBotId, resource: "routines" });
-              return json(res, 201, routineView(fromBotId, routine));
+              const reminder = reminders.create(fromBotId, { text: body.text, at: body.at });
+              appendBotEvent(fromBotId, { type: "reminder-created", value: reminder.text });
+              broadcast({ kind: "workspace", botId: fromBotId, resource: "reminders" });
+              return json(res, 201, reminder);
             } catch (error) {
               return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
             }
           }
+          case "reminders.list": return json(res, 200, reminders.list(fromBotId));
+          case "reminders.delete": {
+            // Bot kasuje SWOJE przypomnienia. Bez tej bramki zgadnięty id
+            // zdejmowałby cudze — a przypomnienia nie są zasobem zespołu.
+            const target = reminders.get(String(body.id ?? ""));
+            if (!target || target.botId !== fromBotId) return json(res, 404, { error: "no such reminder" });
+            reminders.delete(target.id);
+            broadcast({ kind: "workspace", botId: fromBotId, resource: "reminders" });
+            return json(res, 200, { ok: true });
+          }
           // multibot: bot ma coś do POWIEDZENIA, nie o co zapytać — banerka i
-          // push zamiast karty, która wstrzymuje turę na cztery minuty.
+          // push zamiast karty, która wstrzymuje turę na cztery minuty. To
+          // JEDYNY push poza przypomnieniem, więc jest limitowany: jeden na
+          // bota na 10 minut, nadmiar sklejamy zamiast odmawiać (bot nie ma
+          // czego naprawiać — ma po prostu nie brzęczeć drugi raz).
           case "user.notify": {
-            const title = String(body.title ?? "").trim().slice(0, 120);
-            const text = String(body.body ?? "").trim().slice(0, 400);
-            if (!title) return json(res, 422, { error: "title required" });
-            notifyUser(fromBotId, title, text, "notify");
+            const reason = String(body.reason ?? "").trim().slice(0, 300);
+            if (!reason) return json(res, 422, { error: "reason required" });
+            const bot = store.bot(fromBotId);
+            const name = bot?.name || "Bot";
+            if (!allowNotify(fromBotId)) return json(res, 200, { ok: true, collapsed: true });
+            const wants = t("chce czegoś od Ciebie", "wants something from you");
+            // banerka: „Atlas chce czegoś od Ciebie" / powód
+            // push (tytułem jest nazwa bota): „Atlas" / „chce czegoś od Ciebie: powód"
+            notifyUser(fromBotId, `${name} ${wants}`, reason, "notify", `${wants}: ${reason}`);
             const updated = store.patchBot(fromBotId, { unread: true });
             broadcast({ kind: "bot", bot: updated });
             return json(res, 200, { ok: true });
@@ -5012,6 +5044,55 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const run = routine.last_runs[0];
       if (run?.status === "error") return json(res, 409, { error: run.error, routine: routineView(m[1], routine) });
       return json(res, 200, routineView(m[1], routine));
+    }
+
+    // ── multibot: przypomnienia (jednorazowe) ──────────────────────────
+    // Osobny zasób obok rutyn: własny plik, własny harmonogram, własna lista.
+    // Widoczność idzie po bocie — kto nie widzi bota, nie widzi jego
+    // przypomnień i nie może ich ruszyć.
+    if (path === "/api/reminders" && method === "GET") {
+      return json(res, 200, reminders.list().filter((r) => canReadBot(store.bot(r.botId), actor)));
+    }
+    if (path === "/api/reminders" && method === "POST") {
+      const body = await readBody(req);
+      const botId = String(body.botId ?? "");
+      const bot = store.bot(botId);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      try {
+        const reminder = reminders.create(botId, { text: body.text, at: body.at });
+        broadcast({ kind: "workspace", botId, resource: "reminders" });
+        return json(res, 201, reminder);
+      } catch (error) {
+        return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    m = path.match(/^\/api\/reminders\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      const reminder = reminders.get(m[1]);
+      if (!reminder || !canReadBot(store.bot(reminder.botId), actor)) return json(res, 404, { error: "no such reminder" });
+      reminders.delete(reminder.id);
+      broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/reminders\/([\w-]+)\/snooze$/);
+    if (m && method === "POST") {
+      const reminder = reminders.get(m[1]);
+      if (!reminder || !canReadBot(store.bot(reminder.botId), actor)) return json(res, 404, { error: "no such reminder" });
+      const body = await readBody(req);
+      const minutes = body.minutes === undefined ? SNOOZE_DEFAULT_MIN : Number(body.minutes);
+      try {
+        const moved = reminders.snooze(reminder.id, minutes);
+        broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+        return json(res, 200, moved);
+      } catch (error) {
+        return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/reminders$/);
+    if (m && method === "GET") {
+      const bot = store.bot(m[1]);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, reminders.list(m[1]));
     }
 
     // identity handshake for the packaged app's port fallback: the forked
