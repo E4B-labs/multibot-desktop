@@ -52,6 +52,7 @@ describe("mascot shapes", () => {
     expect(elementTransform(mascotShape("cursor").body)).toBe("translate(210,80)");
     expect(elementTransform(mascotShape("diamond").body)).toBe("rotate(45 114.2705 114.2705)");
     expect(elementTransform(mascotShape("cloud").body)).toBe("translate(0 -2)");
+    expect(elementTransform(mascotShape("hexagon").body)).toBe("translate(0 0)");
     // Reszta zestawu nie ma własnego transformu — cała geometria siedzi w `d`.
     for (const name of ["blob", "circle", "square", "pill", "triangle", "star", "folder", "leaf"]) {
       expect(elementTransform(mascotShape(name).body), name).toBe("");

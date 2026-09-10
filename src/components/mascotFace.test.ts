@@ -54,22 +54,28 @@ describe("statyczna maskotka ma twarz", () => {
 // Poniżej pilnujemy, że morf wrócił i że twarz jedzie razem z nim.
 describe("zmiana kształtu morfuje, nie przeskakuje", () => {
   it("interpoluje sylwetkę przez flubber", () => {
-    expect(blob).toContain("import { interpolate } from 'flubber'");
+    expect(blob).toContain("from 'flubber'");
     // Przerwany morf startuje od ścieżki, która jest NA EKRANIE, nie od kształtu
-    // sprzed poprzedniego kliknięcia.
-    expect(blob).toContain("interpolate(morphRef.current ?? faceDFor(renderedShape), faceDFor(shape))");
+    // sprzed poprzedniego kliknięcia — i wraca, gdy ktoś wybierze ten, z którego
+    // właśnie ucieka, bo inaczej tween zamarzłby w połowie.
+    expect(blob).toContain("morphRef.current ?? faceDFor(renderedShape)");
+    expect(blob).toContain("if (shape.name === renderedShape.name && !morphRef.current) return");
+  });
+
+  // Klatki morfa idą refami, jak każda inna animacja w tym pliku. `setState` na
+  // klatkę przerysowywałby całe wielkie SVG dwadzieścia parę razy na morfa.
+  it("pisze klatki morfa atrybutami, nie stanem", () => {
+    expect(blob).toContain("morphBody.current?.setAttribute('d', d)");
+    expect(blob).toContain("morphClip.current?.setAttribute('d', d)");
+    expect(blob).toContain("anchorLayer.current?.setAttribute('transform', anchorTransform(anchorRef.current))");
+    expect(blob).toContain("lerp(morphFrom.current.x, morphTo.current.x, eased)");
   });
 
   it("rysuje ścieżkę przejściową zamiast osiadłego ciała", () => {
-    expect(blob).toMatch(/morphD \? \(\s*<path d=\{morphD\} fill=\{paint\} \/>/);
+    expect(blob).toContain("<path ref={morphBody} d={morphD} fill={paint} />");
     // Sylwetka i obszar przycięcia muszą iść tą samą ścieżką, inaczej twarz
     // przez pół morfa wystaje poza brzuch.
-    expect(blob).toMatch(/<clipPath key="morph" id=\{`\$\{uid\}-clip`\}>\s*<path d=\{morphD\} \/>/);
-  });
-
-  it("prowadzi kotwicę twarzy z kształtu do kształtu", () => {
-    expect(blob).toContain("lerp(morphFrom.current.x, morphTo.current.x, morphT)");
-    expect(blob).toContain("anchorTransform(anchorNow)");
+    expect(blob).toContain("<path ref={morphClip} d={morphD} />");
   });
 
   // Skasowanie `dangerouslySetInnerHTML` jest w ReactDOM operacją pustą, więc
@@ -79,8 +85,11 @@ describe("zmiana kształtu morfuje, nie przeskakuje", () => {
     expect(blob).toContain('key="settled"');
   });
 
+  // Dwa źródła: przełącznik w aplikacji (`data-motion`, czytany na żywo) i
+  // ustawienie systemu. Sama `useMemo` nie zauważyłaby przestawienia suwaka.
   it("kto prosił o mniej ruchu, dostaje podmianę", () => {
-    expect(blob).toMatch(/if \(prefersReducedMotion\) \{[\s\S]{0,120}setRenderedShape\(shape\)/);
+    expect(blob).toContain("if (prefersReducedMotion || motionIsReduced()) {");
+    expect(blob).toContain("import { motionIsReduced } from '@/lib/motion'");
   });
 });
 

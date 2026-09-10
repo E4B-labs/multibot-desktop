@@ -23,6 +23,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 // multibot: the silhouette morph (see the "shape morph" block below) is the one
 // thing here React alone cannot do — two outlines have to become one tweened path.
 import { interpolate } from 'flubber'
+import { motionIsReduced } from '@/lib/motion'
 
 /* ------------------------------------------------------------------- shape */
 
@@ -2722,62 +2723,86 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
     /*
       multibot: shape changes flow rather than cut.
 
-      `renderedShape` is the settled silhouette; while a morph runs we draw the tweened
-      outline `morphD` in its place and lerp the face anchor from the old shape's to the
-      new one's. Anything flubber refuses (an outline it cannot pair up) falls straight
-      through to the plain swap, which is what this used to do everywhere.
+      `renderedShape` is the settled silhouette. While a morph runs the tweened outline
+      is drawn in its place and the face anchor rides from the old shape's to the new
+      one's. Anything flubber refuses falls straight through to the plain swap, which is
+      what this used to do everywhere.
+
+      Per frame the new `d` and the new anchor go on through refs, the way every other
+      animation in this file writes — `morphing` is one state flip at each end of the
+      morph, not twenty-five re-renders of a large SVG on a phone.
 
       Clicking through the picker interrupts a morph in flight, so the next one starts
-      from the outline actually on screen (`morphRef`) and from the anchor actually in
-      use — otherwise the body pops back to the shape before last on every click.
+      from the outline actually on screen (`morphRef`) and the anchor actually in use —
+      otherwise the body pops back to the shape before last on every click. Picking the
+      shape it is morphing away FROM counts as one of those: without it the tween would
+      simply freeze half-way and stay there.
     */
     const [renderedShape, setRenderedShape] = useState(shape)
-    const [morphD, setMorphD] = useState<string | null>(null)
-    const [morphT, setMorphT] = useState(0)
+    const [morphing, setMorphing] = useState(false)
     const morphRef = useRef<string | null>(null)
-    morphRef.current = morphD
+    const morphBody = useRef<SVGPathElement | null>(null)
+    const morphClip = useRef<SVGPathElement | null>(null)
+    const anchorLayer = useRef<SVGGElement | null>(null)
     const anchorRef = useRef(shape.anchor)
     const morphFrom = useRef(shape.anchor)
     const morphTo = useRef(shape.anchor)
 
     useEffect(() => {
-      if (shape.name === renderedShape.name) return
-      // A morph is motion for its own sake; someone who asked for less gets the swap.
-      if (prefersReducedMotion) {
-        setMorphD(null)
+      if (shape.name === renderedShape.name && !morphRef.current) return
+      const stop = () => {
+        morphRef.current = null
+        setMorphing(false)
         setRenderedShape(shape)
+      }
+      // A morph is motion for its own sake; whoever asked for less gets the swap. Read
+      // live rather than memoised: the in-app switch flips `data-motion` under us.
+      if (prefersReducedMotion || motionIsReduced()) {
+        stop()
         return
       }
-      let tween: ((t: number) => string) | null = null
+      const from = morphRef.current ?? faceDFor(renderedShape)
+      const to = faceDFor(shape)
+      if (!from || !to) {
+        stop()
+        return
+      }
+      let tween: (t: number) => string
       try {
-        // Both outlines already carry the same 221 samples, so re-subdividing them
-        // would only make flubber's pairing more expensive.
-        tween = interpolate(morphRef.current ?? faceDFor(renderedShape), faceDFor(shape))
+        // Both outlines already carry the same 221 samples, roughly 2.7 units apart, so
+        // flubber's own subdivision adds nothing and the default is left alone.
+        tween = interpolate(from, to)
+        morphRef.current = tween(0)
       } catch {
-        setMorphD(null)
-        setRenderedShape(shape)
+        stop()
         return
       }
       morphFrom.current = anchorRef.current
       morphTo.current = shape.anchor
+      setMorphing(true)
       const start = performance.now()
       let frame = 0
-      const settle = () => {
-        setMorphD(null)
-        setRenderedShape(shape)
-      }
       const step = (now: number) => {
         const t = Math.min((now - start) / MORPH_MS, 1)
         const eased = easeInOut(t)
+        let d: string
         try {
-          setMorphD(tween!(eased))
+          d = tween(eased)
         } catch {
-          settle()
+          stop()
           return
         }
-        setMorphT(eased)
+        morphRef.current = d
+        morphBody.current?.setAttribute('d', d)
+        morphClip.current?.setAttribute('d', d)
+        anchorRef.current = {
+          x: lerp(morphFrom.current.x, morphTo.current.x, eased),
+          y: lerp(morphFrom.current.y, morphTo.current.y, eased),
+          scale: lerp(morphFrom.current.scale, morphTo.current.scale, eased),
+        }
+        anchorLayer.current?.setAttribute('transform', anchorTransform(anchorRef.current))
         if (t < 1) frame = requestAnimationFrame(step)
-        else settle()
+        else stop()
       }
       frame = requestAnimationFrame(step)
       return () => cancelAnimationFrame(frame)
@@ -2807,14 +2832,11 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
     const dimension = typeof size === 'number' ? `${size}px` : size
     const label = title === undefined ? `${shape.name} mascot` : title
     const body = renderedShape.body.replace(/\{\{GRADIENT\}\}/g, `url(#${uid}-grad)`)
-    const anchorNow = morphD
-      ? {
-          x: lerp(morphFrom.current.x, morphTo.current.x, morphT),
-          y: lerp(morphFrom.current.y, morphTo.current.y, morphT),
-          scale: lerp(morphFrom.current.scale, morphTo.current.scale, morphT),
-        }
-      : renderedShape.anchor
-    anchorRef.current = anchorNow
+    // Settled, the anchor is the shape's own; mid-morph it is whatever the frame loop
+    // last wrote, so an unrelated re-render does not yank the face back a step.
+    if (!morphing) anchorRef.current = renderedShape.anchor
+    const anchorNow = anchorRef.current
+    const morphD = morphing ? morphRef.current : null
 
     return (
       <svg
@@ -2841,7 +2863,7 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
               would go on being clipped by the shape it is leaving. */}
           {morphD ? (
             <clipPath key="morph" id={`${uid}-clip`}>
-              <path d={morphD} />
+              <path ref={morphClip} d={morphD} />
             </clipPath>
           ) : (
             <clipPath
@@ -2865,12 +2887,12 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
           <g ref={bodyGroup}>
           <g ref={bodyContent}>
           {morphD ? (
-            <path d={morphD} fill={paint} />
+            <path ref={morphBody} d={morphD} fill={paint} />
           ) : (
             <g transform={renderedShape.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} />
           )}
           <g ref={faceLayer} clipPath={`url(#${uid}-clip)`}>
-            <g transform={anchorTransform(anchorNow)}>
+            <g ref={anchorLayer} transform={anchorTransform(anchorNow)}>
               {showFace && (
                 <>
                   <path ref={eye0} fill={eyeColor} />
