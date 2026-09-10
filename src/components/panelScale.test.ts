@@ -14,9 +14,11 @@ const computerPanel = readFileSync(new URL("./ComputerPanel.tsx", import.meta.ur
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("skala prawego panelu i czatu", () => {
-  it("panel jest węższy niż był, a jego szerokość jest jedna", () => {
-    const widths = [...panel.matchAll(/w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
-    expect(widths.length).toBeGreaterThan(0);
+  it("panel jest węższy niż był, a jego szerokość startowa jest jedna", () => {
+    // Od 10.09 szerokość ciągnie się myszą (ResizablePanel), więc sztywnej
+    // klasy `w-[…px]` już nie ma — pilnujemy wartości, od której panel startuje.
+    const widths = [...panel.matchAll(/defaultWidth=\{(\d+)\}/g)].map((m) => Number(m[1]));
+    expect(widths.length).toBe(1);
     for (const width of widths) expect(width).toBeLessThanOrEqual(340);
   });
 

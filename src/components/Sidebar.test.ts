@@ -1,16 +1,19 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Bot } from "@/state/store";
-import { clampSidebarWidth, groupMemberAvatarProps, sidebarAvatarProps, sidebarWidthFromDrag } from "./Sidebar";
+import { clampSidebarWidth, groupMemberAvatarProps, sidebarAvatarProps } from "./Sidebar";
+// Ciągnięcie liczy wspólna mechanika paneli — szyna wnosi tylko swoje domknięcie.
+import { panelWidthFromDrag } from "./ResizablePanel";
 
 const sidebarSource = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
 
 describe("sidebar width", () => {
   it("snaps narrow drag to icon rail and clamps custom width", () => {
     expect(clampSidebarWidth(90)).toBe(80);
-    expect(sidebarWidthFromDrag(240, -80)).toBe(160);
-    expect(sidebarWidthFromDrag(240, -180)).toBe(80);
-    expect(sidebarWidthFromDrag(240, 300)).toBe(420);
+    const drag = (start: number, dx: number) => panelWidthFromDrag(start, dx, "right", clampSidebarWidth);
+    expect(drag(240, -80)).toBe(160);
+    expect(drag(240, -180)).toBe(80);
+    expect(drag(240, 300)).toBe(420);
   });
 });
 

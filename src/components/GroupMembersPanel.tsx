@@ -7,6 +7,7 @@ import { BotAvatar } from "./Avatar";
 import { GROUP_AVATAR_STATE } from "@/lib/mascot";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
+import { SidePanel } from "./ResizablePanel";
 
 export function GroupMembersPanel({ group }: { group: EngineGroup }) {
   const { state, dispatch } = useStore();
@@ -20,7 +21,11 @@ export function GroupMembersPanel({ group }: { group: EngineGroup }) {
     .filter((bot): bot is Bot => Boolean(bot));
 
   return (
-    <aside className="animate-panel-in flex h-full w-[360px] shrink-0 flex-col bg-panel">
+    <SidePanel
+      storageKey="multibot.panelWidth.groupMembers"
+      defaultWidth={360}
+      label={polish ? "Zmień szerokość listy członków" : "Resize members panel"}
+    >
       <div data-shell-header className="flex items-center px-5 py-3">
         <span className="text-[15px] font-semibold text-ink">{polish ? "Członkowie" : "Members"}</span>
       </div>
@@ -68,6 +73,6 @@ export function GroupMembersPanel({ group }: { group: EngineGroup }) {
           {polish ? "Utwórz rutynę" : "Create routine"}
         </button>
       </div>
-    </aside>
+    </SidePanel>
   );
 }

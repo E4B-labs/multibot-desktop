@@ -20,6 +20,7 @@ import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { buildSchedule, isKnownPreset, parseSchedule, PRESETS, type Preset } from "@/lib/routineSchedule";
+import { SidePanel } from "./ResizablePanel";
 
 // Własny helper zamiast `api` ze store: silnik zwraca błędy jako `{detail}`
 // (FastAPI), przelotka jako `{error}` — store'owy helper zgubiłby komunikat
@@ -371,7 +372,12 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
   };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[360px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <SidePanel
+      storageKey="multibot.panelWidth.routines"
+      defaultWidth={360}
+      label={polish ? "Zmień szerokość panelu rutyn" : "Resize routines panel"}
+      className="border-l border-hairline/40"
+    >
       {/* Header */}
       <div data-shell-header className="flex items-center justify-between px-4 py-3">
         <span className="w-[52px]" />
@@ -573,6 +579,6 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
           </div>
         )}
       </div>
-    </aside>
+    </SidePanel>
   );
 }
