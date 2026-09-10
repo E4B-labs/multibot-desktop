@@ -1106,6 +1106,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
+        // multibot: harness stracił logowanie — ramka niesie narzędzie i
+        // gotową treść, a bot i tak parkuje na `needsAttention`, więc
+        // powłoka trzyma to w JEDNYM polu (banerka, pasek boczny, banerka
+        // systemowa czytają je tak samo).
+        case "auth-expired":
+          if (typeof frame.botId === "string" && typeof frame.message === "string") {
+            rawDispatch({ type: "botPatched", bot: { id: frame.botId, needsAttention: frame.message } });
+          }
+          break;
         case "group":
           rawDispatch({ type: "workspaceChanged", botId: "", resource: "groups" });
           break;

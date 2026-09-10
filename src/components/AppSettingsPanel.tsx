@@ -18,6 +18,8 @@ import { authFetch, clearAuthToken } from "@/lib/auth";
 import { canRemember, forgetRemembered } from "@/lib/shell";
 import { languageLabel, setLanguage, useLanguage, type Language } from "@/lib/language";
 import { SkinPicker } from "./SkinPicker";
+// multibot: banerka „logowanie wygasło" prowadzi wprost tutaj
+import { peekCliLoginRequest, takeCliLoginRequest } from "@/lib/cliLogin";
 import { MicrophoneRow } from "./MicrophoneRow";
 import { BotSettingsCard } from "./BotSettingsCard";
 import { Skeleton, Spinner } from "./Loading";
@@ -383,6 +385,10 @@ function CommandLineTools() {
   const [installJob, setInstallJob] = useState<InstallSession | null>(null);
   const [login, setLogin] = useState<LoginSession | null>(null);
   const [loading, setLoading] = useState(true);
+  // multibot: narzędzie bez interaktywnego logowania (`loginAvailable` false)
+  // — pokazujemy komendę do wklejenia w terminalu zamiast okna.
+  const [manualLogin, setManualLogin] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const polish = useLanguage() === "pl";
   const deviceLogin = (() => {
     if (login?.mode !== "device") return null;
@@ -394,7 +400,16 @@ function CommandLineTools() {
   })();
 
   useEffect(() => {
-    void api("/api/cli-tools").then(({ tools }) => setCli(tools)).catch(() => {}).finally(() => setLoading(false));
+    void api("/api/cli-tools").then(({ tools }) => {
+      setCli(tools);
+      // multibot: przyszliśmy z banerki „logowanie wygasło" — okno logowania
+      // tego narzędzia otwiera się samo, bez szukania go w liście.
+      const requested = takeCliLoginRequest();
+      const tool = requested ? (tools as CliRow[]).find((item) => item.id === requested) : undefined;
+      if (!tool) return;
+      if (tool.loginAvailable) void startLogin(tool);
+      else setManualLogin(tool.id);
+    }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   const toggle = (tool: CliRow) => {
@@ -562,6 +577,30 @@ function CommandLineTools() {
                 />
               </div>
             </div>
+            {manualLogin === item.id && (
+              <div className="mx-2 mb-2 rounded-lg bg-inset p-2 text-[11px] text-ink-secondary">
+                {item.loginCommand && (
+                  <>
+                    <div>{polish ? "Zaloguj się w terminalu:" : "Sign in from a terminal:"}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="min-w-0 flex-1 break-all text-ink">{item.loginCommand}</code>
+                      <button
+                        onClick={() => {
+                          // brak schowka (stary WebView) nie może wywalić panelu
+                          void navigator.clipboard?.writeText(item.loginCommand ?? "");
+                          setCopied(true);
+                        }}
+                        className="shrink-0 rounded-md bg-raised px-2 py-1 text-[11px] text-ink hover:bg-raised-hover"
+                      >{copied ? (polish ? "Skopiowano" : "Copied") : (polish ? "Kopiuj" : "Copy")}</button>
+                    </div>
+                  </>
+                )}
+                {item.loginHint && <div className="mt-1">{item.loginHint}</div>}
+                {!item.loginCommand && !item.loginHint && (
+                  <div>{polish ? "To narzędzie nie ma osobnego logowania." : "This tool has no sign-in step."}</div>
+                )}
+              </div>
+            )}
             {installJob?.toolId === item.id && (
               <div className="mx-2 mb-2 rounded-lg bg-inset p-2">
                 <div className="mb-1 text-[11px] text-ink-secondary">
@@ -895,7 +934,10 @@ export function AppSettingsPanel() {
   const { dispatch } = useStore();
   const language = useLanguage();
   const polish = language === "pl";
-  const [tab, setTab] = useState<AppSettingsTab>("general");
+  // multibot: przyjście z banerki „logowanie wygasło" otwiera od razu tę
+  // zakładkę, na której mieszka lista narzędzi CLI — inaczej prośba czekałaby
+  // niezauważona, bo `CommandLineTools` montuje się dopiero tutaj.
+  const [tab, setTab] = useState<AppSettingsTab>(() => (peekCliLoginRequest() ? "other" : "general"));
   // multibot: licznik kliknięć w szynę sekcji. Sam `tab` nie wystarczy —
   // ponowne kliknięcie w już wybraną ikonę nie zmienia stanu, więc animacja
   // nie miałaby czego odtworzyć. Numer idzie do `key`, co przemontowuje

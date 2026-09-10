@@ -46,6 +46,7 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
+import { authFailure, loginExpiredNote } from "./auth-failure.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
@@ -1418,6 +1419,8 @@ function eventVisible(payload: unknown, actor: IdentityActor | null): boolean {
   // multibot: banerka niesie tytuł i treść od bota — prywatny bot nie może jej
   // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`).
   if (event.kind === "notify") return canReadBot(botFor(event.botId), actor);
+  // Ten sam zasięg: prośba o odświeżenie logowania dotyczy KONKRETNEGO bota.
+  if (event.kind === "auth-expired") return canReadBot(botFor(event.botId), actor);
   if (event.kind === "screen" || event.kind === "workspace" || event.kind === "computer") {
     if (event.kind === "screen") return canReadBot(botFor(event.botId), actor);
     return event.kind === "workspace" && event.botId === undefined
@@ -1794,7 +1797,23 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsedTool.delete(event.threadId);
       turnUserText.delete(event.threadId);
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
-      endTurnPush(bot.id, "failed", event.message.slice(0, 120));
+      // multibot: wygasłe logowanie do CLI to nie awaria kodu, tylko robota dla
+      // człowieka — JEDNO miejsce dla wszystkich driverów (server/auth-failure.ts).
+      // Bot parkuje na `needsAttention`, więc jedzie tą samą szyną co pytanie:
+      // push na telefon, banerka na pulpicie, wskaźnik w pasku bocznym.
+      const expired = authFailure(event.message);
+      const expiredTool = expired ? (expired.tool ?? cliToolIdFor(bot)) : null;
+      if (expiredTool) {
+        const note = loginExpiredNote(expiredTool);
+        store.patchBot(bot.id, { needsAttention: note });
+        // `attention` przechodzi bramkę `shouldNotify` także w turze bot-bot:
+        // bez człowieka ta tura i każda następna padnie tak samo.
+        pushForBot(bot.id, "attention", note);
+        turnOrigin.delete(bot.id);
+        broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
+      } else {
+        endTurnPush(bot.id, "failed", event.message.slice(0, 120));
+      }
       // watchdog: provider padl bez turn.completed -> zwolnij busy
       if (bot) {
         store.patchBot(bot.id, { busy: false });
@@ -2936,6 +2955,15 @@ function validBaseUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** multibot: który harness CLI napędza tego bota. `instanceId` bota jest
+ * tożsame z `CLI_TOOLS[].id` (patrz `cliToolsStatus`), więc dopasowanie to
+ * samo sprawdzenie obecności na liście — bot na własnym modelu HTTP nie ma
+ * żadnego logowania do odświeżenia i dostaje `null`. */
+function cliToolIdFor(bot: { modelSelection?: { instanceId?: string } }): string | null {
+  const id = bot.modelSelection?.instanceId;
+  return id && CLI_TOOLS.some((tool) => tool.id === id) ? id : null;
 }
 
 async function cliToolsStatus() {
