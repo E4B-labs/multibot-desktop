@@ -133,7 +133,10 @@ body {
       w punkcie 2 (o margines nakładki za dużo — taniej niż druga stała).
       Tylko od `md`: niżej modal jest wyśrodkowany (`max-h-[85%]`) i do górnej
       krawędzi nie dochodzi. */
-@media (min-width: 768px) {
+@media (width >= 48rem) {
+  /* 48rem, nie 768px: dokładnie to, czym jest `md:` w Tailwindzie 4 (repo nie
+     nadpisuje punktów), więc przy innym rozmiarze czcionki bazowej odstęp
+     pojawia się razem z układem, a nie obok niego. */
   .multibot-frameless [data-shell-overlay-header] { padding-right: 114px; }
 }
 

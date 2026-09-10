@@ -20,8 +20,18 @@ import { describe, expect, it } from "vitest";
 const panel = readFileSync(new URL("./PluginsPanel.tsx", import.meta.url), "utf8");
 const teamMap = readFileSync(new URL("./TeamMapPanel.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-// Nagłówek nakładki: od `data-shell-overlay-header` do końca tego rzędu.
-const header = panel.slice(panel.indexOf("data-shell-overlay-header"), panel.indexOf('placeholder={polish ? "Szukaj'));
+// Nagłówek nakładki: od `data-shell-overlay-header` do pola „Szukaj" pod nim.
+// `cut` pilnuje, żeby zniknięcie któregoś znacznika padło z nazwą tego
+// znacznika, a nie cichym pustym wycinkiem, na którym każde `toContain`
+// przechodzi w drugą stronę.
+function cut(source: string, from: string, to: string): string {
+  const start = source.indexOf(from);
+  const end = source.indexOf(to);
+  if (start < 0) throw new Error(`znacznik "${from}" zniknął ze źródła`);
+  if (end <= start) throw new Error(`znacznik "${to}" nie stoi po "${from}"`);
+  return source.slice(start, end);
+}
+const header = cut(panel, "data-shell-overlay-header", 'placeholder={polish ? "Szukaj');
 
 describe("nakładka na całą powłokę nie jest uchwytem do przeciągania okna", () => {
   it("styles.css zdejmuje region drag z każdej nakładki", () => {
@@ -76,7 +86,7 @@ describe("nagłówek nakładki z wtyczkami", () => {
 });
 
 describe("kręcenie ikoną odświeżania", () => {
-  const load = panel.slice(panel.indexOf("const loadCatalog"), panel.indexOf("// Etykieta konta jedzie"));
+  const load = cut(panel, "const loadCatalog", "// Etykieta konta jedzie");
 
   it("zaczyna się razem z żądaniem i gaśnie dopiero po statusach", () => {
     expect(load).toContain("setRefreshing(true)");
