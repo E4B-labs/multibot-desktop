@@ -21,7 +21,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 // multibot (G3): new ACP harnesses ride the same fake-CLI contract.
 import { KimiAgentDriver, kimiAcpArgs } from "./kimi.ts";
-import { QwenAgentDriver, qwenAcpArgs } from "./qwen.ts";
+import { QwenAgentDriver, qwenAcpArgs, qwenIsAuthenticated } from "./qwen.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -41,6 +41,14 @@ describe("ACP decodeConfig", () => {
     expect(QwenAgentDriver.decodeConfig(undefined)).toEqual({ cli: "qwen", fullAuto: false, workspace: undefined });
     expect(qwenAcpArgs()).toEqual(["--acp"]);
     expect(qwenAcpArgs("qwen3-coder-plus")).toEqual(["--acp", "--model", "qwen3-coder-plus"]);
+  });
+  it("qwen nie uznaje cudzego OPENAI_API_KEY za logowanie", () => {
+    // pusty katalog domowy: żadnego ~/.qwen, więc liczy się samo env
+    const home = mkdtempSync(join(tmpdir(), "mb-qwen-"));
+    expect(qwenIsAuthenticated({ OPENAI_API_KEY: "sk-cudze" }, home)).toBe(false);
+    expect(qwenIsAuthenticated({ QWEN_API_KEY: "sk-sp-x" }, home)).toBe(true);
+    expect(qwenIsAuthenticated({ DASHSCOPE_API_KEY: "sk-x" }, home)).toBe(true);
+    expect(qwenIsAuthenticated({}, home)).toBe(false);
   });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);

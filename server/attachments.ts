@@ -28,8 +28,8 @@ interface StoredAttachment extends AttachmentMeta {
  * Poza Termuksem katalog nie istnieje, lista wychodzi pusta i nic się nie
  * zmienia.
  */
-function prootRoots(): string[] {
-  const prefix = process.env.PREFIX ?? "/data/data/com.termux/files/usr";
+export function prootRoots(prefixOverride?: string): string[] {
+  const prefix = prefixOverride ?? process.env.PREFIX ?? "/data/data/com.termux/files/usr";
   const base = join(prefix, "var", "lib", "proot-distro");
   const roots: string[] = [];
   for (const layout of ["containers", "installed-rootfs"]) {

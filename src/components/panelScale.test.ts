@@ -61,7 +61,8 @@ describe("skala prawego panelu i czatu", () => {
     // nazwa modelu musi zostać w dymku, inaczej nie da się sprawdzić,
     // na czym bot pracuje, bez otwierania listy
     expect(picker).toContain("{!compact && <span");
-    expect(picker).toContain("aria-label={activeLabel || selection.model}");
+    // nazwa zostaje pierwsza, a brak logowania/CLI dokleja się za myślnikiem
+    expect(picker).toContain('aria-label={[activeLabel || selection.model, activeNote].filter(Boolean).join(" — ")}');
   });
 
   it("OpenCode ma jedną ikonę, grupy Go/Zen i formularz klucza", () => {
@@ -80,10 +81,12 @@ describe("skala prawego panelu i czatu", () => {
     // klucz przygasza wiersz, ale go nie blokuje — klik otwiera pole klucza
     expect(picker).toContain("wymaga wspólnego klucza OpenCode Go");
     expect(picker).toContain("<KeyRound size={12}");
-    expect(picker).toContain('!disabled && opts.needsKey && "opacity-60"');
-    // powód siedzi na całym wierszu: niedostępność albo brakujący klucz
-    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : opts.needsKey ? keyHint : undefined}");
-    expect(picker).toContain('role="img" aria-label={keyHint}');
+    // brakujący klucz ORAZ niezalogowany CLI przygaszają ten sam wiersz
+    expect(picker).toContain('!disabled && dimmed && "opacity-60"');
+    expect(picker).toContain('const dimmed = gate === "signin" || Boolean(opts.needsKey);');
+    // powód siedzi na całym wierszu: niedostępność, brak logowania albo brakujący klucz
+    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : hint}");
+    expect(picker).toContain('role="img" aria-label={hint}');
     // licznik grupy z jednostką, nie goła liczba
     expect(picker).toContain('{group.options.length} {polish ? "modeli" : "models"}');
   });

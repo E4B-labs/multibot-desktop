@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { DATA_DIR } from "../config.ts";
 import { augmentedPath, resolveCliSpawn } from "../env-path.ts";
+import { prootRoots } from "../attachments.ts";
 // multibot (F7): wspólny montaż mcpServers (Composio + własne konektory).
 import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
@@ -36,6 +37,29 @@ import { appendNative } from "./native.ts";
 import { historyBlock } from "./history.ts";
 
 const DRIVER_KIND = "claudeAgent";
+
+// Gdzie może leżeć `.credentials.json` claude'a. Na Termuxie `claude` to shim
+// (`proot-distro login debian -- …`), więc plik siedzi w rootfs kontenera pod
+// `/root`, a nie w HOME harnessu. Ścieżka do korzenia zmienia się między
+// wersjami proot-distro — kod znał tylko starszy układ (`installed-rootfs/debian`),
+// więc na telefonie Kacpra (nowszy `containers/debian/rootfs`, plik OBECNY)
+// claude meldował się jako NIEZALOGOWANY. `prootRoots()` z attachments.ts zna
+// oba układy i jest tam dokładnie po to; nie powtarzamy tej wiedzy drugi raz.
+export function claudeCredentialPaths(
+  env: Record<string, string | undefined> = process.env,
+  prefixOverride?: string,
+): string[] {
+  const configDir = env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude");
+  return [
+    join(configDir, ".credentials.json"),
+    ...prootRoots(prefixOverride ?? env.PREFIX).map((root) => join(root, "root", ".claude", ".credentials.json")),
+  ];
+}
+
+// Klucz w środowisku to też zalogowanie — tak chodzi CLIProxyAPI i każdy
+// własny endpoint (`ANTHROPIC_BASE_URL`), gdzie żadnego `.credentials.json` nie ma.
+export const claudeIsAuthenticated = (env: Record<string, string | undefined> = process.env): boolean =>
+  Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) || claudeCredentialPaths(env).some(existsSync);
 
 export interface ClaudeConfig {
   cli: string;
@@ -811,13 +835,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const termuxRoot = process.env.PREFIX
-        ? join(process.env.PREFIX, "var", "lib", "proot-distro", "installed-rootfs", "debian", "root")
-        : null;
-      const authenticated = [
-        join(homedir(), ".claude", ".credentials.json"),
-        ...(termuxRoot ? [join(termuxRoot, ".claude", ".credentials.json")] : []),
-      ].some(existsSync);
+      const authenticated = claudeIsAuthenticated();
       return { state: "available", version, authenticated };
     };
 
