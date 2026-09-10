@@ -359,10 +359,20 @@ export function botSystemPrompt(
     // search pokazuje namespaces, nie pojedyncze narzędzia).
     computer &&
       "To open a URL call navigate(url) — prefer it over shell commands. The shell tools you may also have (bash, exec_command, run_command) run on the HOST machine, never inside your computer; for anything on the computer use only the computer tools listed for you above. If a computer tool is not visible, search for it in the mcp__computer tool namespace.",
-    // multibot: zdanie o komputerze jest warunkowe razem z blokiem wyżej —
-    // obiecywanie `browser_navigate` botowi bez zamontowanego komputera każe mu
-    // szukać narzędzi, których nie dostał.
-    `Web search and fetch — you have \`web_search(query)\` to search the internet and \`web_extract(url)\` to fetch and read a page (this is your \`fetch\`). Use them for any question needing current information, documentation, or URL content.${computer ? " If you need to interact with the page, use your computer's `browser_navigate`/`browser_snapshot` etc. instead of saying you cannot browse." : ""} Budget ~25 tool steps: try web search${computer ? ", then computer," : ","} then CLI tools; say what blocked you only after all are exhausted.`,
+    // multibot: „użyj komputera, wejdź na youtube" kończyło się opowiadaniem —
+    // model pisał, co ZROBI, i na końcu twierdził, że film jest otwarty, choć
+    // nie padło ani jedno wywołanie. Zmierzone (D:\tmp\mb-cu-evidence): z
+    // zamontowanym komputerem model woła narzędzia sam, więc regułą, której
+    // brakowało, jest ta jedna: relacja bez wyniku narzędzia to kłamstwo.
+    computer &&
+      "Act, do not narrate. \"Use your computer\", \"open the browser\", \"go to <site>\" is an instruction to CALL a computer tool in THIS turn — navigate/read_page/find/click/actions — not to describe what you would do. Say what you did only AFTER the tool answered, and only what its answer says. Never claim you opened a page, clicked something, played a video or logged in unless a computer tool call returned a result showing it. If a computer tool returns an error or you do not have it, quote that error and say the computer is unavailable — never fill the gap with a story.",
+    // multibot: bot BEZ komputera nie dostawał o nim ani słowa, więc na „użyj
+    // komputera" wymyślał sesję przeglądania, której nie było (zmierzone:
+    // probe-before-nocomputer, zero wywołań, „YouTube MrBeast video open").
+    // Blok jest lustrem tego wyżej: brak narzędzia też trzeba nazwać.
+    !computer &&
+      "You have NO computer this turn — no browser, no screen, no shell inside a computer, and no computer tools in your tool list. If the user asks you to use the computer, open a browser or go to a site, say plainly that the computer is not available to you this turn and offer `web_search`/`web_extract` instead. Never describe browsing, clicking or playing anything: an action you cannot take is one you must not report.",
+    `Web search and fetch — you have \`web_search(query)\` to search the internet and \`web_extract(url)\` to fetch and read a page (this is your \`fetch\`). Use them for any question needing current information, documentation, or URL content.${computer ? " If you need to interact with the page, use your computer's `navigate`/`read_page` etc. instead of saying you cannot browse." : ""} Budget ~25 tool steps: try web search${computer ? ", then computer," : ","} then CLI tools; say what blocked you only after all are exhausted.`,
     integrations.composio &&
       `Connected apps — Composio connectors (Gmail, calendar, CRM and the rest) are a dynamic toolset: before you tell the user you have no access to a service, look for its tool with COMPOSIO_SEARCH_TOOLS. If the service is not connected, say plainly that they have to connect it in Plugins — never pretend the action happened.${bot.composioAccounts && Object.keys(bot.composioAccounts).length ? ` This bot's selected connected accounts are ${JSON.stringify(bot.composioAccounts)}; pass matching connected_account_id when a Composio tool supports it.` : ""}`,
     agents &&
