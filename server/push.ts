@@ -1,6 +1,6 @@
-// multibot (U28): powiadomienia push na telefon. Od 10.09.2026 jedynym
-// automatycznym pushem jest PRZYPOMNIENIE, a jedynym wyjątkiem narzędzie
-// `notify_user` — bramkę trzyma `shouldNotify` niżej.
+// multibot (U28): powiadomienia push na telefon. Telefon brzęczy tylko wtedy,
+// gdy bot CZEGOŚ CHCE od człowieka albo człowiek sam o to poprosił — bramkę
+// trzyma `shouldNotify` niżej.
 // Tokeny Expo trzymamy w configu (`pushDevices`); wysyłka
 // idzie przez exp.host — Expo nie wymaga uwierzytelnienia dla tokenów, które
 // sam wydał, więc żadnego klucza ani pakietu tu nie ma (chyba że projekt ma
@@ -14,22 +14,42 @@ import { loadConfig, saveConfig, type AppConfig, type PushDevice } from "./confi
 export type PushKind =
   | "question" | "handoff" | "approval" | "started"
   | "finished" | "failed" | "attention" | "reminder" | "notify";
+/** Bot stoi i CZEKA na człowieka: pytanie (`ask_user`), zgoda na akcję,
+ *  przekazanie komputera, prośba o sekret, wygasłe logowanie do CLI. To jest
+ *  baseline Grok Bota — „only come back when something needs your approval". */
+const WANTS_USER: readonly PushKind[] = ["question", "handoff", "approval", "attention"];
+/** O te dwa poprosił człowiek (przypomnienie) albo sam bot narzędziem
+ *  `notify_user` (limitowanym przez `allowNotify`). */
+const ASKED_FOR: readonly PushKind[] = ["reminder", "notify"];
 /**
- * JEDNA reguła „czy to w ogóle leci na telefon" (Kacper, 10.09.2026).
+ * JEDNA reguła „czy to w ogóle leci na telefon" (Kacper, K4, 11.09.2026).
  *
- * Telefon brzęczy WYŁĄCZNIE od przypomnień, o które człowiek sam poprosił.
- * Koniec tury, odpowiedź bota, `needsAttention`, gadanie botów w grupie i w
- * pokoju — wszystko to zostaje w apce: lista i znaczniki w interfejsie bez
- * zmian, ale bez pusha. Jedyny wyjątek to `notify_user`: narzędzie, którym bot
- * sam decyduje, że sprawa nie może poczekać (limitowane przez `allowNotify`).
+ * Brzęczy tylko to, na co człowiek ma ODPOWIEDZIEĆ, plus to, o co sam poprosił.
+ * Cykl życia tury — `started`, `finished`, `failed` — milczy ZAWSZE, i to
+ * właśnie dlatego **rutyna nie powiadamia o każdym przebiegu**: rutyna, która
+ * po cichu zrobiła swoje, kończy się `finished` i nie budzi telefonu. Rutyna,
+ * która o coś PYTA albo zawoła `notify_user`, budzi — bo wtedy praca stanęła
+ * na człowieku.
  *
- * Pochodzenie tury (`origin`) przestało cokolwiek zmieniać, więc go tu nie ma —
- * rodzaj zdarzenia rozstrzyga sam.
+ * Dlatego bramka nie potrzebuje pochodzenia tury (`origin`): rodzaj zdarzenia
+ * rozstrzyga sam, a tury bot↔bot odcina wcześniej `endTurnPush` w
+ * `server/index.ts`. Karta w turze izolowanej (grupa, pokój) brzęczy celowo —
+ * o odpowiedź prosi człowieka, nie drugiego bota.
  */
-const PUSHES = new Set<PushKind>(["reminder", "notify"]);
+const PUSHES = new Set<PushKind>([...WANTS_USER, ...ASKED_FOR]);
 
 export function shouldNotify(kind: PushKind): boolean {
   return PUSHES.has(kind);
+}
+
+/** Android grupuje powiadomienia po kanale, więc kanał niesie RODZAJ sprawy:
+ *  osobno to, na co trzeba odpowiedzieć, osobno przypomnienia. Dzięki temu da
+ *  się wyciszyć jedno bez drugiego w ustawieniach Androida. Kanału, którego
+ *  aplikacja nie założyła, Expo nie zgubi — podmienia go na swój zapasowy
+ *  (IMPORTANCE_HIGH), więc starsze APK dostają powiadomienie tak jak dotąd. */
+export function channelForKind(kind: PushKind | undefined): string {
+  if (kind === "reminder") return "reminders";
+  return kind && PUSHES.has(kind) ? "asks" : ANDROID_CHANNEL;
 }
 
 /** Bramka antyspamowa dla `notify_user`: jeden push na bota na 10 minut.
@@ -106,7 +126,9 @@ export async function notifyPushDevices(
       title,
       body,
       priority: PRIORITY,
-      channelId: ANDROID_CHANNEL,
+      // kanał niesie rodzaj sprawy (`channelForKind`); `data.kind` ustawia
+      // `pushForBot`, a wywołania bez niego zostają na kanale domyślnym
+      channelId: channelForKind(data?.kind as PushKind | undefined),
       sound: "default",
       ttl,
       ...(data ? { data } : {}),
