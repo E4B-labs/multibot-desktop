@@ -213,11 +213,19 @@ function ProfileFooterButton() {
         <div
           role="dialog"
           aria-label={polish ? "Zdjęcie profilowe" : "Profile photo"}
-          className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-hairline/40 bg-card p-3 shadow-xl"
+          // Kwadrat z zaokrąglonymi rogami: bok 240 px (w-60 + aspect-square)
+          // dobrany tak, by oba stany awatara (bez zdjęcia i ze zdjęciem +
+          // „Usuń zdjęcie") mieściły się bez ucinania; treść wyśrodkowana.
+          // Cropper potrzebuje 220 px podglądu, więc na czas kadrowania
+          // panel wraca do szerokości w-72 bez wymuszania kwadratu.
+          className={cn(
+            "absolute bottom-full left-0 z-50 mb-2 rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl",
+            pendingFile ? "w-72" : "w-60 aspect-square",
+          )}
         >
           {!pendingFile ? (
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-full text-[12px] font-medium text-ink-secondary">
+            <div className="flex h-full flex-col items-center justify-center gap-3">
+              <div className="w-full text-center text-[12px] font-medium text-ink-secondary">
                 {polish ? "Zdjęcie profilowe" : "Profile photo"}
               </div>
               {avatar ? (

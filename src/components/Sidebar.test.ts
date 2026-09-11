@@ -79,6 +79,13 @@ describe("sidebar footer alignment", () => {
     expect(profileButton).toContain('"/api/profile/avatar", { method: "DELETE"');
     // popover nad stopką, zakotwiczony przy przycisku — nie centralny modal
     expect(profileButton).toContain("absolute bottom-full left-0");
+    // kwadrat 240 px z zaokrąglonymi rogami w widoku awatara; przy kadrowaniu
+    // wraca do w-72, bo podgląd croppera ma 220 px szerokości
+    expect(profileButton).toContain('pendingFile ? "w-72" : "w-60 aspect-square"');
+    expect(profileButton).toContain("rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl");
+    // treść wyśrodkowana w pionie i poziomie wewnątrz kwadratu
+    expect(profileButton).toContain('"flex h-full flex-col items-center justify-center gap-3"');
+    expect(profileButton).toContain("w-full text-center text-[12px]");
   });
 });
 
