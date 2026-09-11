@@ -229,6 +229,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
           windowsVerbatimArguments: cli.windowsVerbatimArguments,
           detached: true,
         });
@@ -579,7 +580,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           execFile(
             cli.command,
             cli.args,
-            { timeout: 8000, env, windowsVerbatimArguments: cli.windowsVerbatimArguments },
+            { timeout: 8000, env, windowsHide: true, windowsVerbatimArguments: cli.windowsVerbatimArguments },
             (err, stdout) => resolve(err ? null : stdout.trim()),
           );
         });

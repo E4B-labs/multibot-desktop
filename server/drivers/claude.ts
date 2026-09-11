@@ -518,7 +518,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         if (turn.system) launchArgs.push("--append-system-prompt", turn.system);
         const cli = cliSpawn(config.cli, launchArgs);
         const child = spawn(cli.command, cli.args, {
-          cwd: turn.cwd ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"],
+          cwd: turn.cwd ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
           windowsVerbatimArguments: cli.windowsVerbatimArguments, detached: true,
         });
         const fresh: Worker = { child, signature, sessionId, needsReplay: resume === null, buffer: "", stderr: "", system: turn.system ?? "", lastUsed: ++useSeq };
@@ -845,6 +845,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           {
             timeout: 8000,
             env: { ...process.env, PATH: augmentedPath() },
+            windowsHide: true,
             windowsVerbatimArguments: cli.windowsVerbatimArguments,
           },
           (err, stdout) => resolve(err ? null : stdout.trim()),
@@ -898,6 +899,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             {
               timeout: 60_000,
               env: { ...process.env, PATH: augmentedPath() },
+              windowsHide: true,
               windowsVerbatimArguments: cli.windowsVerbatimArguments,
             },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),

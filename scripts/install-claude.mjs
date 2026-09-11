@@ -19,7 +19,7 @@ function run(command, args, options = {}) {
   say(`$ ${line}`);
   if (dryRun) return Promise.resolve(0);
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: "inherit", shell: false, ...options });
+    const child = spawn(command, args, { stdio: "inherit", shell: false, windowsHide: true, ...options });
     child.once("error", (error) => {
       say(`${line}: ${error.message}`);
       resolve(1);
@@ -33,6 +33,7 @@ function capture(command, args, options = {}) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
+    windowsHide: true,
     ...options,
   });
   return {

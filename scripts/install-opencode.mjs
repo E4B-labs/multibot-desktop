@@ -22,7 +22,7 @@ function run(command, args, options = {}) {
   say(`$ ${[command, ...args].join(" ")}`);
   if (dryRun) return Promise.resolve(0);
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: "inherit", shell: false, ...options });
+    const child = spawn(command, args, { stdio: "inherit", shell: false, windowsHide: true, ...options });
     child.once("error", (error) => { say(error.message); resolve(1); });
     child.once("exit", (code) => resolve(code ?? 1));
   });
@@ -30,7 +30,7 @@ function run(command, args, options = {}) {
 
 function capture(command, args) {
   const result = spawnSync(command, args, {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: false,
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
     env: { ...process.env, PATH: [join(homedir(), ".local", "bin"), process.env.PATH ?? ""].filter(Boolean).join(process.platform === "win32" ? ";" : ":") },
   });
   return { code: result.error ? 1 : result.status ?? 1, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
@@ -65,7 +65,7 @@ async function fetchAlpineRuntime(into) {
     writeFileSync(apk, Buffer.from(body));
     // apk = concatenated gzip streams; tar unpacks the payload and then trips
     // on the signature stream, so its exit code is not a failure signal here.
-    spawnSync("tar", ["xzf", apk], { cwd: into, stdio: "ignore" });
+    spawnSync("tar", ["xzf", apk], { cwd: into, stdio: "ignore", windowsHide: true });
   }
   mkdirSync(muslLib, { recursive: true });
   for (const dir of [join(into, "lib"), join(into, "usr", "lib")]) {

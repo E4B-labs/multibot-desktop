@@ -71,7 +71,7 @@ mkdirSync(tmp, { recursive: true });
 writeFileSync(resolve(tmp, ARCHIVE), tarball);
 // cwd + a bare filename, never `-C <abs>`: a Windows path with backslashes is
 // mangled by the MSYS tar that Git for Windows puts on PATH.
-execFileSync("tar", ["-xzf", ARCHIVE], { cwd: tmp, stdio: "inherit" });
+execFileSync("tar", ["-xzf", ARCHIVE], { cwd: tmp, stdio: "inherit", windowsHide: true });
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });

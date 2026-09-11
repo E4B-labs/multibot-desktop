@@ -291,6 +291,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
         windowsVerbatimArguments: cli.windowsVerbatimArguments,
         detached: true,
       });
@@ -735,6 +736,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           {
             timeout: 8000,
             env: { ...process.env, PATH: augmentedPath() },
+            windowsHide: true,
             windowsVerbatimArguments: cli.windowsVerbatimArguments,
           },
           // `exited` = CLI naprawdę doszedł do końca i oddał kod wyjścia.

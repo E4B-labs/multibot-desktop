@@ -12,6 +12,7 @@ describe("Windows one-command server installer", () => {
     const packagedExe = join(localAppData, "Programs", "MultiBot", "MultiBot.exe");
     const result = spawnSync(process.execPath, [join(process.cwd(), "scripts", "install-server-windows.mjs"), "--dry-run", "--json", "--app", packagedExe], {
       encoding: "utf8",
+      windowsHide: true,
       env: { ...process.env, USERPROFILE: home, HOME: home, LOCALAPPDATA: localAppData, TMP: "D:\\tmp", TEMP: "D:\\tmp" },
     });
 

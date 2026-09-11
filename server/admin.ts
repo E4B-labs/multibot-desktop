@@ -126,7 +126,7 @@ export function gpuInfo(now = Date.now(), binary = "nvidia-smi"): Promise<GpuInf
     execFile(
       cli.command,
       cli.args,
-      { timeout: 1_000, windowsVerbatimArguments: cli.windowsVerbatimArguments, env: { ...process.env, PATH: augmentedPath() } },
+      { timeout: 1_000, windowsHide: true, windowsVerbatimArguments: cli.windowsVerbatimArguments, env: { ...process.env, PATH: augmentedPath() } },
       (error, stdout) => {
         if (error) return resolve(null);
         const rows = String(stdout).trim().split(/\r?\n/).map(parseGpuRow).filter((row): row is GpuInfo => row !== null);

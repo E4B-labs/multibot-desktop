@@ -4159,7 +4159,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const command = String(body.command ?? "").trim();
             const args = Array.isArray(body.args) ? body.args.map(String) : [];
             if (!command) return json(res, 422, { error: "command required" });
-            const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun) => execFile(command, args, { cwd: String(body.cwd ?? ROOT), timeout: 120_000, maxBuffer: 2_000_000 }, (error, stdout, stderr) => resolveRun({ code: error ? (error as any).code ?? 1 : 0, stdout, stderr })));
+            const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun) => execFile(command, args, { cwd: String(body.cwd ?? ROOT), timeout: 120_000, maxBuffer: 2_000_000, windowsHide: true },(error, stdout, stderr) => resolveRun({ code: error ? (error as any).code ?? 1 : 0, stdout, stderr })));
             return json(res, 200, result);
           }
           default: return json(res, 404, { error: `unknown agent action: ${action}` });

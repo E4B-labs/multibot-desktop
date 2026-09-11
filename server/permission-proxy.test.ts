@@ -125,7 +125,7 @@ describe.skipIf(!posix)("permission-proxy", () => {
     const socketPath = join(home, "perm-test.sock");
 
     server = await broker(socketPath);
-    child = spawn(process.execPath, [PROXY, socketPath], { stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(process.execPath, [PROXY, socketPath], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
 
     // tura 1: zgoda przechodzi
     expect(await approve(child, 1)).toContain('"behavior":"allow"');
@@ -141,7 +141,7 @@ describe.skipIf(!posix)("permission-proxy", () => {
 
   it("denies instead of hanging when no broker is listening at all", async () => {
     home = mkdtempSync(join(tmpdir(), "multibot-proxy-"));
-    child = spawn(process.execPath, [PROXY, join(home, "nie-ma.sock")], { stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(process.execPath, [PROXY, join(home, "nie-ma.sock")], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     expect(await approve(child, 1)).toContain("broker unavailable");
   }, 30_000);
 });

@@ -25,7 +25,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-const run = promisify(execFile);
+const runRaw = promisify(execFile);
+// windowsHide: bez tego każde wywołanie docker/bash miga oknem konsoli na
+// Windowsie (no-op na innych platformach).
+const run = (file: string, args: string[], options: { timeout?: number; maxBuffer?: number } = {}) =>
+  runRaw(file, args, { windowsHide: true, ...options });
 
 /** Ports the image serves. cdp drives the browser over the DevTools protocol;
  *  novnc is the screen the user sees and takes over; api is cua's

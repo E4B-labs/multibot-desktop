@@ -15,7 +15,7 @@ export function killTree(child: ChildProcess): void {
   const pid = child.pid;
   if (!pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
-    execFile("taskkill", ["/T", "/F", "/PID", String(pid)], (err) => {
+    execFile("taskkill", ["/T", "/F", "/PID", String(pid)], { windowsHide: true }, (err) => {
       if (!err) return;
       try {
         child.kill(); // taskkill unavailable or already gone — at least the CLI

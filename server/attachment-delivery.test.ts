@@ -33,7 +33,7 @@ beforeAll(async () => {
       FAKE_ACP_MODE: "send-files", FAKE_ATTACHMENT_CALLS: join(home, "calls.json"), FAKE_ATTACHMENT_RESULTS: join(home, "results.json"),
     } },
   } }));
-  child = spawn(process.execPath, [join(root, "server/index.ts")], { cwd: root, env: {
+  child = spawn(process.execPath, [join(root, "server/index.ts")], { windowsHide: true, cwd: root, env: {
     PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: home, USERPROFILE: home,
     MULTIBOT_PORT: new URL(base).port, MULTIBOT_HOST: "127.0.0.1", MULTIBOT_COMPUTER: "off",
     MULTIBOT_AUTO_UPDATE: "0", MULTIBOT_ONBOARDING_TURN: "0", MULTIBOT_TURN_DEBOUNCE_MS: "1",

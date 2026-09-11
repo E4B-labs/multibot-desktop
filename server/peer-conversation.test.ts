@@ -70,7 +70,7 @@ async function boot(
     // Per-attempt buffer: a late line from a dead child must not pollute the
     // next attempt's EACCES check.
     const log: string[] = [];
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
       cwd: join(SERVER_DIR, ".."),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),

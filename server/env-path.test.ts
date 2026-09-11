@@ -62,7 +62,7 @@ describe("augmentedPath", () => {
         "multibot-fake-cli",
         [],
         // bare GUI-style PATH + our augmentation — the augmentation must win
-        { env: { PATH: augmentedPath() } },
+        { env: { PATH: augmentedPath() }, windowsHide: true },
         (err, out) => (err ? reject(err) : resolve(out)),
       );
     });
@@ -159,7 +159,7 @@ winOnly("resolveCliSpawn (Windows)", () => {
     expect(r.windowsVerbatimArguments).toBeUndefined();
 
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+      execFile(r.command, r.args, { windowsHide: true }, (err, out) => (err ? reject(err) : resolve(out))),
     );
     expect(stdout.trim()).toBe("js target -p,hi");
   });
@@ -179,7 +179,7 @@ winOnly("resolveCliSpawn (Windows)", () => {
     expect(r.args).toEqual([script, "a", "b"]);
 
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+      execFile(r.command, r.args, { windowsHide: true }, (err, out) => (err ? reject(err) : resolve(out))),
     );
     expect(stdout.trim()).toBe("shebang a,b");
   });
@@ -208,7 +208,7 @@ winOnly("resolveCliSpawn (Windows)", () => {
     expect(r.command.toLowerCase()).toMatch(/cmd\.exe$/);
 
     await new Promise<void>((resolve, reject) =>
-      execFile(r.command, r.args, { windowsVerbatimArguments: true }, (err) => (err ? reject(err) : resolve())),
+      execFile(r.command, r.args, { windowsVerbatimArguments: true, windowsHide: true }, (err) => (err ? reject(err) : resolve())),
     );
     expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(["--mcp-config", payload]);
   });

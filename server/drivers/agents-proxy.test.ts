@@ -145,7 +145,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => stub.listen(0, "127.0.0.1", r));
   stubPort = (stub.address() as { port: number }).port;
 
-  child = spawn(process.execPath, [PROXY], {
+  child = spawn(process.execPath, [PROXY], { windowsHide: true,
     env: {
       MULTIBOT_COMPUTER: "off",
       ...process.env,

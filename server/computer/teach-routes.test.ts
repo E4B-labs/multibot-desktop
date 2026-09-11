@@ -42,7 +42,7 @@ beforeAll(async () => {
   mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(join(home, ".multibot", "config.json"), JSON.stringify({}));
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),

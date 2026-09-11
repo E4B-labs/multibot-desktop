@@ -95,7 +95,7 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
       }),
     );
 
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
       cwd: join(SERVER_DIR, ".."),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),

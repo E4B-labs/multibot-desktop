@@ -79,7 +79,7 @@ function probeLoginShellPath(): void {
   execFile(
     shell,
     ["-l", "-i", "-c", 'printf "__MULTIBOT_PATH__%s" "$PATH"'],
-    { timeout: 5000 },
+    { timeout: 5000, windowsHide: true },
     (err, stdout) => {
       if (err || !stdout) return;
       const m = /__MULTIBOT_PATH__([^\n]*)/.exec(stdout);

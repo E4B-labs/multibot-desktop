@@ -10,7 +10,7 @@ const script = fileURLToPath(new URL("../scripts/selfhost-check.mjs", import.met
 
 describe("self-host install paths", () => {
   it("passes the structural check without starting anything", () => {
-    const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, [script], { encoding: "utf8", windowsHide: true });
     // Status first: the checker reports its failure on stderr, and asserting the
     // output first would hide the message that says which install path broke.
     expect(result.status, result.stderr).toBe(0);
