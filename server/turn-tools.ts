@@ -156,7 +156,7 @@ export function turnToolsText(integrations: TurnIntegrationsLike | undefined): s
     // a użytkownik nie ma jak jej otworzyć z czatu. To zdanie jest jedynym
     // miejscem, w którym pada, że ścieżka nie jest dostarczeniem.
     lines.push(
-      "When you produce a file for the user — a report, an export, a document, a generated artifact — deliver it with `send_file`. A path on disk, a filename or a link is NOT delivery: the user cannot open it from the chat. Write the file, then call `send_file` with its `path` in the same turn. Never base64 a file through your shell output — that output is capped and truncates silently.",
+      "When you produce a file for the user — a report, an export, an image, a document, any generated artifact — deliver it with `send_file`. A path on disk, a filename or a link is NOT delivery: the user cannot open it from the chat. Content you are WRITING YOURSELF goes straight into `send_file` as `content_base64` — do not save it to disk first, that only costs you an approval you do not need. Use `path` only for a file that already exists. Always set `mime` (`image/png`, `text/csv`, `text/html`…) or the chat cannot preview it. Never say a file is sent unless `send_file` returned success in this turn; if it failed, say so.",
     );
   }
   if (integrations.composio) {

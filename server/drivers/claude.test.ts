@@ -571,6 +571,40 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  // Regresja (K6, zmierzone 11.09.2026 na żywym haiku): bot obiecał „wysyłam
+  // trzy pliki", zawołał `Write`, watchdog zdjął turę, a kolejne prośby o
+  // zgodę (drugi `Write`, `PowerShell`) trafiały na `worker.current ===
+  // undefined` i były PORZUCANE bez odpowiedzi. CLI wisiało na nich 15 minut,
+  // a użytkownik nie zobaczył ani karty, ani plików, ani odmowy — stąd „boty
+  // twierdzą, że wysyłają". Broker zostaje ciepły po turze, więc ta droga
+  // zdarza się naprawdę.
+  it("denies a permission ask that arrives after the turn is gone instead of dropping it", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+    // Tura znika, worker (i jego broker) zostaje ciepły — jak po watchdogu.
+    await instance.adapter.interruptTurn("t-perm-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const conn = connect(permissionSocketPath("t-perm-late"));
+    const answered = new Promise<{ behavior: string; message?: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-late", tool: "Write", input: { file_path: "report.csv" } }) + "\n");
+
+    expect(await answered).toMatchObject({ behavior: "deny", message: expect.stringContaining("turn is already over") });
+    conn.end();
+  });
+
   it("rejects answers to unknown or already-resolved asks", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-perm-2", text: "go" });
