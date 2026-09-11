@@ -376,6 +376,7 @@ function armBusyWatchdog(botId: string): void {
       turnUserText.delete(b.threadId);
       // multibot: turę ubił watchdog, nie model — spóźnione `turn.completed`
       // nie ma zostawiać znacznika „bot nic nie napisał" ani pushować końca.
+      harnessRoutines.settleRun(botId, { reason: "watchdog" });
       turnOrigin.delete(botId);
       releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
       broadcast({ kind: "bot", bot: store.bot(botId) });
@@ -1654,6 +1655,12 @@ const turnToldUser = new Set<string>();
 function endTurnPush(botId: string, kind: "finished" | "failed", body: string): void {
   const origin = turnOrigin.get(botId);
   if (!origin || origin === "bot") { turnOrigin.delete(botId); return; }
+  // Wynik przebiegu rutyny znamy DOPIERO tu: `dispatch` rutyny tylko kolejkuje
+  // turę, więc historia znała samo „w kolejce" (server/routines.ts). POD bramką
+  // i tylko dla tury rutyny: spóźnione `turn.completed` tury ubitej watchdogiem
+  // (ten czyści `turnOrigin`) nie ma prawa zamknąć wpisu NASTĘPNEGO przebiegu
+  // fałszywym „ok" — dokładnie jak reszta sprzątania końca tury.
+  if (origin === "routine") harnessRoutines.settleRun(botId, kind === "failed" ? body : null);
   pushForBot(botId, kind, body);
   turnOrigin.delete(botId);
 }
@@ -1984,6 +1991,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // bez człowieka ta tura i każda następna padnie tak samo. Powtórka
         // tej samej prośby już nie brzęczy.
         if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
+        harnessRoutines.settleRun(bot.id, { reason: "login-expired" }); // ta gałąź omija `endTurnPush`
         turnOrigin.delete(bot.id);
         broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
         // multibot: karta w transkrypcie z przyciskiem „Odśwież logowanie" —
@@ -3029,6 +3037,9 @@ function groupVisible(group: { bot_ids: string[] }, actor: IdentityActor | null)
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  // Tury giną tu bez `turn.completed`, więc nikt już nie domknie przebiegów
+  // rutyn, które na nie czekały — inaczej wisiałyby `queued` do restartu.
+  harnessRoutines.abandonPendingRuns();
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
@@ -5034,6 +5045,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       turnUserText.delete(bot.threadId);
       // multibot: przerwanie to decyzja człowieka — brak tekstu w takiej turze
       // nie jest ciszą modelu i nie dostaje znacznika ani powiadomienia.
+      harnessRoutines.settleRun(bot.id, { reason: "interrupted" });
       turnOrigin.delete(bot.id);
       stopScreenPoller(bot.id);
       releaseTurnSlot(bot.id);

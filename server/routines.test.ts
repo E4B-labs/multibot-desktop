@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,12 +39,207 @@ describe("driver-neutral routines", () => {
     expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ botId: "bot-custom", prompt: "check now" }), undefined);
   });
 
+  // Dispatch tylko KOLEJKUJE turę (`startTurn` wraca, zanim model cokolwiek
+  // zrobi), więc do 0.5.45 historia nie znała słowa „sukces" — tylko „queued"
+  // i „error". Wynik dopisuje serwer na końcu tury przez `settleRun`.
+  it("turns a queued run into ok when the turn finishes, twice in a row", async () => {
+    let now = 1_000;
+    const routines = new HarnessRoutines(file(), async () => {}, () => now, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.list("bot-cli")[0].last_runs[0].status).toBe("queued"); // tura dopiero leci
+    expect(routines.settleRun("bot-cli")).toBe(true);
+
+    now = 2_000;
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli")).toBe(true);
+
+    expect(routines.list("bot-cli")[0].last_runs.map((run) => run.status)).toEqual(["ok", "ok"]);
+    expect(routines.list("bot-cli")[0].last_runs[0].error).toBeUndefined();
+  });
+
+  // Regresja: `settleRun` zakładał, że czeka `last_runs[0]`. Druga rutyna tego
+  // samego bota dostaje od razu 409 i wsuwa swój błąd NA WIERZCH, więc wpis,
+  // który naprawdę czekał, zostawał `queued` na zawsze.
+  it("settles the run that is actually waiting, not whatever sits on top of the history", async () => {
+    let busy = false;
+    const dispatch = async () => {
+      // `running` gaśnie zaraz po dyspozycji, więc ta sama rutyna potrafi
+      // odpalić ponownie, gdy poprzednia tura JESZCZE trwa — i dostać 409.
+      if (busy) throw new Error("the bot is already working — interrupt it first");
+      busy = true;
+    };
+    const routines = new HarnessRoutines(file(), dispatch, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "go" });
+
+    await routines.runNow("bot-cli", job.id);   // rusza, czeka na wynik tury
+    await routines.runNow("bot-cli", job.id);   // 409 — WŁASNY błąd na wierzch historii
+    expect(routines.list("bot-cli")[0].last_runs[0].status).toBe("error");
+
+    // koniec tury zamyka przebieg, który NAPRAWDĘ czekał — ten pod spodem
+    expect(routines.settleRun("bot-cli")).toBe(true);
+    expect(routines.list("bot-cli")[0].last_runs.map((run) => run.status)).toEqual(["error", "ok"]);
+    // …i nie ma już czego zamykać: następna tura to zwykła tura użytkownika
+    expect(routines.settleRun("bot-cli")).toBe(false);
+
+    // to samo między RÓŻNYMI rutynami jednego bota: 409 drugiej nie kradnie
+    // slotu pierwszej
+    const second = routines.create("bot-cli", { name: "Other", prompt: "go" });
+    busy = false;
+    await routines.runNow("bot-cli", job.id);
+    await routines.runNow("bot-cli", second.id);
+    expect(routines.list("bot-cli").find((r) => r.id === second.id)!.last_runs[0].status).toBe("error");
+    expect(routines.settleRun("bot-cli")).toBe(true);
+    expect(routines.list("bot-cli").find((r) => r.id === job.id)!.last_runs[0].status).toBe("ok");
+  });
+
+  // Tura potrafi paść i zameldować koniec, ZANIM `dispatch` wróci. Wpis i slot
+  // muszą więc istnieć przed dyspozycją, inaczej wynik trafia w próżnię.
+  it("accepts a result that arrives before dispatch returns", async () => {
+    let routines!: HarnessRoutines;
+    routines = new HarnessRoutines(file(), async (job) => {
+      // dokładnie to robi serwer: tura pada w tle, `endTurnPush` melduje koniec
+      routines.settleRun(job.botId, "provider crashed");
+      await Promise.resolve();
+    }, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Racy", prompt: "go" });
+    await routines.runNow("bot-cli", job.id);
+
+    const runs = routines.list("bot-cli")[0].last_runs;
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: "error", error: "provider crashed" });
+  });
+
+  // Zwykła tura użytkownika po turze rutyny nie ma się do czego dopisać.
+  it("never credits a later user turn as the routine's result", async () => {
+    const routines = new HarnessRoutines(file(), async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "go" });
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli")).toBe(true);
+
+    expect(routines.settleRun("bot-cli")).toBe(false);            // koniec tury użytkownika
+    expect(routines.settleRun("bot-cli", "boom")).toBe(false);    // i nieudanej też
+    expect(routines.list("bot-cli")[0].last_runs).toHaveLength(1);
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({ status: "ok" });
+  });
+
+  // Restart i zamknięcie: wpisu `queued` nikt już nie domknie. Tak samo wygląda
+  // CAŁA historia zapisana przed wprowadzeniem `ok`.
+  it("turns runs nobody will ever settle into `unknown`, on stop and on load", async () => {
+    const path = file();
+    const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "go" });
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.list("bot-cli")[0].last_runs[0].status).toBe("queued");
+
+    routines.stop();
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({ status: "unknown", reason: "harness-stopped" });
+    // po zatrzymaniu slot jest pusty — spóźniony koniec tury nic nie nadpisze
+    expect(routines.settleRun("bot-cli")).toBe(false);
+
+    // stary zapis (sprzed `ok`): wszystko `queued`, nikt tego nie rozstrzygnie
+    writeFileSync(path, JSON.stringify([{ ...job, last_runs: [{ at: "2026-09-01T10:00:00.000Z", status: "queued" }] }], null, 2));
+    const restored = new HarnessRoutines(path, async () => {}, () => 2_000, 0);
+    expect(restored.list("bot-cli")[0].last_runs[0].status).toBe("unknown");
+    expect(JSON.parse(readFileSync(path, "utf8"))[0].last_runs[0].status).toBe("unknown");
+  });
+
+  it("drops the pending run of a deleted routine so it cannot swallow the next result", async () => {
+    const routines = new HarnessRoutines(file(), async () => {}, () => 1_000, 0);
+    const doomed = routines.create("bot-cli", { name: "Doomed", prompt: "go" });
+    await routines.runNow("bot-cli", doomed.id);
+    routines.delete("bot-cli", doomed.id);
+    expect(routines.settleRun("bot-cli")).toBe(false);
+
+    const kept = routines.create("bot-cli", { name: "Kept", prompt: "go" });
+    await routines.runNow("bot-cli", kept.id);
+    routines.deleteBot("bot-cli");
+    expect(routines.settleRun("bot-cli")).toBe(false);
+  });
+
+  // Rutyna skasowana MIĘDZY `webhookFor` a `fire`: kopia rekordu wciąż istnieje,
+  // ale odpalenie jej zapisałoby wpis w nicość i zajęło slot na wynik, po który
+  // nikt nie przyjdzie.
+  it("refuses to run a routine that no longer exists", async () => {
+    const dispatch = vi.fn(async () => {});
+    const routines = new HarnessRoutines(file(), dispatch, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Notify", prompt: "react" });
+    routines.enableWebhookTrigger("bot-cli", job.id);
+    const hook = routines.webhookFor(job.id)!;
+    routines.delete("bot-cli", job.id);
+
+    await routines.fire(hook, '{"event":"completed"}');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(routines.settleRun("bot-cli")).toBe(false); // żaden slot nie został zajęty
+  });
+
+  // `reloadProviders` robi `bus.detachAll()` + `disposeAll()`: tury giną BEZ
+  // `turn.completed`, więc nikt nie domknie przebiegów, które na nie czekały.
+  it("abandons pending runs when the provider fleet is torn down", async () => {
+    const path = file();
+    const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "go" });
+    await routines.runNow("bot-cli", job.id);
+
+    routines.abandonPendingRuns();
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({ status: "unknown", reason: "harness-stopped" });
+    expect(JSON.parse(readFileSync(path, "utf8"))[0].last_runs[0].status).toBe("unknown");
+    // slot zwolniony: spóźniony koniec tury nie ma czego nadpisać
+    expect(routines.settleRun("bot-cli")).toBe(false);
+  });
+
+  it("records the failure text when the turn ends badly, and ignores bots with nothing pending", async () => {
+    const path = file();
+    const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli", "the provider said no")).toBe(true);
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({
+      status: "error",
+      error: "the provider said no",
+    });
+
+    // porażka, którą zna HARNESS, jedzie kodem — zdanie składa panel
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli", { reason: "interrupted" })).toBe(true);
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({ status: "error", reason: "interrupted" });
+    expect(routines.list("bot-cli")[0].last_runs[0].error).toBeUndefined();
+
+    // drugie zameldowanie tego samego końca tury nic nie psuje…
+    expect(routines.settleRun("bot-cli", "spóźniony błąd")).toBe(false);
+    // …i zwykła tura bota bez rutyny też nie dopisuje się do cudzej historii
+    expect(routines.settleRun("bot-inny")).toBe(false);
+    expect(routines.list("bot-cli")[0].last_runs).toHaveLength(2);
+
+    // wynik przeżywa restart — siedzi w routines.json, nie w pamięci
+    expect(JSON.parse(readFileSync(path, "utf8"))[0].last_runs[0].reason).toBe("interrupted");
+  });
+
+  it("keeps at most 20 history entries, newest first", async () => {
+    let now = 1_000;
+    const routines = new HarnessRoutines(file(), async () => {}, () => now, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+    for (let i = 0; i < 25; i++) {
+      now += 1_000;
+      await routines.runNow("bot-cli", job.id);
+      routines.settleRun("bot-cli");
+    }
+    const runs = routines.list("bot-cli")[0].last_runs;
+    expect(runs).toHaveLength(20);
+    expect(runs.every((run) => run.status === "ok")).toBe(true);
+    expect(new Date(runs[0].at).getTime()).toBeGreaterThan(new Date(runs[19].at).getTime());
+  });
+
   it("persists jobs and records unavailable or busy driver failures", async () => {
     const path = file();
     const routines = new HarnessRoutines(path, async () => { throw new Error("bot is already working"); }, () => 1_000, 0);
     const job = routines.create("bot-codex", { name: "Work", prompt: "go" });
     await routines.runNow("bot-codex", job.id);
     expect(routines.list("bot-codex")[0].last_runs[0]).toMatchObject({ status: "error", error: "bot is already working" });
+    // tura nigdy nie wystartowała, więc nie ma czego zamykać wynikiem
+    expect(routines.settleRun("bot-codex")).toBe(false);
 
     const restored = new HarnessRoutines(path, async () => {}, () => 2_000, 0);
     expect(restored.list("bot-codex")).toHaveLength(1);
@@ -166,6 +361,19 @@ describe("harness webhook triggers", () => {
       expect.objectContaining({ botId: "bot-cli", name: "Notify", prompt: "react" }),
       '{"event":"completed"}',
     );
+  });
+
+  // `webhookFor` oddaje kopię rekordu (niesie sekret), więc `run` musi trafić
+  // na ŻYWY rekord — inaczej przebieg z webhooka mutował klon i przepadał.
+  it("records the run of a webhook-triggered routine in the real history", async () => {
+    const routines = new HarnessRoutines(file(), async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Notify", prompt: "react" });
+    routines.enableWebhookTrigger("bot-cli", job.id);
+    await routines.fire(routines.webhookFor(job.id)!, '{"event":"completed"}');
+
+    expect(routines.list("bot-cli")[0].last_runs).toHaveLength(1);
+    expect(routines.settleRun("bot-cli")).toBe(true);
+    expect(routines.list("bot-cli")[0].last_runs[0].status).toBe("ok");
   });
 
   it("builds a turn with an explicitly-marked data block and truncates oversized payloads", () => {

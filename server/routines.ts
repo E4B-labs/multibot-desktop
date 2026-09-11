@@ -24,6 +24,28 @@ export interface WebhookTriggerInfo {
   events: string[];
 }
 
+/** Wynik przebiegu. `queued` to stan PRZEJŚCIOWY — tura leci, wyniku jeszcze
+ * nie ma; domyka go `settleRun` na końcu tury. `unknown` znaczy, że harness
+ * zgasł w trakcie i NIKT już tego nie rozstrzygnie: lepiej powiedzieć „nie
+ * wiadomo" niż pokazywać „w toku" do końca świata. */
+export type RunStatus = "queued" | "ok" | "error" | "unknown";
+
+/** Porażka, którą zna HARNESS, a nie dostawca. Kod, nie zdanie: tłumaczy go
+ * panel, więc historia nie zamarza w języku, jaki serwer miał akurat w chwili
+ * awarii. Tekst od dostawcy leci dalej jako `error`. */
+export type RunReason = "interrupted" | "watchdog" | "login-expired" | "harness-stopped";
+
+export interface RoutineRun {
+  at: string;
+  status: RunStatus;
+  /** Komunikat dostawcy albo dyspozytora („bot is already working"). */
+  error?: string;
+  reason?: RunReason;
+}
+
+/** Czym zakończyła się tura: tekstem od dostawcy albo naszym kodem powodu. */
+export type RunFailure = string | { reason: RunReason };
+
 export interface HarnessRoutine {
   id: string;
   botId: string;
@@ -36,7 +58,8 @@ export interface HarnessRoutine {
    * rutyny, ale `list()`/`routineView()` go nie zwracają — jedyny moment, w
    * którym wychodzi na świat, to odpowiedź `enableWebhookTrigger`. */
   webhookSecret?: string;
-  last_runs: Array<{ at: string; status: "queued" | "error"; error?: string }>;
+  /** Historia przebiegów, najnowszy pierwszy. */
+  last_runs: RoutineRun[];
   nextRunAt: number | null;
 }
 
@@ -180,6 +203,13 @@ export function routineTurnText(name: string, prompt: string, payload?: string |
 export class HarnessRoutines {
   private jobs: HarnessRoutine[] = [];
   private running = new Set<string>();
+  /** Przebiegi czekające na wynik tury, per bot, w kolejności startu.
+   * Trzymamy SAM WPIS historii, nie id rutyny: `last_runs[0]` bywa już innym
+   * przebiegiem — druga rutyna tego samego bota dostaje od razu 409 („bot is
+   * already working") i wsuwa swój błąd na wierzch, a wpis, który naprawdę
+   * czeka, leży niżej. `routineId` jest tylko po to, żeby skasowanie rutyny
+   * zabrało ze sobą jej wiszące przebiegi. */
+  private pending = new Map<string, Array<{ routineId: string; entry: RoutineRun }>>();
   private file: string;
   private dispatch: Dispatch;
   private now: Clock;
@@ -194,6 +224,11 @@ export class HarnessRoutines {
     } catch {
       this.jobs = [];
     }
+    if (!Array.isArray(this.jobs)) this.jobs = [];
+    // Wpisów `queued` z poprzedniego życia procesu nikt już nie domknie — a
+    // tak samo wygląda CAŁA historia zapisana przed wprowadzeniem `ok`. Bez
+    // tego panel meldowałby „w toku" o przebiegach sprzed tygodnia.
+    if (this.forgetPendingRuns()) this.persist();
     privateFile(file);
     if (tickMs > 0) {
       this.timer = setInterval(() => void this.tick(), tickMs);
@@ -260,6 +295,11 @@ export class HarnessRoutines {
   delete(botId: string, id: string): boolean {
     const before = this.jobs.length;
     this.jobs = this.jobs.filter((job) => job.botId !== botId || job.id !== id);
+    // Skasowana rutyna zabiera swój wiszący przebieg — inaczej zajmowałby slot
+    // i połknął wynik NASTĘPNEJ tury tego bota.
+    const waiting = (this.pending.get(botId) ?? []).filter((item) => item.routineId !== id);
+    if (waiting.length) this.pending.set(botId, waiting);
+    else this.pending.delete(botId);
     if (this.jobs.length !== before) this.persist();
     return this.jobs.length !== before;
   }
@@ -267,6 +307,7 @@ export class HarnessRoutines {
   deleteBot(botId: string): void {
     const before = this.jobs.length;
     this.jobs = this.jobs.filter((job) => job.botId !== botId);
+    this.pending.delete(botId);
     if (this.jobs.length !== before) this.persist();
   }
 
@@ -319,6 +360,16 @@ export class HarnessRoutines {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // Harness gaśnie: tury, na które czekaliśmy, nie zameldują już wyniku.
+    this.abandonPendingRuns();
+  }
+
+  /** Tury przepadły bez zdarzenia końca — przeładowanie dostawców
+   * (`bus.detachAll()` + `disposeAll()`), zamknięcie procesu. Nikt ich już nie
+   * domknie, więc wiszące przebiegi dostają `unknown` teraz, a nie po
+   * restarcie. */
+  abandonPendingRuns(): void {
+    if (this.forgetPendingRuns("harness-stopped")) this.persist();
   }
 
   /** Pierwszy termin dla harmonogramu. Przypomnienie na wczoraj nigdy nie
@@ -331,25 +382,87 @@ export class HarnessRoutines {
     return nextRunAt;
   }
 
-  private async run(job: HarnessRoutine, payload?: string | null): Promise<void> {
+  private async run(input: HarnessRoutine, payload?: string | null): Promise<void> {
+    // `webhookFor` oddaje KOPIĘ rekordu (bo niesie sekret), więc historię i
+    // następny termin zapisujemy zawsze na ŻYWYM rekordzie — inaczej przebieg
+    // z webhooka mutował klon i nie zostawiał po sobie ani śladu.
+    const job = this.jobs.find((item) => item.id === input.id);
+    // Rutyna zniknęła między wyszukaniem a odpaleniem (kasowanie w trakcie
+    // webhooka). Odpalenie na klonie zapisałoby wpis w nicość i zajęło slot
+    // wynikiem, którego nikt nie odbierze.
+    if (!job) return;
     if (this.running.has(job.id)) return;
     this.running.add(job.id);
+    // Wpis i slot powstają PRZED dyspozycją: `dispatch` tylko kolejkuje turę,
+    // a ta potrafi paść i zameldować koniec, zanim `await` tu wróci. Zapisane
+    // po dyspozycji, wynik trafiał w próżnię i przebieg zostawał `queued`.
+    const entry: RoutineRun = { at: new Date(this.now()).toISOString(), status: "queued" };
+    job.last_runs.unshift(entry);
+    // FIFO działa, bo `startTurn` idzie od bramki `bot.busy` do `busy: true`
+    // BEZ `await`: dwie tury jednego bota nie mogą wystartować naprzemiennie,
+    // więc kolejność wejścia do tej kolejki to kolejność tur.
+    this.pending.set(job.botId, [...(this.pending.get(job.botId) ?? []), { routineId: job.id, entry }]);
     try {
       // Advance before dispatch: crash/restart cannot replay a token-spending turn.
       job.nextRunAt = job.enabled ? nextRun(job.schedule, this.now()) : null;
       await this.dispatch(job, payload);
-      job.last_runs.unshift({ at: new Date(this.now()).toISOString(), status: "queued" });
     } catch (error) {
-      job.last_runs.unshift({
-        at: new Date(this.now()).toISOString(),
-        status: "error",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Tura w ogóle nie ruszyła (zajęty bot, brak drivera) — wynik znamy od
+      // razu i nikt inny go już nie domknie.
+      this.settle(job.botId, entry, error instanceof Error ? error.message : String(error));
     } finally {
       job.last_runs = job.last_runs.slice(0, 20);
       this.running.delete(job.id);
       this.persist();
     }
+  }
+
+  /** Koniec tury bota: wynik dostaje NAJSTARSZY czekający przebieg tego bota
+   * (bot robi jedną turę naraz, więc to dokładnie ta, która się właśnie
+   * skończyła). Woła to serwer na KAŻDYM końcu tury — udanym, błędnym,
+   * przerwanym i ubitym watchdogiem — więc żaden wpis nie zostaje na zawsze
+   * w `queued`, a wynik nie może trafić do cudzej historii. Bot bez wiszącej
+   * rutyny (zwykła tura użytkownika) → nic się nie dzieje. */
+  settleRun(botId: string, failure?: RunFailure | null): boolean {
+    const entry = this.pending.get(botId)?.[0]?.entry;
+    if (!entry) return false;
+    const settled = this.settle(botId, entry, failure);
+    if (settled) this.persist();
+    return settled;
+  }
+
+  /** Zamknij KONKRETNY wpis i zwolnij jego slot. Wpis przekazujemy przez
+   * referencję, bo tylko ona wskazuje przebieg jednoznacznie. */
+  private settle(botId: string, entry: RoutineRun, failure?: RunFailure | null): boolean {
+    const waiting = (this.pending.get(botId) ?? []).filter((item) => item.entry !== entry);
+    if (waiting.length) this.pending.set(botId, waiting);
+    else this.pending.delete(botId);
+    if (entry.status !== "queued") return false;
+    if (!failure) {
+      entry.status = "ok";
+      return true;
+    }
+    entry.status = "error";
+    // Ogon stack trace'u nie ma po co puchnąć w routines.json ani w panelu.
+    if (typeof failure === "string") entry.error = failure.slice(0, 500);
+    else entry.reason = failure.reason;
+    return true;
+  }
+
+  /** Przebiegi, których nikt już nie rozstrzygnie (restart, `stop()`), dostają
+   * `unknown`. Zwraca, czy cokolwiek się zmieniło — wołający decyduje o zapisie. */
+  private forgetPendingRuns(reason?: RunReason): boolean {
+    this.pending.clear();
+    let changed = false;
+    for (const job of this.jobs) {
+      for (const run of job.last_runs ?? []) {
+        if (run.status !== "queued") continue;
+        run.status = "unknown";
+        if (reason) run.reason = reason;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private persist(): void {
