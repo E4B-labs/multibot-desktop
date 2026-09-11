@@ -9,10 +9,10 @@
 // plikach i rozjeżdżały się po kolei (kopia w webui telefonu zgubiła
 // `avatarUrl`, więc bot z własnym zdjęciem pokazywał tam maskotkę). Klasy
 // stoją tu raz — `BOT_CHIP_CLASS` jest jedynym miejscem, gdzie się je zmienia.
-import { Fragment } from "react";
+import { Fragment, type CSSProperties } from "react";
 import { useStore } from "@/state/store";
 import { useLanguage } from "@/lib/language";
-import { normalizeState } from "@/lib/mascot";
+import { BOT_COLORS, normalizeState, type BotColor } from "@/lib/mascot";
 import { splitMentions } from "@/lib/mentions";
 import { botDisplayName } from "@/lib/botNames";
 import { cn } from "@/lib/cn";
@@ -20,8 +20,31 @@ import { BotAvatar } from "./Avatar";
 
 type ChipBot = ReturnType<typeof useStore>["state"]["bots"][number];
 
+/**
+ * multibot K2: JEDEN przepis na kolor pigułki bota, dla wszystkich jej dróg —
+ * wzmianki w markdownie bota, dymku użytkownika, plakietki nadawcy i warstwy
+ * podświetlenia w composerze.
+ *
+ * `bot.color` to NAZWA z allowlisty, nie kolor CSS — bez `BOT_COLORS` tło
+ * brałoby słowo kluczowe CSS (`green` = #008000). `--bot-ink` to kolor bota
+ * dociągnięty w połowie do atramentu skórki (#170): sam hex tonie i na jasnych
+ * skórkach (yellow, white), i na ciemnych (black).
+ *
+ * Bez koloru (nazwa z koperty po skasowanym bocie) atramentem jest drugi plan
+ * skórki — zielony domyślny kolor cudzego bota kłamałby o tożsamości.
+ */
+export function botChipStyle(color?: BotColor): CSSProperties {
+  return {
+    "--bot": color ? BOT_COLORS[color] ?? BOT_COLORS.green : "var(--color-ink-secondary)",
+    "--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))",
+  } as CSSProperties;
+}
+
+// Wypełnienie 18% jak w plakietce bot↔bot z #170. Zmierzone dla 14 kolorów
+// × 4 skórki na tle `--color-app`: najgorsza para white/lagoon 3,31:1, żadna
+// poniżej 3,0. Obwódka `--bot-ink` odcina pigułkę od dymka.
 export const BOT_CHIP_CLASS =
-  "inline-flex translate-y-px items-center gap-1 rounded-full bg-raised px-2 py-0.5 align-middle text-[13px] font-medium text-ink";
+  "inline-flex translate-y-px items-center gap-1 rounded-full px-2 py-0.5 align-middle text-[13px] font-medium text-[var(--bot-ink)] [box-shadow:0_0_0_1px_var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))]";
 
 /** Bot znany aplikacji: awatar (własne zdjęcie, gdy jest) + nazwa wyświetlana.
  *  Bez małpki — owal z awatarem już mówi, że to bot, a „@" zostawiało dwa
@@ -29,7 +52,7 @@ export const BOT_CHIP_CLASS =
 export function BotChip({ bot, className }: { bot: ChipBot; className?: string }) {
   const polish = useLanguage() === "pl";
   return (
-    <span className={cn(BOT_CHIP_CLASS, className)}>
+    <span style={botChipStyle(bot.color)} className={cn(BOT_CHIP_CLASS, className)}>
       <BotAvatar
         color={bot.color}
         avatarUrl={bot.avatarUrl}
@@ -73,6 +96,6 @@ export function MentionText({ text }: { text: string }) {
 export function PeerBadge({ name }: { name: string }) {
   const { state } = useStore();
   const bot = state.bots.find((b) => b.name.toLowerCase() === name.toLowerCase());
-  if (!bot) return <span className={cn(BOT_CHIP_CLASS, "mr-1.5")}>{name}</span>;
+  if (!bot) return <span style={botChipStyle()} className={cn(BOT_CHIP_CLASS, "mr-1.5")}>{name}</span>;
   return <BotChip bot={bot} className="mr-1.5" />;
 }

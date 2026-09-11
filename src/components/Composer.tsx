@@ -1,12 +1,13 @@
 import { track } from "@/lib/analytics";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Spinner } from "./Loading";
 import { ArrowUp, Brain, CalendarClock, File as FileIcon, Loader2, Mic, Plus, Puzzle, Shield, SlidersHorizontal, Wand2, Wrench, X, Zap } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { BotAvatar } from "./Avatar";
-import { BOT_COLORS, CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
+import { botChipStyle } from "./PeerBadge";
+import { CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
 import { splitMentions } from "@/lib/mentions";
 import { isEngagedInPeerChat } from "@/lib/botChatAnimation";
 import { useLanguage } from "@/lib/language";
@@ -129,6 +130,9 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   const upto = text.slice(0, caret);
   const at = upto.lastIndexOf("@");
   if (at === -1) return null;
+  // TA SAMA reguła co `mentionedBots` w server/store.ts i co `mentionRegex`
+  // w lib/mentions.ts: „@" na początku albo po białym znaku. Trzy miejsca,
+  // jedno zdanie — jeśli zmieniasz jedno, zmień wszystkie trzy.
   if (at > 0 && !/\s/.test(upto[at - 1])) return null; // user@host, not a tag
   const query = upto.slice(at + 1);
   if (query.length > 24 || query.includes("@") || query.includes("\n")) return null;
@@ -156,21 +160,28 @@ const COMPOSER_TYPO = "py-1 text-[15px] leading-5";
  * ramka wystająca po 2 px z każdej strony stykała się z sąsiednią literą
  * (zmierzone na zrzucie) — zostaje samo wypełnienie i kolor liter.
  *
- * Kolory jak w plakietce bota z #170: surowy hex tonie i na jasnych skórkach,
- * i na ciemnych, więc atrament to `--bot-ink` (kolor bota w połowie drogi do
- * atramentu skórki), a wypełnienie miesza się z tłem aplikacji. Wypełnienie
- * 26% zamiast 18% z plakietki, bo tutaj nie ma obwódki i bez tego pigułka
- * ginęła w polu (zmierzone dla 14 kolorów × 4 skórki: najgorsza para to
- * white/lagoon 3,33:1, żadna poniżej 3,0 — plakietka #170 ma tam 3,31:1).
+ * Zmienne koloru bierze `botChipStyle` — ten sam przepis `--bot`/`--bot-ink`,
+ * którym maluje się pigułka w wysłanej wiadomości (PeerBadge.tsx, #170).
+ * Różni się samo wypełnienie: 26% zamiast 18%, bo tutaj nie ma obwódki i bez
+ * tego pigułka ginęła w polu. Wypełnienie miesza się z `--color-raised`, czyli
+ * z tłem RZĘDU composera, nie z tłem czatu (rząd stoi na `bg-raised/60`) —
+ * na `--color-app` pigułka była o ton za ciemna/za jasna wobec pola.
+ *
+ * Warstwa jest zamontowana ZAWSZE, a nie tylko przy wzmiance: montowana
+ * warunkowo wchodziła ze `scrollTop = 0`, więc w przewiniętym szkicu pierwsza
+ * wzmianka pokazywała się o kilka wierszy za wysoko, do najbliższego zdarzenia
+ * przewijania. Niewidoczna gaśnie `opacity-0` i wtedy pole maluje litery samo.
  */
 function MentionHighlight({
   text,
   bots,
   layerRef,
+  visible,
 }: {
   text: string;
   bots: Bot[];
   layerRef: React.RefObject<HTMLDivElement | null>;
+  visible: boolean;
 }) {
   const segments = splitMentions(text, bots);
   return (
@@ -180,6 +191,7 @@ function MentionHighlight({
       className={cn(
         "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-ink",
         COMPOSER_TYPO,
+        visible ? "opacity-100" : "opacity-0",
       )}
     >
       {segments.map((segment, index) => {
@@ -190,18 +202,21 @@ function MentionHighlight({
         return (
           <span
             key={index}
-            style={{
-              "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green,
-              "--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))",
-            } as CSSProperties}
-            className="-mx-[1px] rounded-[3px] px-[1px] text-[var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_26%,var(--color-app))]"
+            style={botChipStyle(bot.color)}
+            // Zmierzone dla 14 kolorów × 4 skórek: najgorsza para
+            // black/midnight 3,73:1, żadna poniżej 3,0 (pigułka wysłanej
+            // wiadomości ma tam 3,31:1 — patrz BOT_CHIP_CLASS).
+            className="-mx-[1px] rounded-[3px] px-[1px] text-[var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_26%,var(--color-raised))]"
           >
             {segment.text}
           </span>
         );
       })}
-      {/* Textarea rezerwuje linię po końcowym Enterze, blok HTML by ją zjadł —
-          bez tego ostatni wiersz warstwy rozjeżdża się z polem przy przewijaniu. */}
+      {/* Domknięcie ostatniego wiersza: textarea rezerwuje linię po końcowym
+          Enterze, blok HTML by jej nie pokazał. Warstwa NIE jest lustrem
+          wysokości pola — pole rośnie na `scrollHeight`, warstwa leży
+          `inset-0` i przycina nadmiar; ta linia wyrównuje tylko ostatni
+          wiersz, a nie całą geometrię. */}
       {"\n"}
     </div>
   );
@@ -439,14 +454,22 @@ export function Composer({
   const lastStrip = useRef<NonNullable<typeof strip>>("idle");
   if (strip) lastStrip.current = strip;
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // multibot K2: warstwa podświetlenia wzmianek pod tekstem pola. Włącza się
-  // dopiero, gdy w treści JEST wzmianka znanego bota — bez niej pole zachowuje
-  // się co do piksela jak dotąd, więc zwykłe pisanie nic nie ryzykuje.
+  // multibot K2: warstwa podświetlenia wzmianek pod tekstem pola. Sama warstwa
+  // jest zamontowana zawsze (patrz MentionHighlight — inaczej wchodzi ze
+  // `scrollTop = 0`), ale WIDAĆ ją tylko wtedy, gdy w treści jest wzmianka
+  // znanego bota. Bez wzmianki pole maluje litery samo i zachowuje się co do
+  // piksela jak dotąd, więc zwykłe pisanie nic nie ryzykuje.
   const mentionLayerRef = useRef<HTMLDivElement>(null);
+  // IME (japoński, chiński, koreański) rysuje tekst w trakcie komponowania sam,
+  // z własnym podkreśleniem, i nie ma go jeszcze w `value`. Przezroczyste
+  // litery zjadałyby ten podgląd w całości, więc przez czas komponowania
+  // warstwa gaśnie i pole wraca do zwykłego atramentu.
+  const [composing, setComposing] = useState(false);
   const liveMentions = useMemo(
     () => splitMentions(text, state.bots).some((segment) => segment.name),
     [text, state.bots],
   );
+  const highlightOn = liveMentions && !composing;
   const filesRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef(new Set<string>());
   // what was typed before the mic went on — partials append after it
@@ -1131,12 +1154,14 @@ export function Composer({
             (styles.css) daje polu własny wiersz. Zanim ten znacznik powstał,
             regułą był `[data-composer-row] > [data-composer-input]`, a pudełko
             zabrało polu status dziecka rzędu i na 360 px wracał błąd z 07.09
-            (pole ściśnięte do zera przez pigułki). */}
-        <div data-composer-field className="relative min-w-0 flex-1">
-        {liveMentions && <MentionHighlight text={text} bots={state.bots} layerRef={mentionLayerRef} />}
+            (pole ściśnięte do zera przez pigułki). `min-w-[8rem]` jest drugim
+            hamulcem na ten sam błąd: powyżej 700 px rząd się nie zawija, więc
+            samo `min-w-0` pozwalało pigułkom ścisnąć pole dowolnie wąsko. */}
+        <div data-composer-field className="relative min-w-[8rem] flex-1">
+        <MentionHighlight text={text} bots={state.bots} layerRef={mentionLayerRef} visible={highlightOn} />
         <textarea
           data-composer-input
-          data-mentions={liveMentions ? "" : undefined}
+          data-mentions={highlightOn ? "" : undefined}
           ref={inputRef}
           rows={1}
           value={text}
@@ -1195,6 +1220,11 @@ export function Composer({
             if (e.key === "Escape" && recording) setRecording(false);
           }}
           onPaste={handlePaste}
+          // IME: podgląd komponowanego znaku rysuje przeglądarka w POLU i nie ma
+          // go jeszcze w `value`, więc przez ten czas litery pola muszą być
+          // widoczne — inaczej japoński czy chiński pisałby się w niewidzialne.
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           onScroll={(e) => {
             // warstwa nie ma własnego paska (pole też nie, patrz styles.css),
             // więc jedzie za polem — inaczej długi szkic rozjeżdża się o wiersze
@@ -1210,12 +1240,17 @@ export function Composer({
           // liczenia sufitu w JS: styl wpisany na sztywno i tak jest zacięty
           // przez `max-height`.
           className={cn(
-            "relative max-h-64 w-full resize-none overflow-y-auto bg-transparent placeholder:text-ink-secondary focus:outline-none",
+            // `block`: textarea jest domyślnie inline-block, więc w pudełku
+            // zostawiała pod sobą 6 px zejścia linii (zmierzone). Pudełko było
+            // o te 6 px wyższe od pola, czyli rząd composera rósł, a warstwa
+            // `inset-0` miała inny zakres przewijania niż pole i w maksymalnie
+            // przewiniętym szkicu zostawała 6 px wyżej.
+            "relative block max-h-64 w-full resize-none overflow-y-auto bg-transparent placeholder:text-ink-secondary focus:outline-none",
             COMPOSER_TYPO,
             // litery maluje warstwa pod spodem; zostaje sam kursor, a pas
             // zaznaczenia wraca przez `[data-mentions]::selection` w styles.css
             // (przy przezroczystym tekście Chrome nie rysuje go sam)
-            liveMentions ? "text-transparent caret-ink" : "text-ink",
+            highlightOn ? "text-transparent caret-ink" : "text-ink",
           )}
         />
         </div>
