@@ -548,10 +548,39 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
+  // multibot (poziom Status): bot TERAZ klika na wspólnym komputerze. Nie to
+  // samo co otwarty panel — ikona ma świecić, bo maszyna pracuje, a nie dlatego,
+  // że ktoś ją sobie podejrzał. Serwer nadaje to ramką `computer-queue`.
+  const computerActing = state.computerActing.includes(bot.id);
   // multibot: awatar w naglowku czatu stoi nieruchomo ZAWSZE, takze gdy bot
   // pracuje — jedynym animowanym sygnalem tury w widoku czatu jest pasek nad
   // composerem (roster ma wlasna regule: `sidebarAvatarProps`).
   const headerAvatar = staticAvatarProps(bot);
+  // Jeden przycisk na obie powłoki: w przeglądarce stoi w rzędzie ikon zawsze,
+  // na pulpicie (gdzie akcje siedzą pod „⋮") pokazuje się TYLKO wtedy, gdy bot
+  // pracuje na komputerze — inaczej status byłby schowany w zwiniętym menu.
+  const computerLabel = computerActing
+    ? polish ? "Bot pracuje na komputerze" : "The bot is using the computer"
+    : polish ? "Komputer bota" : "Bot's computer";
+  const computerButton = (
+    <button
+      onClick={() => dispatch({ type: "toggleComputer" })}
+      className={cn(
+        "relative rounded-md p-1.5 hover:bg-raised",
+        computerActing || state.computerOpen ? "text-accent" : "text-ink hover:text-ink",
+      )}
+      title={computerLabel}
+      // Czytnik ekranu ma słyszeć to samo, co mówi dymek — sam kolor ikony nie
+      // niesie dla niego niczego.
+      aria-label={computerLabel}
+      data-computer-acting={computerActing ? "1" : undefined}
+    >
+      <Monitor size={18} />
+      {computerActing && (
+        <span aria-hidden className="absolute right-1 top-1 size-1.5 rounded-full bg-accent motion-safe:animate-pulse" />
+      )}
+    </button>
+  );
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
@@ -703,12 +732,15 @@ export function ChatView({ bot }: { bot: Bot }) {
               z aplikacji mobilnej. W przeglądarce i na serwerze telefonu
               zostają ikony, bo tam nagłówka nic nie ściska. */}
           {isElectron ? (
-            <ChatHeaderMenu
-              onToggleFind={() => {
-                setFollow(false);
-                setFindOpen((open) => !open);
-              }}
-            />
+            <>
+              {computerActing && computerButton}
+              <ChatHeaderMenu
+                onToggleFind={() => {
+                  setFollow(false);
+                  setFindOpen((open) => !open);
+                }}
+              />
+            </>
           ) : (
             <>
               <button
@@ -726,16 +758,7 @@ export function ChatView({ bot }: { bot: Bot }) {
                 <Search size={18} />
               </button>
               {/* hidden per Kacper 07.09.2026, panels kept */}
-              <button
-                onClick={() => dispatch({ type: "toggleComputer" })}
-                className={cn(
-                  "rounded-md p-1.5 hover:bg-raised",
-                  state.computerOpen ? "text-accent" : "text-ink hover:text-ink",
-                )}
-                title={polish ? "Komputer bota" : "Bot's computer"}
-              >
-                <Monitor size={18} />
-              </button>
+              {computerButton}
               <button
                 onClick={() => dispatch({ type: "toggleRoutines" })}
                 className={cn(

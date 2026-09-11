@@ -284,6 +284,10 @@ interface AppState {
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
+  /** multibot: boty, które WŁAŚNIE pracują na komputerze (trzeci poziom
+   *  widoczności — Status). Cała lista przychodzi ramką `computer-queue`,
+   *  więc podmieniamy ją w całości, a koniec tury przysyła pustą. */
+  computerActing: string[];
   connected: boolean;
   workspaceVersion: number;
   error: string | null;
@@ -320,6 +324,7 @@ type Action =
   | { type: "streamClear"; threadId: string }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
+  | { type: "computerActing"; botIds: string[] }
   | { type: "setModel"; botId: string; selection: ModelSelection }
   | { type: "interrupt"; botId: string }
   | { type: "connected"; value: boolean }
@@ -389,7 +394,9 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
-function reducer(state: AppState, action: Action): AppState {
+/** Wystawiony (razem z `initialState`) do testów jednostkowych — reduktor jest
+ *  czysty, więc sprawdza się go bez montowania Providera. */
+export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
       const saved =
@@ -586,10 +593,19 @@ function reducer(state: AppState, action: Action): AppState {
         ...(action.on ? withMascotMotion(state, action.botId, "launch") : state),
         provisioning: { ...state.provisioning, [action.botId]: action.on },
       };
+    case "computerActing": {
+      const same =
+        state.computerActing.length === action.botIds.length &&
+        state.computerActing.every((id, i) => id === action.botIds[i]);
+      return same ? state : { ...state, computerActing: action.botIds };
+    }
     case "setModel":
       return updateBot(state, action.botId, (b) => ({ ...b, modelSelection: action.selection }));
     case "connected":
-      return { ...state, connected: action.value };
+      // Zerwany strumień znaczy, że ramka końca tury już nie przyjdzie — ikona
+      // komputera zostałaby zapalona do następnej tury. Po odzyskaniu łącza
+      // widok odbuduje pierwsza ramka `computer-queue`.
+      return { ...state, connected: action.value, ...(action.value ? {} : { computerActing: [] }) };
     case "error":
       return {
         ...(action.message && state.selectedId
@@ -825,7 +841,7 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-const initialState: AppState = {
+export const initialState: AppState = {
   bots: [],
   hydrated: false,
   environment: null,
@@ -852,6 +868,7 @@ const initialState: AppState = {
   runtime: {},
   screens: {},
   provisioning: {},
+  computerActing: [],
   connected: false,
   workspaceVersion: 0,
   error: null,
@@ -1283,6 +1300,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
+          break;
+        // multibot: stan dzierżawy wspólnego komputera. Jedyne, czego stąd
+        // potrzebuje powłoka, to KTO właśnie na nim pracuje — z tego świeci
+        // ikona komputera w nagłówku czatu (poziom Status).
+        case "computer-queue":
+          rawDispatch({
+            type: "computerActing",
+            botIds: Array.isArray(frame.agentActing) ? frame.agentActing.filter((id: unknown) => typeof id === "string") : [],
+          });
           break;
         case "bot.deleted":
           rawDispatch({ type: "deleteBot", botId: frame.botId });

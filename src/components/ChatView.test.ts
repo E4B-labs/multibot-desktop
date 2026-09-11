@@ -364,3 +364,13 @@ describe("seria dymków czatu", () => {
     expect(chat, "oba znaczniki na jednym elemencie").not.toMatch(/data-mb-side=[^\n]*data-mb-bubble|data-mb-bubble=[^\n]*data-mb-side/);
   });
 });
+
+// Trzeci poziom widoczności (Status). Do 0.5.45 ikona komputera świeciła
+// WYŁĄCZNIE wtedy, gdy panel był otwarty — czyli nigdy dlatego, że bot klika.
+// Zachowanie stanu pilnuje reduktor (src/state/store.test.ts); tutaj zostaje
+// jedna lekka asekuracja, że nagłówek w ogóle czyta tę flagę.
+describe("ikona komputera w nagłówku", () => {
+  it("akcent bierze się z pracy bota, nie tylko z otwartego panelu", () => {
+    expect(chat).toMatch(/computerActing\s*\|\|\s*state\.computerOpen\s*\?\s*"text-accent"/);
+  });
+});

@@ -32,15 +32,40 @@ export interface Control {
   agentOwner?: string;
   /** Bots whose turn waits for a free slot, in FIFO order. */
   agentQueue?: string[];
+  /** Bots DRIVING the computer right now — see `setAgentActing`. */
+  agentActing?: string[];
 }
 
 let leaseExpiresAt: number | null = null;
+
+/**
+ * Bots that actually reached for the computer during the turn running now (a
+ * `mcp__computer__*` tool started). This is the third level of visibility —
+ * Status: the chat header says the machine is being used without the user
+ * opening the preview or taking over. Holding a turn-gate slot is NOT this;
+ * most turns never touch the desktop.
+ *
+ * In memory like the lease, and for the same reason: after a restart no turn is
+ * running, so an empty set is the correct answer.
+ */
+const acting = new Set<string>();
+
+/** Mark (or unmark) a bot as driving the computer. Returns whether anything
+ *  changed, so the caller broadcasts once per real transition instead of once
+ *  per tool call of the same turn. */
+export function setAgentActing(botId: string, on: boolean): boolean {
+  if (!on) return acting.delete(botId);
+  if (acting.has(botId)) return false;
+  acting.add(botId);
+  return true;
+}
 
 function agentState() {
   const { active, waiting } = turnGate.state();
   return {
     ...(active.length ? { agentOwner: active[0] } : {}),
     ...(waiting.length ? { agentQueue: waiting } : {}),
+    ...(acting.size ? { agentActing: [...acting] } : {}),
   };
 }
 
@@ -53,17 +78,21 @@ export function control(now = Date.now()): Control {
 }
 
 /** Take or extend the user's lease. Idempotent — re-acquiring a live lease is a
- *  renewal, not a conflict. */
+ *  renewal, not a conflict.
+ *
+ *  Kształt odpowiedzi to pełne `control()`, razem ze stanem agentów: człowiek
+ *  z klawiaturą nadal ma widzieć, że bot pracuje. Panel odnawia dzierżawę
+ *  w pętli, więc gołe `{owner, expiresAt}` czyściło mu ten widok co kilka sekund. */
 export function acquire(now = Date.now()): Control {
   leaseExpiresAt = now + LEASE_MS;
-  return { owner: "user", expiresAt: leaseExpiresAt };
+  return control(now);
 }
 
 export const renew = acquire;
 
 export function release(): Control {
   leaseExpiresAt = null;
-  return { owner: "agent", ...agentState() };
+  return control();
 }
 
 /** Admit this bot's turn. Resolves at once while the fleet is under
@@ -82,6 +111,7 @@ export function releaseAgent(botId: string): Control {
 /** Test/reset hook; no live turn can survive a harness restart. */
 export function resetAgentQueue(): void {
   turnGate.reset();
+  acting.clear();
 }
 
 /**
