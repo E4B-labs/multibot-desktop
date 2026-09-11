@@ -374,3 +374,24 @@ describe("ikona komputera w nagłówku", () => {
     expect(chat).toMatch(/computerActing\s*\|\|\s*state\.computerOpen\s*\?\s*"text-accent"/);
   });
 });
+
+// K5: na telefonie „Pobierz" idzie przez most natywny, ale przeglądarka
+// i Electron muszą ZOSTAĆ przy `<a download>` — dlatego link nigdy nie jest
+// zamieniany na przycisk, a `preventDefault()` wisi pod warunkiem z mostu
+// (`openFileViaShell` zwraca tam false; test wykonawczy w lib/nativeBridge.test.ts).
+describe("pobranie pliku przez powłokę telefonu", () => {
+  const card = readFileSync(new URL("./AttachmentCard.tsx", import.meta.url), "utf8");
+  const preview = readFileSync(new URL("./AttachmentPreview.tsx", import.meta.url), "utf8");
+
+  it("zostawia link z download i tylko warunkowo blokuje jego domyślne działanie", () => {
+    for (const source of [card, preview]) {
+      expect(source).toContain("download={name}");
+      expect(source).toContain("if (path && openFileViaShell(path, name, mime ?? \"\")) e.preventDefault();");
+    }
+  });
+
+  it("kafelek HTML wraca do window.open, gdy mostu nie ma", () => {
+    expect(chat).toContain("if (openFileViaShell(path, file.name, file.mime)) return;");
+    expect(chat).toContain("if (url) window.open(url, \"_blank\", \"noopener,noreferrer\");");
+  });
+});

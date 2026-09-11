@@ -37,6 +37,8 @@ import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { authFetch } from "@/lib/auth";
+// multibot (K5): pobranie/podgląd pliku przez powłokę telefonu
+import { openFileViaShell } from "@/lib/nativeBridge";
 import { peerActivityGroupFor } from "@/lib/peerActivity";
 // multibot: wygasłe logowanie harnessu — banerka z przyciskiem naprawy
 import { AuthExpiredBanner, LoginExpiredCard } from "./AuthExpiredBanner";
@@ -49,6 +51,10 @@ const USER_COLLAPSE_LINES = 8;
 function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<Message["attachments"]>[number] }) {
   const [url, setUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Ta sama ścieżka, z której bierzemy bloba. W powłoce telefonu idzie do
+  // mostu natywnego, bo tam ani `<a download>`, ani `window.open` na blobie
+  // nic nie robią (K5).
+  const path = `/api/bots/${botId}/attachments/${file.id}`;
   useEffect(() => {
     let active = true;
     let objectUrl = "";
@@ -74,7 +80,7 @@ function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<M
           <img src={url} alt={file.name} className="max-h-64 w-auto max-w-full rounded-xl object-contain" />
         </button>
         {previewOpen && (
-          <AttachmentPreviewDialog url={url} name={file.name} onClose={() => setPreviewOpen(false)} />
+          <AttachmentPreviewDialog url={url} name={file.name} path={path} mime={file.mime} onClose={() => setPreviewOpen(false)} />
         )}
       </>
     ) : <div className="h-24 w-40 animate-pulse rounded-xl bg-raised" />;
@@ -83,13 +89,16 @@ function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<M
     <div className="flex items-center gap-2">
       {/* multibot: karta pliku wspólna dla załączników użytkownika i bota */}
       <div className="min-w-0 flex-1">
-        <AttachmentCard name={file.name} size={file.size} url={url} />
+        <AttachmentCard name={file.name} size={file.size} url={url} path={path} mime={file.mime} />
       </div>
       {file.mime === "text/html" && (
         <button
           type="button"
           disabled={!url}
-          onClick={() => url && window.open(url, "_blank", "noopener,noreferrer")}
+          onClick={() => {
+            if (openFileViaShell(path, file.name, file.mime)) return;
+            if (url) window.open(url, "_blank", "noopener,noreferrer");
+          }}
           className="shrink-0 rounded-xl bg-raised px-3 py-2 text-sm text-ink hover:bg-raised-hover disabled:opacity-40"
         >
           Otwórz
