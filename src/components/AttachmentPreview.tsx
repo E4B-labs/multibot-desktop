@@ -4,15 +4,22 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Download, X } from "lucide-react";
 import { useLanguage } from "@/lib/language";
+import { openFileViaShell } from "@/lib/nativeBridge";
 import { noDragRegion } from "@/lib/shell";
 
 export function AttachmentPreviewDialog({
   url,
   name,
+  path,
+  mime,
   onClose,
 }: {
   url: string;
   name: string;
+  /** Ścieżka pliku na serwerze — w powłoce telefonu „Pobierz" idzie przez most
+   * natywny, bo `<a download>` na blobie w Android WebView jest martwe. */
+  path?: string;
+  mime?: string;
   onClose: () => void;
 }) {
   const polish = useLanguage() === "pl";
@@ -53,6 +60,9 @@ export function AttachmentPreviewDialog({
         <a
           href={url}
           download={name}
+          onClick={(e) => {
+            if (path && openFileViaShell(path, name, mime ?? "")) e.preventDefault();
+          }}
           className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12.5px] text-white hover:bg-white/25"
         >
           <Download size={13} /> {polish ? "Pobierz" : "Download"}

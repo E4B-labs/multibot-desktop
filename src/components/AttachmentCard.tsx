@@ -1,6 +1,7 @@
 import { Download } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { openFileViaShell } from "@/lib/nativeBridge";
 
 // multibot: wspólna karta pliku — kolorowa ikona z rozszerzeniem, nazwa, pod
 // nią rozmiar, po prawej strzałka pobierania. Ten sam wygląd dla załączników
@@ -26,12 +27,20 @@ export function AttachmentCard({
   name,
   size,
   url,
+  path,
+  mime,
   icon,
   action,
 }: {
   name: string;
   size: number;
   url?: string | null;
+  /** Ścieżka pliku na serwerze. Podana — powłoka telefonu pobiera i otwiera
+   * plik sama, bo `<a download>` na blobie w Android WebView nic nie robi.
+   * Szkic wiadomości jej nie ma (plik jeszcze nigdzie nie leży) i zostaje przy
+   * zwykłym linku. */
+  path?: string;
+  mime?: string;
   /** podmienia kafelek z rozszerzeniem, np. miniaturą obrazka w szkicu */
   icon?: ReactNode;
   /** podmienia pobieranie, np. na "usuń" w szkicu wiadomości */
@@ -67,6 +76,9 @@ export function AttachmentCard({
           download={name}
           aria-disabled={!url}
           aria-label={`Download ${name}`}
+          onClick={(e) => {
+            if (path && openFileViaShell(path, name, mime ?? "")) e.preventDefault();
+          }}
           className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised-hover hover:text-ink aria-disabled:opacity-40"
         >
           <Download size={16} />
