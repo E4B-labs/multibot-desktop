@@ -693,10 +693,6 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 const workspace = new WorkspaceStore();
 const attachments = new AttachmentStore();
-// multibot: bot→user file sending. Files the bot creates via the agents MCP
-// `send_file` tool land here, keyed by thread, and ride the bot's next chat
-// message (see the item.completed / assistant_text handler below).
-const pendingBotAttachments = new Map<string, ReturnType<AttachmentStore["add"]>[]>();
 // multibot 0.1.44: wiadomości wysłane w trakcie tury bota. Zamiast 409 każda
 // ląduje w wątku i w kolejce; koniec tury odpala drain — bot dostaje je wszystkie
 // naraz i odpowiada JEDNĄ odpowiedzią na wszystko.
@@ -1750,18 +1746,15 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
-        // multibot: attach any files the bot sent this turn (send_file) to the
-        // message so the user can download / open them from the chat.
-        const pending = pendingBotAttachments.get(event.threadId);
-        pendingBotAttachments.delete(event.threadId);
         const replyModel = turnModelByThread.get(event.threadId);
         turnModelByThread.delete(event.threadId);
         turnAssistantText.set(event.threadId, [...(turnAssistantText.get(event.threadId) ?? []), event.text]);
         // multibot: `[NO REPLY]` to sygnał protokołu bot↔bot ("nie mam nic do
         // dodania"), nie treść — do wątku nie trafia. Siatka bezpieczeństwa
         // peerów czyta `turnAssistantText` POWYŻEJ, więc dostaje sentinel dalej
-        // i dalej zamienia go na milczenie (routePeerReply). Załączniki wygrywają:
-        // tura, która wysłała plik, zostaje widoczna mimo sentinela.
+        // i dalej zamienia go na milczenie (routePeerReply). Pliki z `send_file`
+        // NIE jadą tą ścieżką: /api/internal/attachments utrwala je od razu jako
+        // własną wiadomość, więc tura bez tekstu asystenta ich nie gubi.
         //
         // A turn a COLLEAGUE started is hidden in the other sense: what the
         // bot writes there is addressed to that colleague, so it belongs in
@@ -1789,21 +1782,16 @@ bus.subscribe((event: RuntimeEvent) => {
         // loses answers often enough to notice.
         const answeringGroup = isGroupOnlyTurn(bot.id, event.threadId);
         const roomOnly = answeringPeer || answeringGroup;
-        if ((event.text.trim() !== NO_REPLY_MARKER && !roomOnly) || (pending?.length && !answeringGroup)) {
+        if (event.text.trim() !== NO_REPLY_MARKER && !roomOnly) {
           pushMessage({
             role: "bot",
             kind: "text",
             text: event.text,
             ...(replyModel ? { model: replyModel } : {}),
-            ...(pending?.length ? { attachments: pending } : {}),
           });
         } else if (roomOnly) {
-          // ponytail: a file the bot sent during a group turn is kept on the
-          // hidden record but has no place in the group ledger, which is text
-          // only. Widen the ledger if groups ever need to pass files.
           store.appendMessage(event.threadId, {
             role: "bot", kind: "text", text: event.text, hidden: true,
-            ...(pending?.length ? { attachments: pending } : {}),
           });
         }
       } else if (event.itemType === "tool" && event.itemId) {
@@ -3687,7 +3675,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       if (method === "POST" && path === "/api/internal/attachments") {
         // multibot: bot→user file sending. The agents MCP `send_file` tool POSTs
-        // here; we store the file and hold it for the bot's next chat message.
+        // here; we store the file and persist it as its own chat message at once.
         const body = await readBody(req);
         const botId = String(body.botId ?? "");
         const bot = store.bot(botId);
@@ -3702,9 +3690,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // powtarzać, a powtórzona bywała inna niż prawdziwa.
         const fallbackName = body.path ? basename(String(body.path)) : "file";
         const meta = attachments.add(botId, String(body.name ?? fallbackName), String(body.mime ?? "application/octet-stream"), buf);
-        const pending = pendingBotAttachments.get(bot.threadId) ?? [];
-        pending.push(meta);
-        pendingBotAttachments.set(bot.threadId, pending);
+        // Utrwalamy wiadomość z załącznikiem OD RAZU, w chwili sukcesu narzędzia.
+        // Wcześniej plik czekał na najbliższy `assistant_text` — a dostawca potrafi
+        // skończyć turę bez ani jednego kawałka tekstu (codex 10.09.2026) i plik
+        // znikał bez śladu, mimo że bot dostał "File sent to the chat".
+        const message = store.appendMessage(bot.threadId, {
+          role: "bot",
+          kind: "text",
+          text: "",
+          attachments: [meta],
+        });
+        // Kropka „nieprzeczytane" na koniec tury liczy się z tego zbioru —
+        // plik w czacie to coś nowego dla użytkownika, tak samo jak tekst.
+        turnPushedVisible.add(bot.threadId);
+        broadcast({ kind: "message", threadId: bot.threadId, message });
         return json(res, 201, meta);
       }
       if (method === "POST" && path === "/api/internal/agent-action") {
@@ -4363,6 +4362,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 405, { error: "method not allowed" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
+    if (m && method === "GET") {
+      // Pojedynczy bot z transkryptem — ten sam kształt co element listy
+      // /api/bots, żeby klient (mobile) nie musiał ściągać całej floty.
+      const bot = store.bot(m[1]);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { bot: { ...bot, messages: chatMessages(bot.threadId) } });
+    }
     if (m && method === "PATCH") {
       const body = await readBody(req);
       // multibot: sekcja sidebaru (port z upstreamu #296) — null/"" czyści,
