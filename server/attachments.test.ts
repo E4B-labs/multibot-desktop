@@ -46,13 +46,30 @@ describe("fileMime", () => {
   it("czyta MIME z rozszerzenia, gdy model go nie podal albo wrzucil worek", () => {
     expect(fileMime("red_square.png", "application/octet-stream")).toBe("image/png");
     expect(fileMime("red_square.PNG")).toBe("image/png");
-    expect(fileMime("report.html", "")).toBe("text/html");
+    expect(fileMime("notes.txt", "")).toBe("text/plain");
     expect(fileMime("data.csv", "nonsense")).toBe("text/csv");
   });
 
   it("sensowna deklaracja modelu wygrywa nad rozszerzeniem", () => {
     expect(fileMime("notes.txt", "text/markdown")).toBe("text/markdown");
     expect(fileMime("chart.png", "image/jpeg")).toBe("image/jpeg");
+  });
+
+  // Model wpisuje w to pole byle co, a od tego zalezy `<img>` kontra kafelek.
+  it("rozszerzenie obrazka bije deklaracje, ktora obrazkiem nie jest", () => {
+    expect(fileMime("chart.png", "text/plain")).toBe("image/png");
+    expect(fileMime("chart.png", "binary/octet-stream")).toBe("image/png");
+  });
+
+  // Tresc AKTYWNA nie powstaje ze zgadywania po nazwie: nazwa przychodzi od
+  // modelu, a `text/html` z trasy pobrania biegl na originie aplikacji.
+  it("nie zgaduje typow wykonywalnych z nazwy pliku", () => {
+    for (const name of ["report.html", "page.htm", "logo.svg", "feed.xml"]) {
+      expect(fileMime(name)).toBe("application/octet-stream");
+    }
+    // Zadeklarowany jawnie przechodzi jak dotad — bramka jest wtedy
+    // `content-disposition` na trasie pobrania, nie to MIME.
+    expect(fileMime("report.html", "text/html")).toBe("text/html");
   });
 
   it("nieznane rozszerzenie zostaje workiem, jak dotad", () => {

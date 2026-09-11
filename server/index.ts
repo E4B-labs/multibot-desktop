@@ -20,7 +20,7 @@ import {
   type FleetEnvironment,
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
-import { AttachmentStore, fileMime, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fileMime, INLINE_UNSAFE_MIME, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
@@ -3898,8 +3898,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           // i kończył turę. Odmowa musi nazywać OBEJŚCIE i kto je włącza,
           // wtedy bot robi swoje inaczej albo prosi o to konkretnie.
           if (access !== "full") {
+            // Komputer radzimy tylko wtedy, gdy bot go w tej turze ma —
+            // odesłanie do `computer_exec` bota, który nie ma zamontowanego
+            // komputera, to drugi ślepy zaułek zamiast pierwszego.
+            const viaComputer = canUseIntegration(caller.threadId, "browser")
+              ? " Run it on your computer instead (computer_exec), or ask"
+              : " Ask";
             throw Object.assign(
-              new Error(`Full Access required for ${action}. You are in the "approval" profile: run this on your computer instead (computer_exec), or ask the user to switch this bot to Full Access with the access pill next to the message box.`),
+              new Error(`Full Access required for ${action}; this bot is in the "${access}" access profile.${viaComputer} the user to switch this bot to Full Access with the access pill next to the message box.`),
               { status: 403 },
             );
           }
@@ -4669,7 +4675,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         res.writeHead(200, {
           "content-type": file.mime,
           "content-length": String(bytes.length),
-          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+          // multibot (K6): `inline` na treści aktywnej to skrypt na NASZYM
+          // originie, z tokenem w localStorage obok. MIME przychodzi od bota,
+          // więc HTML/SVG/XML oddajemy tylko jako pobranie — obrazki, PDF-y i
+          // teksty zostają inline, bo z tego żyje podgląd w transkrypcie.
+          "content-disposition": `${INLINE_UNSAFE_MIME.has(file.mime) ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
           "x-content-type-options": "nosniff",
           "cache-control": "private, max-age=31536000, immutable",
         });

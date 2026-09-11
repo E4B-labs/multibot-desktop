@@ -88,14 +88,32 @@ export function resolveBotFile(path: string, roots?: string): string {
 /**
  * Rozszerzenie → MIME, dla rodzin, które transkrypt umie pokazać inaczej niż
  * kafelkiem do pobrania. Tylko to, co naprawdę przychodzi od botów.
+ *
+ * BEZ `html`/`htm`/`svg`/`xml` — świadomie. Wywnioskowany `text/html` nadaje
+ * plikowi TREŚĆ AKTYWNĄ na originie aplikacji: trasa pobrania oddawała go z
+ * `content-type: text/html`, a `ChatView` dokłada dla takiego MIME przycisk
+ * „Otwórz" (`window.open` na blobie, czyli na naszym originie, z tokenem w
+ * localStorage). Nazwa pliku pochodzi OD MODELU, więc zgadywanie z niej typu
+ * wykonywalnego dałoby modelowi władzę, której nie ma. Kto chce `text/html`,
+ * musi go ZADEKLAROWAĆ.
  */
 const EXT_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-  webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", avif: "image/avif", ico: "image/x-icon",
-  pdf: "application/pdf", html: "text/html", htm: "text/html",
+  webp: "image/webp", bmp: "image/bmp", avif: "image/avif", ico: "image/x-icon",
+  pdf: "application/pdf",
   csv: "text/csv", json: "application/json", md: "text/markdown", txt: "text/plain",
-  xml: "application/xml", yaml: "text/yaml", yml: "text/yaml", zip: "application/zip",
+  yaml: "text/yaml", yml: "text/yaml", zip: "application/zip",
 };
+
+/**
+ * MIME, których trasa pobrania nigdy nie oddaje do wyświetlenia W MIEJSCU:
+ * wejście w taki URL wykonałoby treść na originie aplikacji. Dotyczy też MIME
+ * ZADEKLAROWANEGO przez bota — dlatego to lista po stronie oddawania bajtów,
+ * a nie tylko brak wpisu w `EXT_MIME`.
+ */
+export const INLINE_UNSAFE_MIME = new Set([
+  "text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml",
+]);
 
 /**
  * MIME załącznika: deklaracja, a gdy jej nie ma — rozszerzenie nazwy pliku.
@@ -111,13 +129,20 @@ const EXT_MIME: Record<string, string> = {
  * Sensowna deklaracja wygrywa; `application/octet-stream` i śmieci ustępują
  * rozszerzeniu, a rozszerzenie spoza mapy zostawia `application/octet-stream`
  * dokładnie jak dotąd.
+ *
+ * Jeden wyjątek: gdy rozszerzenie mówi OBRAZEK, a deklaracja obrazkiem nie
+ * jest (`text/plain`, `binary/octet-stream`, cokolwiek), wygrywa rozszerzenie.
+ * Model wpisuje w to pole byle co, a to jedyne miejsce, które decyduje o tym,
+ * czy użytkownik zobaczy grafikę, czy kafelek do pobrania.
  */
 export function fileMime(name: string, declared?: string): string {
   const value = String(declared ?? "").trim().toLowerCase();
   const valid = /^[\w.+-]+\/[\w.+-]+$/.test(value) ? value : "";
-  if (valid && valid !== "application/octet-stream") return valid;
   const ext = String(name ?? "").toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
-  return EXT_MIME[ext] ?? "application/octet-stream";
+  const guessed = EXT_MIME[ext] ?? "";
+  if (guessed.startsWith("image/") && !valid.startsWith("image/")) return guessed;
+  if (valid && valid !== "application/octet-stream") return valid;
+  return guessed || "application/octet-stream";
 }
 
 const cleanName = (value: string) => {
