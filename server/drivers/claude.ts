@@ -224,6 +224,8 @@ interface Ask {
 
 const DENY_TIMEOUT_NOTE =
   "MultiBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const NO_TURN_NOTE =
+  "MultiBot: this turn is already over, so nobody can approve this. Do not claim you did it — say plainly what is still missing.";
 const QUESTION_TIMEOUT_NOTE = "MultiBot: nobody answered in time. Use your best judgment and continue.";
 const QUESTION_DISMISS_NOTE = "MultiBot: the user closed the question without answering. Use your best judgment and continue.";
 
@@ -656,7 +658,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return;
           }
           const activeTurn = worker?.current;
-          if (!activeTurn) return;
+          if (!activeTurn) {
+            // multibot: bez aktywnej tury karty NIE MA GDZIE postawić — a samo
+            // porzucenie prośby trzymało CLI na niej piętnaście minut
+            // (`DENY_TIMEOUT_NOTE` niżej). Zmierzone 11.09.2026 na żywym haiku:
+            // bot obiecał „wysyłam trzy pliki", zawołał `Write`, watchdog zdjął
+            // turę, a kolejne prośby (drugi `Write`, `PowerShell`) przepadły
+            // bez śladu — użytkownik nie zobaczył ani karty, ani plików, ani
+            // odmowy. Odpowiadamy od razu, żeby model wiedział i to napisał.
+            queueMicrotask(() => worker?.broker?.answer(ask.id, "deny", NO_TURN_NOTE));
+            return;
+          }
           emit({ ...base(threadId, activeTurn.turnId), type: "request.opened", requestId: ask.id,
             requestType: ask.kind, tool: ask.tool, summary: askSummary(ask),
             choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,

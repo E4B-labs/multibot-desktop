@@ -36,6 +36,19 @@ describe("turnToolsText", () => {
     expect(text).toContain("NOT delivery");
   });
 
+  // Regresja (K6): zdanie kazało „zapisz plik, potem podaj `path`", więc bot
+  // wołał `Write`, dostawał kartę zgody i tura kończyła się obietnicą bez
+  // pliku. Treść, którą bot pisze SAM, ma iść prosto w `content_base64`.
+  it("sends self-written content inline instead of through a disk write", () => {
+    const text = turnToolsText({ agents: { command: "node" } } as any);
+    expect(text).toContain("content_base64");
+    expect(text).toContain("do not save it to disk first");
+    expect(text).toContain("Never say a file is sent");
+    // Zmierzone po tej zmianie: przy `content_base64` model przestal podawac
+    // `name` i trzy pliki wyladowaly w czacie jako „file", „file", „file".
+    expect(text).toContain("always set `name` with its extension");
+  });
+
   it("says plainly when nothing is mounted", () => {
     const text = turnToolsText({} as any);
     expect(text).toContain("No MCP tools are mounted this turn");

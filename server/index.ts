@@ -20,7 +20,7 @@ import {
   type FleetEnvironment,
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
-import { AttachmentStore, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fileMime, INLINE_UNSAFE_MIME, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
@@ -3809,8 +3809,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // `computer_exec`). Najpierw host — a gdy tam go nie ma, czytamy z
         // kontenera. Fallback jest wyłącznie kontenerowy (sandbox bota), więc
         // nie otwiera odczytu dowolnych plików hosta.
-        const declaredMime = String(body.mime ?? "application/octet-stream");
-        const byteLimit = declaredMime.toLowerCase().startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+        // Przy wysyłce po ścieżce nazwa pliku jest już znana — bot nie musi jej
+        // powtarzać, a powtórzona bywała inna niż prawdziwa.
+        const fileName = String(body.name ?? (body.path ? basename(String(body.path)) : "file"));
+        // MIME z nazwy, gdy model go nie podał — patrz `fileMime`. Limit liczymy
+        // z TEGO, nie z deklaracji: obrazek zadeklarowany jako octet-stream
+        // przechodził przez limit dokumentu (25 MB) zamiast obrazka (8 MB).
+        const declaredMime = fileMime(fileName, body.mime as string | undefined);
+        const byteLimit = declaredMime.startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
         let buf: Buffer;
         if (body.path) {
           try {
@@ -3822,10 +3828,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         } else {
           buf = Buffer.from(String(body.content ?? ""), "base64");
         }
-        // Przy wysyłce po ścieżce nazwa pliku jest już znana — bot nie musi jej
-        // powtarzać, a powtórzona bywała inna niż prawdziwa.
-        const fallbackName = body.path ? basename(String(body.path)) : "file";
-        const meta = attachments.add(botId, String(body.name ?? fallbackName), declaredMime, buf);
+        const meta = attachments.add(botId, fileName, declaredMime, buf);
         // Utrwalamy wiadomość z załącznikiem OD RAZU, w chwili sukcesu narzędzia.
         // Wcześniej plik czekał na najbliższy `assistant_text` — a dostawca potrafi
         // skończyć turę bez ani jednego kawałka tekstu (codex 10.09.2026) i plik
@@ -3890,7 +3893,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           "user.notify"]);
         if (access === "read-only" && !readOnlyActions.has(action)) return json(res, 403, { error: "read-only access" });
         const requireFull = () => {
-          if (access !== "full") throw Object.assign(new Error("Full Access required for this action"), { status: 403 });
+          // multibot (K6): sam komunikat „Full Access required" był dla modelu
+          // ślepym zaułkiem — bot oznajmiał użytkownikowi „jestem zablokowany"
+          // i kończył turę. Odmowa musi nazywać OBEJŚCIE i kto je włącza,
+          // wtedy bot robi swoje inaczej albo prosi o to konkretnie.
+          if (access !== "full") {
+            // Komputer radzimy tylko wtedy, gdy bot go w tej turze ma —
+            // odesłanie do `computer_exec` bota, który nie ma zamontowanego
+            // komputera, to drugi ślepy zaułek zamiast pierwszego.
+            const viaComputer = canUseIntegration(caller.threadId, "browser")
+              ? " Run it on your computer instead (computer_exec), or ask"
+              : " Ask";
+            throw Object.assign(
+              new Error(`Full Access required for ${action}; this bot is in the "${access}" access profile.${viaComputer} the user to switch this bot to Full Access with the access pill next to the message box.`),
+              { status: 403 },
+            );
+          }
         };
         // multibot: rutyny CUDZEGO bota. `bot_id` jest opcjonalne (brak = swoje),
         // a cudzy bot musi być widoczny dla wołającego — i, gdy wołający jest
@@ -4657,7 +4675,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         res.writeHead(200, {
           "content-type": file.mime,
           "content-length": String(bytes.length),
-          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+          // multibot (K6): `inline` na treści aktywnej to skrypt na NASZYM
+          // originie, z tokenem w localStorage obok. MIME przychodzi od bota,
+          // więc HTML/SVG/XML oddajemy tylko jako pobranie — obrazki, PDF-y i
+          // teksty zostają inline, bo z tego żyje podgląd w transkrypcie.
+          "content-disposition": `${INLINE_UNSAFE_MIME.has(file.mime) ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
           "x-content-type-options": "nosniff",
           "cache-control": "private, max-age=31536000, immutable",
         });

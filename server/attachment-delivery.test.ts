@@ -83,6 +83,57 @@ describe("bot file delivery through real MCP, HTTP and transcript", () => {
     expect(silent, "file-only turn must not get the silent-turn note").toEqual([]);
   }, 120_000);
 
+  // Regresja (K6): bot wysyłał obrazek, a w czacie stawał szary kafelek do
+  // pobrania. `MessageAttachment` renderuje `<img>` po `image/*`, a MIME
+  // przychodzi OD MODELU — haiku podało `application/octet-stream` dla pliku
+  // `.png` (zmierzone 11.09.2026). Nazwa pliku decyduje, gdy deklaracja jest
+  // workiem, i to samo MIME musi wyjść nagłówkiem pobrania.
+  it("delivers a .png declared as octet-stream as an image the transcript can render", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "files", model: "fake" } });
+    const path = join(home, "chart.png");
+    writeFileSync(path, "png bytes");
+    rmSync(join(home, "results.json"), { force: true });
+    writeFileSync(join(home, "calls.json"), JSON.stringify([{ path, mime: "application/octet-stream" }]));
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "send the chart" })).status).toBe(202);
+    await until(async () => existsSync(join(home, "results.json")) && !(await api("GET", `/api/bots/${bot.id}`)).body.bot.busy, "image turn");
+    const messages = (await api("GET", `/api/bots/${bot.id}`)).body.bot.messages;
+    const file = messages.flatMap((m: any) => m.attachments ?? []).find((f: any) => f.name === "chart.png");
+    expect(file, "image must reach the transcript").toBeDefined();
+    expect(file.mime, "an image sent as octet-stream must still render as an image").toBe("image/png");
+    const response = await fetch(`${base}/api/bots/${bot.id}/attachments/${file.id}`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.headers.get("content-type")).toBe("image/png");
+    // Obrazek zostaje `inline` — z tego żyje podgląd w transkrypcie.
+    expect(response.headers.get("content-disposition")).toMatch(/^inline;/);
+  }, 120_000);
+
+  // Treść AKTYWNA od bota nigdy nie wychodzi do wyświetlenia w miejscu:
+  // `inline` + `text/html` to skrypt na originie aplikacji, obok tokenu w
+  // localStorage. MIME deklaruje bot, więc bramką musi być oddawanie bajtów.
+  it("serves bot-declared html and svg as a download, never inline", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "files", model: "fake" } });
+    const htmlPath = join(home, "report.html");
+    const svgPath = join(home, "logo.svg");
+    writeFileSync(htmlPath, "<script>alert(1)</script>");
+    writeFileSync(svgPath, "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>");
+    rmSync(join(home, "results.json"), { force: true });
+    writeFileSync(join(home, "calls.json"), JSON.stringify([
+      { path: htmlPath, mime: "text/html" },
+      { path: svgPath, mime: "image/svg+xml" },
+    ]));
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "send the report" })).status).toBe(202);
+    await until(async () => existsSync(join(home, "results.json")) && !(await api("GET", `/api/bots/${bot.id}`)).body.bot.busy, "active-content turn");
+    const files = (await api("GET", `/api/bots/${bot.id}`)).body.bot.messages.flatMap((m: any) => m.attachments ?? []);
+    for (const name of ["report.html", "logo.svg"]) {
+      const file = files.find((f: any) => f.name === name);
+      expect(file, `${name} must reach the transcript`).toBeDefined();
+      const response = await fetch(`${base}/api/bots/${bot.id}/attachments/${file.id}`, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.headers.get("content-disposition"), `${name} must not be served inline`).toMatch(/^attachment;/);
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  }, 120_000);
+
   it("routes a file sent during a group turn to the group ledger, not the private chat", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "files", model: "fake" } });

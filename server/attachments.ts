@@ -85,6 +85,66 @@ export function resolveBotFile(path: string, roots?: string): string {
   return found;
 }
 
+/**
+ * Rozszerzenie → MIME, dla rodzin, które transkrypt umie pokazać inaczej niż
+ * kafelkiem do pobrania. Tylko to, co naprawdę przychodzi od botów.
+ *
+ * BEZ `html`/`htm`/`svg`/`xml` — świadomie. Wywnioskowany `text/html` nadaje
+ * plikowi TREŚĆ AKTYWNĄ na originie aplikacji: trasa pobrania oddawała go z
+ * `content-type: text/html`, a `ChatView` dokłada dla takiego MIME przycisk
+ * „Otwórz" (`window.open` na blobie, czyli na naszym originie, z tokenem w
+ * localStorage). Nazwa pliku pochodzi OD MODELU, więc zgadywanie z niej typu
+ * wykonywalnego dałoby modelowi władzę, której nie ma. Kto chce `text/html`,
+ * musi go ZADEKLAROWAĆ.
+ */
+const EXT_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  webp: "image/webp", bmp: "image/bmp", avif: "image/avif", ico: "image/x-icon",
+  pdf: "application/pdf",
+  csv: "text/csv", json: "application/json", md: "text/markdown", txt: "text/plain",
+  yaml: "text/yaml", yml: "text/yaml", zip: "application/zip",
+};
+
+/**
+ * MIME, których trasa pobrania nigdy nie oddaje do wyświetlenia W MIEJSCU:
+ * wejście w taki URL wykonałoby treść na originie aplikacji. Dotyczy też MIME
+ * ZADEKLAROWANEGO przez bota — dlatego to lista po stronie oddawania bajtów,
+ * a nie tylko brak wpisu w `EXT_MIME`.
+ */
+export const INLINE_UNSAFE_MIME = new Set([
+  "text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml",
+]);
+
+/**
+ * MIME załącznika: deklaracja, a gdy jej nie ma — rozszerzenie nazwy pliku.
+ *
+ * `send_file` bierze MIME OD MODELU, a model go nagminnie pomija albo wpisuje
+ * `application/octet-stream` (zmierzone 11.09.2026 na żywym haiku: plik
+ * `red_square.png` dotarł jako octet-stream). Transkrypt renderuje obrazek po
+ * `image/*` (`MessageAttachment` w `src/components/ChatView.tsx`), więc wysłana
+ * grafika pokazywała się użytkownikowi jako szary kafelek z „Pobierz" — bot
+ * mówił „wysłałem obrazek", a obrazka nie było widać. Nazwa pliku jest tu
+ * wiarygodniejsza od deklaracji modelu.
+ *
+ * Sensowna deklaracja wygrywa; `application/octet-stream` i śmieci ustępują
+ * rozszerzeniu, a rozszerzenie spoza mapy zostawia `application/octet-stream`
+ * dokładnie jak dotąd.
+ *
+ * Jeden wyjątek: gdy rozszerzenie mówi OBRAZEK, a deklaracja obrazkiem nie
+ * jest (`text/plain`, `binary/octet-stream`, cokolwiek), wygrywa rozszerzenie.
+ * Model wpisuje w to pole byle co, a to jedyne miejsce, które decyduje o tym,
+ * czy użytkownik zobaczy grafikę, czy kafelek do pobrania.
+ */
+export function fileMime(name: string, declared?: string): string {
+  const value = String(declared ?? "").trim().toLowerCase();
+  const valid = /^[\w.+-]+\/[\w.+-]+$/.test(value) ? value : "";
+  const ext = String(name ?? "").toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  const guessed = EXT_MIME[ext] ?? "";
+  if (guessed.startsWith("image/") && !valid.startsWith("image/")) return guessed;
+  if (valid && valid !== "application/octet-stream") return valid;
+  return guessed || "application/octet-stream";
+}
+
 const cleanName = (value: string) => {
   const name = value.trim();
   if (!name || name.length > 180 || name === "." || name === ".." || /[\\/\0]/.test(name)) {
@@ -110,7 +170,7 @@ export class AttachmentStore {
 
   add(botId: string, name: string, mime: string, bytes: Buffer): AttachmentMeta {
     const safeName = cleanName(name);
-    const safeMime = /^[\w.+-]+\/[\w.+-]+$/i.test(mime) ? mime.toLowerCase() : "application/octet-stream";
+    const safeMime = fileMime(safeName, mime);
     const limit = safeMime.startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
     if (!bytes.length) throw Object.assign(new Error("empty file"), { status: 422 });
     if (bytes.length > limit) throw Object.assign(new Error(`file exceeds ${limit / 1024 / 1024} MB limit`), { status: 413 });
