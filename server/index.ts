@@ -1985,6 +1985,10 @@ bus.subscribe((event: RuntimeEvent) => {
         if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
         turnOrigin.delete(bot.id);
         broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
+        // multibot: karta w transkrypcie z przyciskiem „Odśwież logowanie" —
+        // banerka znika przy przełączeniu bota, karta zostaje tam, gdzie
+        // tura padła. Jedna otwarta karta na bota: powtórka nie dokłada drugiej.
+        if (!openLoginCard(bot.threadId)) pushMessage({ role: "bot", kind: "login", login: { tool: expiredTool } });
       } else {
         endTurnPush(bot.id, "failed", event.message.slice(0, 120));
       }
@@ -2052,11 +2056,21 @@ bus.subscribe((event: RuntimeEvent) => {
       // budzi telefon banerką, a karta (pytanie, zgoda, sekret, konektor) stoi
       // w czacie i sama mówi, na czym stanęło.
       const toldUser = turnToldUser.delete(bot.id);
+      // Udana tura z odpowiedzią = logowanie działa; otwarta karta „logowanie
+      // wygasło" ma to pokazać, zamiast wisieć jako wieczna prośba.
+      if (event.ok && saidThisTurn && openLoginCard(event.threadId)) resolveLoginCards(event.threadId);
+      // Tura nieudana (`ok: false`) bez zgłoszonego powodu to nadal cisza, ale
+      // nie podpisujemy jej „model nic nie napisał", jakby to była jego decyzja.
       const silentNote = !saidThisTurn && !frame && !toldUser && origin === "user"
-        ? t(
-          "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
-          '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
-        )
+        ? event.ok
+          ? t(
+            "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
+            '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
+          )
+          : t(
+            `(tura przerwana błędem${event.stopReason ? ` — ${event.stopReason}` : ""}; napisz „kontynuuj”, żeby spróbować jeszcze raz)`,
+            `(turn failed${event.stopReason ? ` — ${event.stopReason}` : ""}; say "continue" to try again)`,
+          )
         : "";
       if (silentNote) pushMessage({ role: "bot", kind: "text", text: silentNote });
       turnUsedTool.delete(event.threadId);
@@ -3220,6 +3234,24 @@ function clearLoginExpired(toolId: string): void {
     if (loginExpiredTool(bot.needsAttention) !== toolId) continue;
     store.patchBot(bot.id, { needsAttention: null });
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    resolveLoginCards(bot.threadId);
+  }
+}
+
+/** multibot: ostatnia nierozwiązana karta „logowanie wygasło" w wątku. */
+function openLoginCard(threadId: string): Message | undefined {
+  return store.messagesFor(threadId).findLast((message) => message.kind === "login" && !message.login?.signedIn);
+}
+
+/** multibot: logowanie znów działa (udany cli-login, udana tura z odpowiedzią)
+ * — otwarte karty w wątku przechodzą w „Zalogowano ponownie". */
+function resolveLoginCards(threadId: string): void {
+  for (const message of store.messagesFor(threadId)) {
+    if (message.kind !== "login" || message.login?.signedIn) continue;
+    const patched = store.patchMessage(threadId, message.id, { login: { ...message.login!, signedIn: true } });
+    // `message.patch`, nie `message`: powłoka trzyma wiadomość o znanym id i
+    // zwykłą ramkę `message` pomija (messageAdded), więc karta by nie zgasła.
+    if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
   }
 }
 

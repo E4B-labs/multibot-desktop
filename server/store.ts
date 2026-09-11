@@ -74,8 +74,12 @@ export interface SecretRequestCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret";
+  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret" | "login";
   text?: string;
+  /** multibot: karta „logowanie wygasło" — harness CLI bota stracił sesję;
+   * `signedIn` zapala się, gdy logowanie znów działa (udany cli-login albo
+   * następna udana tura). Addytywne; stare zapisy czytają się bez migracji. */
+  login?: { tool: string; signedIn?: boolean };
   card?: OptionCardData;
   secret?: SecretRequestCardData;
   /** activity messages: tool name + outcome */

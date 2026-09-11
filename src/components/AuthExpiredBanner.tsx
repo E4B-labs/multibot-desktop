@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { KeyRound, X } from "lucide-react";
-import { useStore, type Bot } from "@/state/store";
+import { CheckCircle2, KeyRound, X } from "lucide-react";
+import { useStore, type Bot, type Message } from "@/state/store";
 import { useLanguage } from "@/lib/language";
 
 /** Prefiks `needsAttention` pisany przez serwer (server/auth-failure.ts).
@@ -61,6 +61,61 @@ export function AuthExpiredBanner({ bot }: { bot: Bot }) {
           >
             <X size={14} />
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * multibot: karta w transkrypcie (`kind: "login"`, server/store.ts) — stoi tam,
+ * gdzie tura padła, i zostaje po przełączeniu bota, inaczej niż banerka wyżej.
+ * Ten sam przycisk co w banerce: ustawienia z gotowym oknem logowania tego
+ * CLI. Serwer przełącza ją na „Zalogowano ponownie" po udanym logowaniu albo
+ * po następnej udanej turze (`login.signedIn`).
+ */
+export function LoginExpiredCard({ message }: { message: Message }) {
+  const { dispatch } = useStore();
+  const polish = useLanguage() === "pl";
+  const tool = message.login?.tool ?? "";
+  const signedIn = message.login?.signedIn === true;
+  return (
+    <div className="flex justify-start" data-testid="login-expired-card">
+      <div className={`w-full max-w-[440px] rounded-2xl border bg-card p-4 ${signedIn ? "border-success/30" : "border-warning/40"}`}>
+        <div className="flex items-start gap-3">
+          <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${signedIn ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
+            {signedIn ? <CheckCircle2 size={18} /> : <KeyRound size={18} />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[14px] font-medium text-ink">
+              {signedIn ? (polish ? "Zalogowano ponownie" : "Signed in again") : polish ? "Logowanie wygasło" : "Login expired"}
+            </div>
+            <div className="mt-1 text-[12.5px] leading-relaxed text-ink-secondary">
+              {signedIn
+                ? polish ? `${tool} znów odpowiada. Napisz „kontynuuj”, żeby bot wrócił do tematu.` : `${tool} is back. Say "continue" to bring the bot back to the topic.`
+                : polish
+                  ? `Sesja ${tool} wygasła i nie dała się odświeżyć, więc bot nie mógł odpowiedzieć. Zaloguj się ponownie — bot podejmie temat.`
+                  : `The ${tool} session expired and could not be refreshed, so the bot could not answer. Sign in again and the bot picks the topic back up.`}
+            </div>
+            {!signedIn && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => dispatch({ type: "toggleAppSettings", open: true, cliLogin: tool })}
+                  className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white"
+                >
+                  {polish ? "Odśwież logowanie" : "Refresh login"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dispatch({ type: "toggleAppSettings", open: true })}
+                  className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:text-ink"
+                >
+                  {polish ? "Otwórz ustawienia" : "Open settings"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

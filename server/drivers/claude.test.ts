@@ -410,6 +410,31 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(error.message).toContain("simulated crash");
   });
 
+  // multibot: CLI 2.1.268 przy wygasłym OAuth nie wychodzi z kodem 1 — pisze
+  // powód jako tekst asystenta i kończy result is_error. Ma z tego wyjść
+  // runtime.error (index.ts → needsAttention + karta), NIE dymek bota i NIE
+  // „model nic nie napisał".
+  it("an expired login in assistant text becomes runtime.error, not a bot bubble", async () => {
+    await create("auth-expired");
+    await instance.adapter.sendTurn({ threadId: "t-auth", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const errors = recorder.events.filter((e) => e.type === "runtime.error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ message: expect.stringContaining("OAuth session expired") });
+    expect(recorder.events.find((e) => e.type === "item.completed" && (e as { itemType?: string }).itemType === "assistant_text")).toBeUndefined();
+    expect(recorder.events.find((e) => e.type === "content.delta")).toBeUndefined();
+  });
+
+  it("a result with is_error carries its reason as runtime.error", async () => {
+    await create("error-result");
+    await instance.adapter.sendTurn({ threadId: "t-errres", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const error = recorder.events.find((e) => e.type === "runtime.error")!;
+    expect(error.message).toContain("Reached max turns");
+  });
+
   it("skips malformed protocol lines without losing the turn", async () => {
     await create("malformed");
     await instance.adapter.sendTurn({ threadId: "t-noise", text: "go" });

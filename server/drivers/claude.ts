@@ -21,6 +21,7 @@ import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
 import { approvalRule } from "../approval-rules.ts";
 import { staleCliNotice } from "../cli-update.ts";
+import { authFailure } from "../auth-failure.ts";
 import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed, turnPolicy } from "../turn-policy.ts";
 
 import type {
@@ -335,7 +336,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const { instanceId, config } = input;
     const listeners = new Set<RuntimeEventListener>();
     type Broker = ReturnType<typeof createPermissionBroker>;
-    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean };
+    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean; /** powód już zgłoszony jako runtime.error w tej turze */ failed?: string };
     type Worker = {
       child: ReturnType<typeof spawn>;
       signature: string;
@@ -656,7 +657,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // A stale CLI reports "…or newer is required" as ordinary assistant
             // text; staleCliNotice starts `claude update` and says so.
             const text = staleCliNotice(firstText(msg.content));
-            if (text.trim()) {
+            // multibot: CLI 2.1.268 nie wychodzi z kodem 1 przy wygasłym OAuth
+            // — pisze „Failed to authenticate: OAuth session expired…" jako
+            // ZWYKŁY tekst asystenta i kończy `result` z `is_error`. Telefon
+            // Kacpra 11.09.2026 21:18: zdanie wylądowało w dymku bota, a tura
+            // wcześniej (20:59) skończyła się jako „model nic nie napisał".
+            // Błąd logowania jedzie jako runtime.error — tą samą szyną, którą
+            // index.ts parkuje bota na `needsAttention` i stawia kartę.
+            if (text.trim() && !worker!.current!.failed && authFailure(text)) {
+              worker!.current!.failed = text.trim();
+              emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: text.trim().slice(0, 300) });
+            } else if (text.trim()) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!worker!.current!.sawStreamDelta) {
                 emit({ ...base(threadId, worker!.current!.turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
@@ -686,9 +697,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               }
             }
             break;
-          case "result":
+          case "result": {
+            // multibot: `result.is_error` niesie PRAWDZIWY powód w `result`
+            // (albo w `errors`). Bez tego tura padała po cichu i index.ts
+            // dopisywał „model nic nie napisał" — mylące, gdy powodem jest
+            // wygasłe logowanie. Gdy CLI nie podało słowa, a plik poświadczeń
+            // zniknął, powód i tak jest znany: bot nie jest zalogowany.
+            if (o.is_error === true && !worker!.current!.failed) {
+              const reason = (typeof o.result === "string" ? o.result : Array.isArray(o.errors) ? o.errors.join("; ") : "").trim()
+                || (!claudeIsAuthenticated() ? "Failed to authenticate: claude is not logged in" : "");
+              if (reason) {
+                worker!.current!.failed = reason;
+                emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: reason.slice(0, 300) });
+              }
+            }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
             break;
+          }
         }
       };
       worker.onLine = handleLine;
