@@ -75,3 +75,12 @@ export function loginExpiredTool(note: string | null | undefined): string | null
   if (!note || !note.startsWith(LOGIN_EXPIRED_PREFIX)) return null;
   return /^([a-z0-9-]+)\./i.exec(note.slice(LOGIN_EXPIRED_PREFIX.length))?.[1] ?? null;
 }
+
+/** multibot: karta „logowanie wygasło" w transkrypcie (`kind: "login"`).
+ * Otwarta = jeszcze nie zgaszona; porównanie po narzędziu, bo bot mógł zmienić
+ * harness między turami i karta claude'a nie ma gasnąć od logowania do codexa. */
+export interface LoginCardMessage { id: string; kind: string; login?: { tool: string; signedIn?: boolean } }
+export const openLoginCard = <M extends LoginCardMessage>(messages: readonly M[], tool: string): M | undefined =>
+  messages.findLast((message) => message.kind === "login" && message.login?.tool === tool && !message.login.signedIn);
+export const openLoginCards = <M extends LoginCardMessage>(messages: readonly M[], tool: string): M[] =>
+  messages.filter((message) => message.kind === "login" && message.login?.tool === tool && !message.login.signedIn);

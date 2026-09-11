@@ -86,6 +86,12 @@ const handlePrompt = (raw: string) => {
     out({ type: "result", is_error: true, subtype: "error_during_execution", result: "Failed to authenticate: OAuth session expired and could not be refreshed" });
     return;
   }
+  // zwykła odpowiedź modelu, która MÓWI o logowaniu — ma zostać dymkiem
+  if (mode === "prose-auth") {
+    out({ type: "assistant", message: { content: [{ type: "text", text: "Your OAuth session expired most likely because the refresh token was revoked; a 401 means the API key was rejected." }] } });
+    out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01 });
+    return;
+  }
   // result z błędem i powodem, bez żadnego tekstu asystenta
   if (mode === "error-result") {
     out({ type: "result", is_error: true, subtype: "error_max_turns", result: "Reached max turns (1)" });

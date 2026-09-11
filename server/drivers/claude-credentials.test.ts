@@ -43,10 +43,10 @@ describe("claudeCredentialPaths", () => {
     expect(claudeIsAuthenticated(env)).toBe(true);
   });
 
-  it("klucz w środowisku to też zalogowanie — proxy nie ma żadnego pliku", () => {
+  it("token proxy w środowisku to zalogowanie; klucz API nie, bo driver go dziecku zdejmuje", () => {
     const env = { HOME: emptyHome(), PREFIX: emptyHome() };
     expect(claudeIsAuthenticated(env)).toBe(false);
-    expect(claudeIsAuthenticated({ ...env, ANTHROPIC_API_KEY: "x" })).toBe(true);
+    expect(claudeIsAuthenticated({ ...env, ANTHROPIC_API_KEY: "x" })).toBe(false);
     expect(claudeIsAuthenticated({ ...env, ANTHROPIC_AUTH_TOKEN: "x" })).toBe(true);
   });
 });
@@ -67,9 +67,19 @@ describe("claudeAuthState — expiresAt", () => {
     expect(claudeIsAuthenticated(env)).toBe(false);
   });
 
-  it("expiresAt w przeszłości → expired", () => {
-    const env = withCreds({ claudeAiOauth: { expiresAt: Date.now() - 60_000 } });
-    expect(claudeAuthState(env)).toEqual({ authenticated: false, reason: "expired" });
+  it("wygasły ACCESS token z żywym refresh tokenem → zalogowany (CLI odświeży na starcie)", () => {
+    const env = withCreds({ claudeAiOauth: { expiresAt: Date.now() - 3_600_000, refreshTokenExpiresAt: Date.now() + 30 * 86_400_000 } });
+    expect(claudeAuthState(env)).toEqual({ authenticated: true });
+    expect(claudeAuthState(withCreds({ claudeAiOauth: { expiresAt: Date.now() - 3_600_000 } }))).toEqual({ authenticated: true });
+  });
+
+  it("wygasły REFRESH token → expired; świeżo wygasły (w luzie minuty) jeszcze nie", () => {
+    expect(claudeAuthState(withCreds({ claudeAiOauth: { expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() - 120_000 } })))
+      .toEqual({ authenticated: false, reason: "expired" });
+    expect(claudeAuthState(withCreds({ claudeAiOauth: { expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() - 10_000 } })))
+      .toEqual({ authenticated: true });
+    // sekundy zamiast ms (poniżej 1e11) nie liczą się jako data
+    expect(claudeAuthState(withCreds({ claudeAiOauth: { refreshTokenExpiresAt: 1_700_000_000 } }))).toEqual({ authenticated: true });
   });
 
   it("expiresAt w przyszłości → zalogowany", () => {
@@ -82,9 +92,9 @@ describe("claudeAuthState — expiresAt", () => {
     expect(claudeAuthState(withCreds({}))).toEqual({ authenticated: true });
   });
 
-  it("brak pliku → missing; klucz w środowisku wygrywa z wygasłym plikiem", () => {
+  it("brak pliku → missing; token proxy w środowisku wygrywa z wygasłym plikiem", () => {
     expect(claudeAuthState({ HOME: emptyHome(), PREFIX: emptyHome() })).toEqual({ authenticated: false, reason: "missing" });
     const env = withCreds({ claudeAiOauth: { expiresAt: 0 } });
-    expect(claudeAuthState({ ...env, ANTHROPIC_API_KEY: "k" })).toEqual({ authenticated: true });
+    expect(claudeAuthState({ ...env, ANTHROPIC_AUTH_TOKEN: "k" })).toEqual({ authenticated: true });
   });
 });

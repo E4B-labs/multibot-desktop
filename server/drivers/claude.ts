@@ -21,7 +21,6 @@ import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
 import { approvalRule } from "../approval-rules.ts";
 import { staleCliNotice } from "../cli-update.ts";
-import { authFailure } from "../auth-failure.ts";
 import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed, turnPolicy } from "../turn-policy.ts";
 
 import type {
@@ -38,6 +37,12 @@ import { appendNative } from "./native.ts";
 import { historyBlock } from "./history.ts";
 
 const DRIVER_KIND = "claudeAgent";
+
+/** Syntetyczny komunikat CLI o padniętym logowaniu — zawsze od pierwszego znaku. */
+const CLI_AUTH_ERROR = /^\s*Failed to authenticate\b/i;
+/** Powód błędu idzie do transkryptu i pusha — klucz API, gdyby CLI go
+ * zacytowało, nie może tam trafić. */
+const redactKeys = (text: string) => text.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-…");
 
 // Gdzie może leżeć `.credentials.json` claude'a. Na Termuxie `claude` to shim
 // (`proot-distro login debian -- …`), więc plik siedzi w rootfs kontenera pod
@@ -73,16 +78,28 @@ export const claudeIsAuthenticated = (env: Record<string, string | undefined> = 
 export function claudeAuthState(
   env: Record<string, string | undefined> = process.env,
 ): { authenticated: boolean; reason?: "expired" | "missing" } {
-  if (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) return { authenticated: true };
+  // Liczy się to, co dostaje DZIECKO: `spawnWorker` zdejmuje ANTHROPIC_API_KEY
+  // ze środowiska CLI (klucz z powłoki nie ma logować Claude Code'a), więc
+  // klucz nie jest zalogowaniem; `ANTHROPIC_AUTH_TOKEN` (CLIProxyAPI) przechodzi.
+  if (env.ANTHROPIC_AUTH_TOKEN) return { authenticated: true };
   const file = claudeCredentialPaths(env).find(existsSync);
   if (!file) return { authenticated: false, reason: "missing" };
-  let expiresAt: unknown;
+  let oauth: { expiresAt?: unknown; refreshTokenExpiresAt?: unknown } | undefined;
   try {
-    expiresAt = JSON.parse(readFileSync(file, "utf8"))?.claudeAiOauth?.expiresAt;
+    oauth = JSON.parse(readFileSync(file, "utf8"))?.claudeAiOauth;
   } catch {
     return { authenticated: true }; // nieczytelny plik: nie zgadujemy, CLI powie
   }
-  if (typeof expiresAt === "number" && expiresAt <= Date.now()) return { authenticated: false, reason: "expired" };
+  // Wygasły ACCESS token (`expiresAt` w przeszłości, zwykle +6 h od logowania)
+  // to normalny stan między sesjami: CLI odświeża go na starcie tokenem
+  // odświeżającym i dopiero wtedy przepisuje plik. Martwe logowanie to
+  // `expiresAt` wyzerowane przez CLI po nieudanym odświeżeniu (telefon) albo
+  // wygasły REFRESH token. Wartości w ms (> 1e11); minuta luzu na zegar.
+  const expiresAt = oauth?.expiresAt;
+  const refreshExpiresAt = oauth?.refreshTokenExpiresAt;
+  const wiped = typeof expiresAt === "number" && expiresAt <= 0;
+  const refreshDead = typeof refreshExpiresAt === "number" && refreshExpiresAt > 1e11 && refreshExpiresAt <= Date.now() - 60_000;
+  if (wiped || refreshDead) return { authenticated: false, reason: "expired" };
   return { authenticated: true };
 }
 
@@ -696,16 +713,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // text; staleCliNotice starts `claude update` and says so.
             const text = staleCliNotice(firstText(msg.content));
             // multibot: CLI 2.1.268 nie wychodzi z kodem 1 przy wygasłym OAuth
-            // — pisze „Failed to authenticate: OAuth session expired…" jako
-            // ZWYKŁY tekst asystenta i kończy `result` z `is_error`. Telefon
-            // Kacpra 11.09.2026 21:18: zdanie wylądowało w dymku bota, a tura
-            // wcześniej (20:59) skończyła się jako „model nic nie napisał".
-            // Błąd logowania jedzie jako runtime.error — tą samą szyną, którą
-            // index.ts parkuje bota na `needsAttention` i stawia kartę.
-            if (text.trim() && !worker!.current!.failed && authFailure(text)) {
+            // — wstawia SYNTETYCZNY komunikat „Failed to authenticate: …" jako
+            // wiadomość asystenta (bez strumienia delt) i kończy `result` z
+            // `is_error`. Telefon Kacpra 11.09.2026 21:18: zdanie wylądowało
+            // w dymku bota. Rozpoznajemy WYŁĄCZNIE kształt CLI: tekst zaczyna
+            // się od „Failed to authenticate" i nic z niego nie popłynęło
+            // deltą — zwykła odpowiedź modelu o „401" czy „OAuth session
+            // expired" zostaje dymkiem (recenzja #182: 6/8 normalnych
+            // odpowiedzi łapało się na luźne `authFailure()`).
+            const cliAuthError = CLI_AUTH_ERROR.test(text) && !worker!.current!.sawStreamDelta;
+            if (cliAuthError && !worker!.current!.failed) {
               worker!.current!.failed = text.trim();
-              emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: text.trim().slice(0, 300) });
-            } else if (text.trim()) {
+              emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(text.trim()).slice(0, 300) });
+            } else if (text.trim() && !cliAuthError) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!worker!.current!.sawStreamDelta) {
                 emit({ ...base(threadId, worker!.current!.turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
@@ -746,7 +766,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                 || (!claudeIsAuthenticated() ? "Failed to authenticate: claude is not logged in" : "");
               if (reason) {
                 worker!.current!.failed = reason;
-                emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: reason.slice(0, 300) });
+                emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(reason).slice(0, 300) });
               }
             }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);

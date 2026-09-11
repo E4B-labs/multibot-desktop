@@ -427,6 +427,17 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(recorder.events.find((e) => e.type === "content.delta")).toBeUndefined();
   });
 
+  // recenzja #182: luźne dopasowanie zjadało 6/8 normalnych odpowiedzi
+  it("a normal answer that talks about expired sessions stays a bubble", async () => {
+    await create("prose-auth");
+    await instance.adapter.sendTurn({ threadId: "t-prose", text: "why 401?" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toBeUndefined();
+    const bubble = recorder.events.find((e) => e.type === "item.completed" && (e as { itemType?: string }).itemType === "assistant_text") as { text?: string } | undefined;
+    expect(bubble?.text).toContain("OAuth session expired");
+  });
+
   it("a result with is_error carries its reason as runtime.error", async () => {
     await create("error-result");
     await instance.adapter.sendTurn({ threadId: "t-errres", text: "go" });

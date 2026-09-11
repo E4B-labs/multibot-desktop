@@ -30,8 +30,8 @@ describe("banerka wygasłego logowania", () => {
     expect(card).toContain('"Zalogowano ponownie" : "Signed in again"');
     expect(read("./ChatView.tsx")).toContain('case "login":');
     const server = read("../../server/index.ts");
-    expect(server).toContain('kind: "login", login: { tool: expiredTool }');
-    expect(server).toContain("resolveLoginCards(bot.threadId)");
+    expect(server).toContain('kind: "login", login: { tool: expiredTool }, text: note');
+    expect(server).toContain("resolveLoginCards(bot.threadId, toolId)");
   });
 
   it("nie porywa innych powodów czekania", () => {
