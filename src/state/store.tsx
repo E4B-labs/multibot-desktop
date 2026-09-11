@@ -26,7 +26,7 @@ import {
   shouldNotifyRoomDone,
   type NotifySnapshot,
 } from "@/lib/notifications";
-import { sortMessages } from "@/lib/messageOrder";
+import { mergeMessages, sortMessages } from "@/lib/messageOrder";
 import { noteLocalBotEdit, settleLocalBotEdits, stripPendingBotEcho } from "@/lib/pendingBotEdits";
 import type { AutoVerifySettings } from "@/lib/autoVerifyTypes";
 
@@ -144,6 +144,9 @@ export interface Bot {
   pinned?: boolean;
   hidden?: boolean;
   messages: Message[];
+  /** K7: `GET /api/bots?messages=<n>` sent only the tail; the whole transcript
+   *  arrives from `GET /api/bots/:id` once this bot is opened. */
+  messagesTruncated?: boolean;
 }
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
@@ -300,6 +303,7 @@ interface AppState {
 
 type Action =
   | { type: "hydrate"; bots: Bot[] }
+  | { type: "botMessages"; botId: string; messages: Message[] }
   | { type: "environment"; environment: FleetEnvironment }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -394,6 +398,11 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
+/** K7: how many messages per bot ride along with `GET /api/bots` at boot. A
+ *  screen shows 10–20; the rest of the OPEN bot's transcript is fetched on
+ *  selection, the others' only when they are opened. */
+export const BOOT_MESSAGES = 50;
+
 /** Wystawiony (razem z `initialState`) do testów jednostkowych — reduktor jest
  *  czysty, więc sprawdza się go bez montowania Providera. */
 export function reducer(state: AppState, action: Action): AppState {
@@ -409,16 +418,31 @@ export function reducer(state: AppState, action: Action): AppState {
       // multibot: bot oznaczony przez serwer jako nieprzeczytany, a nie jest
       // właśnie otwarty → zapamiętaj pierwszą nieprzeczytaną wiadomość (ost. wpis)
       const bots = action.bots.map((b) => {
-        const messages = sortMessages(b.messages);
+        // K7: a resync brings the tail again — a transcript already loaded in
+        // full stays in full (union by id), otherwise the open chat would jump
+        // back to its last 50 lines on every reconnect.
+        const local = state.bots.find((x) => x.id === b.id);
+        const kept = b.messagesTruncated && local && !local.messagesTruncated ? local.messages : [];
+        const messages = sortMessages(mergeMessages(kept, b.messages));
         return {
           ...b,
           messages,
+          messagesTruncated: b.messagesTruncated && kept.length === 0 ? true : undefined,
           firstUnreadId:
             b.unread && b.id !== selectedId ? (messages.at(-1)?.id ?? null) : b.firstUnreadId,
         };
       });
       return { ...state, bots, selectedId, hydrated: true };
     }
+    // K7: the full transcript of the opened bot (`GET /api/bots/:id`). Anything
+    // that landed over the event channel meanwhile is newer than the fetch and
+    // is kept.
+    case "botMessages":
+      return updateBot(state, action.botId, (b) => ({
+        ...b,
+        messages: sortMessages(mergeMessages(b.messages, action.messages)),
+        messagesTruncated: undefined,
+      }));
     case "instances":
       return { ...state, instances: action.instances };
     case "environment":
@@ -1136,7 +1160,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     const loadAll = () => {
-      api("/api/bots")
+      // K7: the fleet comes with the last BOOT_MESSAGES of each transcript; the
+      // open bot's whole history is fetched separately (effect below). Over
+      // Tor this is the difference between a minute and a second or two.
+      api(`/api/bots?messages=${BOOT_MESSAGES}`)
         .then(({ bots }) =>
           alive && rawDispatch({
             type: "hydrate",
@@ -1332,6 +1359,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       es.close();
     };
   }, []);
+
+  // K7: the open bot arrived with only the tail of its transcript — pull the
+  // rest now. Keyed on the flag too, so a resync that brings a tail for a bot
+  // we have not opened yet still triggers when it is opened.
+  const selectedTruncated = state.bots.find((b) => b.id === state.selectedId)?.messagesTruncated === true;
+  useEffect(() => {
+    if (!selectedTruncated) return;
+    const botId = state.selectedId;
+    let active = true;
+    api(`/api/bots/${botId}`)
+      .then(({ bot }) => active && Array.isArray(bot?.messages) && rawDispatch({ type: "botMessages", botId, messages: bot.messages }))
+      .catch(() => {});
+    return () => { active = false; };
+  }, [state.selectedId, selectedTruncated]);
 
   const value = useMemo(() => ({ state, dispatch }), [state, dispatch]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

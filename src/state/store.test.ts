@@ -5,9 +5,44 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { initialState, reducer } from "@/state/store";
+import { BOOT_MESSAGES, initialState, reducer, type Bot, type Message } from "@/state/store";
 
 const store = readFileSync(new URL("./store.tsx", import.meta.url), "utf8");
+
+// K7: boot carries only the tail of every transcript; the open bot's history
+// comes from `GET /api/bots/:id` and must survive the next resync's tail.
+describe("lazy transcripts (K7)", () => {
+  const msg = (id: string, at: number): Message => ({ id, at, role: "bot", kind: "text", text: id } as Message);
+  const bot = (messages: Message[], truncated?: boolean): Bot =>
+    ({ id: "b1", threadId: "t1", name: "B", messages, ...(truncated ? { messagesTruncated: true } : {}) }) as unknown as Bot;
+
+  it("boots the fleet with a bounded tail", () => {
+    expect(BOOT_MESSAGES).toBeGreaterThan(0);
+    expect(store).toContain("api(`/api/bots?messages=${BOOT_MESSAGES}`)");
+  });
+
+  it("botMessages fills in the history and clears the flag, keeping a newer live frame", () => {
+    const tail = reducer(initialState, { type: "hydrate", bots: [bot([msg("m9", 9)], true)] });
+    expect(tail.bots[0]!.messagesTruncated).toBe(true);
+    const live = reducer(tail, { type: "messageAdded", threadId: "t1", message: msg("m10", 10) });
+    const full = reducer(live, { type: "botMessages", botId: "b1", messages: [msg("m1", 1), msg("m9", 9)] });
+    expect(full.bots[0]!.messages.map((m) => m.id)).toEqual(["m1", "m9", "m10"]);
+    expect(full.bots[0]!.messagesTruncated).toBeUndefined();
+  });
+
+  it("a resync's tail does not throw away a transcript already loaded in full", () => {
+    const full = reducer(initialState, { type: "hydrate", bots: [bot([msg("m1", 1), msg("m9", 9)])] });
+    const resynced = reducer(full, { type: "hydrate", bots: [bot([msg("m9", 9), msg("m10", 10)], true)] });
+    expect(resynced.bots[0]!.messages.map((m) => m.id)).toEqual(["m1", "m9", "m10"]);
+    expect(resynced.bots[0]!.messagesTruncated).toBeUndefined();
+  });
+
+  it("a tail for a bot never loaded in full stays flagged, so opening it fetches the rest", () => {
+    const first = reducer(initialState, { type: "hydrate", bots: [bot([msg("m9", 9)], true)] });
+    const again = reducer(first, { type: "hydrate", bots: [bot([msg("m9", 9)], true)] });
+    expect(again.bots[0]!.messagesTruncated).toBe(true);
+  });
+});
 
 describe("computerActing", () => {
   it("zaczyna pusty — nikt nie klika, dopóki serwer nie powie inaczej", () => {

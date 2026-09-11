@@ -255,6 +255,55 @@ describe("harness HTTP API", () => {
     expect((await authorized.json() as { bots: unknown[] }).bots).toBeDefined();
   });
 
+  // K7: over Tor the boot is bytes. Static files get an ETag (304 on
+  // revalidation) and gzip; JSON is gzipped past 1 KB when the client asks.
+  it("compresses and revalidates the bundle, gzips large JSON, leaves small JSON alone", async () => {
+    mkdirSync(join(staticDir, "assets"), { recursive: true });
+    writeFileSync(join(staticDir, "assets", "big-k7.js"), "console.log('k7');\n".repeat(400));
+    const plain = await fetch(`${BASE}/assets/big-k7.js`, { headers: { "accept-encoding": "identity" } });
+    expect(plain.status).toBe(200);
+    expect(plain.headers.get("content-encoding")).toBeNull();
+    const etag = plain.headers.get("etag");
+    expect(etag).toMatch(/^W\/"/);
+    const gz = await fetch(`${BASE}/assets/big-k7.js`, { headers: { "accept-encoding": "gzip" } });
+    expect(gz.headers.get("content-encoding")).toBe("gzip");
+    expect(gz.headers.get("vary")).toBe("accept-encoding");
+    expect(await gz.text()).toBe((await plain.text()));
+    const cached = await fetch(`${BASE}/assets/big-k7.js`, { headers: { "if-none-match": etag! } });
+    expect(cached.status).toBe(304);
+    expect(await cached.text()).toBe("");
+    // index.html is `no-cache` (must revalidate) — with the ETag that is a 304, not a re-download.
+    const page = await fetch(`${BASE}/`);
+    expect((await fetch(`${BASE}/`, { headers: { "if-none-match": page.headers.get("etag")! } })).status).toBe(304);
+
+    const small = await fetch(`${BASE}/api/health`, { headers: { "accept-encoding": "gzip" } });
+    expect(small.headers.get("content-encoding")).toBeNull();
+    const raw = await fetch(`${BASE}/api/bots`, { headers: { authorization: `Bearer ${TOKEN}`, "accept-encoding": "identity" } });
+    const size = (await raw.text()).length;
+    const maybe = await fetch(`${BASE}/api/bots`, { headers: { authorization: `Bearer ${TOKEN}`, "accept-encoding": "gzip" } });
+    expect(maybe.headers.get("content-encoding")).toBe(size >= 1024 ? "gzip" : null);
+    expect((await maybe.json() as { bots: unknown[] }).bots).toBeDefined();
+  });
+
+  // K7: `?messages=<n>` keeps only the last n per bot and says so; the single
+  // bot route still carries everything. No parameter → unchanged (old bundles).
+  it("serves the fleet with a bounded transcript tail on request", async () => {
+    const created = (await api("POST", "/api/bots")).body.bot;
+    // A bare `/goal` answers with its usage text synchronously — two messages
+    // per call on the thread and no provider turn behind it.
+    for (let i = 0; i < 2; i += 1) expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "/goal" })).status).toBe(200);
+    const seedMessages = (await api("GET", `/api/bots/${created.id}`)).body.bot.messages as Array<{ id: string }>;
+    expect(seedMessages.length).toBeGreaterThanOrEqual(4);
+    const listed = (await api("GET", "/api/bots?messages=1")).body.bots.find((b: { id: string }) => b.id === created.id);
+    expect(listed.messages).toHaveLength(1);
+    expect(listed.messagesTruncated).toBe(true);
+    expect(listed.messages[0].id).toBe(seedMessages.at(-1)!.id);
+    const whole = (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === created.id);
+    expect(whole.messages).toHaveLength(seedMessages.length);
+    expect(whole.messagesTruncated).toBeUndefined();
+    await api("DELETE", `/api/bots/${created.id}`);
+  });
+
   // Voice used to be engine-only, so a host without Hermes could not speak at
   // all. With a ttsKey the harness does it for every bot.
   it("speaks a message through the harness text-to-speech key", async () => {

@@ -3,7 +3,8 @@
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
@@ -204,6 +205,45 @@ function staticHeaders(file: string): Record<string, string> {
     "x-content-type-options": "nosniff",
     ...(/\/(?:sw|service-worker)\.js$/.test(name) ? { "service-worker-allowed": "/" } : {}),
   };
+}
+
+// K7: over Tor bandwidth is ~50 KB/s and every round trip 1–3 s, so bytes are
+// the boot time. Text goes out gzipped when the client accepts it, and static
+// files carry a weak ETag so a revalidation (`cache-control: no-cache` on
+// index.html) is a 304 and not the whole bundle again.
+const GZIP_MIN_BYTES = 1024;
+const GZIP_TYPES = /^(?:text\/|application\/(?:json|javascript|manifest\+json|wasm)|image\/svg)/;
+function acceptsGzip(res: ServerResponse): boolean {
+  return /\bgzip\b/.test(String(res.req?.headers["accept-encoding"] ?? ""));
+}
+/** Static file bodies compressed once and kept by mtime; `dist/` is small and
+ *  read-only, so this never grows past the bundle itself. */
+const gzipCache = new Map<string, { mtimeMs: number; etag: string; raw: Buffer; gz: Buffer | null }>();
+function staticBody(file: string): { etag: string; raw: Buffer; gz: Buffer | null } {
+  const { mtimeMs, size } = statSync(file);
+  const hit = gzipCache.get(file);
+  if (hit && hit.mtimeMs === mtimeMs) return hit;
+  const raw = readFileSync(file);
+  const etag = `W/"${size.toString(16)}-${Math.trunc(mtimeMs).toString(16)}"`;
+  const type = MIME[extname(file).toLowerCase()] ?? "";
+  const gz = raw.length >= GZIP_MIN_BYTES && GZIP_TYPES.test(type) ? gzipSync(raw) : null;
+  const entry = { mtimeMs, etag, raw, gz };
+  gzipCache.set(file, entry);
+  return entry;
+}
+function sendStatic(res: ServerResponse, file: string, method: string): void {
+  const { etag, raw, gz } = staticBody(file);
+  const headers: Record<string, string> = { ...staticHeaders(file), etag, vary: "accept-encoding" };
+  if (res.req?.headers["if-none-match"] === etag) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  const body = gz && acceptsGzip(res) ? gz : raw;
+  if (body === gz) headers["content-encoding"] = "gzip";
+  headers["content-length"] = String(body.length);
+  res.writeHead(200, headers);
+  res.end(method === "HEAD" ? undefined : body);
 }
 
 ensureDirs();
@@ -3271,7 +3311,15 @@ function cliInstallSpec(tool: (typeof CLI_TOOLS)[number]) {
 function json(res: ServerResponse, status: number, body: unknown) {
   const data = JSON.stringify(body);
   // API data is never part of the PWA app-shell cache.
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+  const headers: Record<string, string> = { "content-type": "application/json", "cache-control": "no-store" };
+  // K7: a fleet's transcripts compress 5–10×; over Tor that is the difference
+  // between a minute and seconds. Small bodies are not worth the header.
+  if (data.length >= GZIP_MIN_BYTES && acceptsGzip(res)) {
+    const gz = gzipSync(data);
+    res.writeHead(status, { ...headers, "content-encoding": "gzip", vary: "accept-encoding", "content-length": String(gz.length) });
+    return res.end(gz);
+  }
+  res.writeHead(status, headers);
   res.end(data);
 }
 
@@ -4254,10 +4302,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
 
     // ── bots ──
     if (method === "GET" && path === "/api/bots") {
+      // K7: `?messages=<n>` hands out only the last n messages per bot and
+      // flags the cut with `messagesTruncated`; the client fetches the full
+      // transcript of the bot it OPENS from `GET /api/bots/:id`. Without the
+      // parameter the fleet comes with whole transcripts, as before — older
+      // bundles (the phone's WEBUI_HTML) keep working unchanged.
+      const tail = Math.trunc(Number(url.searchParams.get("messages")));
       return json(res, 200, {
         bots: store.bots
           .filter((b) => canReadBot(b, actor))
-          .map((b) => ({ ...b, messages: chatMessages(b.threadId) })),
+          .map((b) => {
+            const messages = chatMessages(b.threadId);
+            return tail > 0 && messages.length > tail
+              ? { ...b, messages: messages.slice(-tail), messagesTruncated: true }
+              : { ...b, messages };
+          }),
       });
     }
     if (method === "GET" && path === "/api/environment") {
@@ -5915,15 +5974,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const file = resolve(root, requested);
       if (file !== root && !file.startsWith(root + sep)) return json(res, 404, { error: "not found" });
       try {
-        const data = readFileSync(file);
-        res.writeHead(200, staticHeaders(file));
-        return res.end(method === "HEAD" ? undefined : data);
+        return sendStatic(res, file, method);
       } catch {
         // SPA fallback
         try {
-          const data = readFileSync(join(STATIC_DIR, "index.html"));
-          res.writeHead(200, staticHeaders(join(STATIC_DIR, "index.html")));
-          return res.end(method === "HEAD" ? undefined : data);
+          return sendStatic(res, join(STATIC_DIR, "index.html"), method);
         } catch {
           /* fall through to 404 */
         }
@@ -6068,6 +6123,12 @@ try {
   console.error("[multibot] server self-configuration failed — refusing to start:", error);
   process.exit(1);
 }
+// K7: Node drops an idle connection after 5 s. Over Tor the next click then
+// pays a fresh rendezvous stream and TLS handshake (1–3 s) before a byte moves;
+// a pause between two clicks is routinely longer than 5 s. `headersTimeout`
+// has to stay above `keepAliveTimeout` or Node treats the wait as a slow attack.
+server.keepAliveTimeout = 75_000;
+server.headersTimeout = 80_000;
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on ${SCHEME}://${HOST}:${PORT}`);
   // multibot: zegar przypomnień rusza DOPIERO tu — drugi proces na tym samym
