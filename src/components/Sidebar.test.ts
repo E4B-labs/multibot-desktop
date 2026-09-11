@@ -47,12 +47,38 @@ describe("sidebar avatar", () => {
 });
 
 describe("sidebar footer alignment", () => {
+  const footer = sidebarSource.slice(sidebarSource.indexOf("/* Footer */"));
+  const profileButton = sidebarSource.slice(
+    sidebarSource.indexOf("function ProfileFooterButton"),
+    sidebarSource.indexOf("function preview"),
+  );
+
   it("keeps the profile avatar and label aligned with Plugins", () => {
-    const footer = sidebarSource.slice(sidebarSource.indexOf("/* Footer */"));
     expect(footer).toContain('inline-flex size-8 shrink-0 items-center');
-    expect(footer).toContain('<InitialsAvatar initials={profileInitials(state.config?.profile)} size={32} />');
-    expect(footer).toContain('truncate text-[14px] font-semibold text-ink');
-    expect(footer).toContain('flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left');
+    expect(footer).toContain("<ProfileFooterButton />");
+    expect(profileButton).toContain('<InitialsAvatar initials={profileInitials(profile)} size={32} />');
+    expect(profileButton).toContain('truncate text-[14px] font-semibold text-ink');
+    // Podświetlenie jak przycisk „Wtyczki" (rounded-xl + hover:bg-raised/50)…
+    expect(profileButton).toContain("rounded-xl px-3 py-2 text-left hover:bg-raised/50");
+  });
+
+  it("keeps the profile hover area clear of the settings gear", () => {
+    // …ale TYLKO na części flex-1: margines od koła zębatego, a sam przycisk
+    // ustawień żyje POZA ProfileFooterButton (nadal w stopce) — hover profilu
+    // nie może go obejmować.
+    expect(profileButton).toContain("mr-1.5");
+    expect(profileButton).not.toContain("toggleAppSettings");
+    expect(footer).toContain('dispatch({ type: "toggleAppSettings" })');
+  });
+
+  it("shows the uploaded photo as a 32px circle and opens the popover", () => {
+    expect(profileButton).toContain('className="size-8 shrink-0 rounded-full object-cover"');
+    expect(profileButton).toContain('accept="image/*"');
+    expect(profileButton).toContain("<AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />");
+    expect(profileButton).toContain('"/api/profile/avatar", { method: "POST"');
+    expect(profileButton).toContain('"/api/profile/avatar", { method: "DELETE"');
+    // popover nad stopką, zakotwiczony przy przycisku — nie centralny modal
+    expect(profileButton).toContain("absolute bottom-full left-0");
   });
 });
 

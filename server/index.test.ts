@@ -715,10 +715,10 @@ describe("harness HTTP API", () => {
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {
     const put = await api("PUT", "/api/config", { profile: { name: "Ada Lovelace", email: "Ada@Example.com" } });
     expect(put.status).toBe(200);
-    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatar: null });
 
     const after = await api("GET", "/api/config");
-    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatar: null });
   });
 
   // multibot: strefa czasowa i autoweryfikacja jadą tym samym /api/config co
@@ -1061,6 +1061,30 @@ describe("harness HTTP API", () => {
   it("stores an e-mail on the profile and hands it back with the account", async () => {
     expect((await api("PATCH", "/api/profile", { displayName: "Index Tester", email: "index@example.test" })).body.user.email).toBe("index@example.test");
     expect((await api("GET", "/api/auth/me")).body.user.email).toBe("index@example.test");
+  });
+
+  // Kontrakt (używa go też mobile): POST {image:"data:image/…"} → 200 z profilem
+  // (w tym `avatar`); DELETE → 200, avatar null; `state.config.profile.avatar`.
+  it("stores, exposes and removes the user's profile photo", async () => {
+    const image = `data:image/png;base64,${"a".repeat(64)}`;
+    const posted = await api("POST", "/api/profile/avatar", { image });
+    expect(posted.status).toBe(200);
+    expect(posted.body.user.avatar).toBe(image);
+    expect((await api("GET", "/api/profile")).body.user.avatar).toBe(image);
+    // klient czyta to z `state.config.profile.avatar`
+    expect((await api("GET", "/api/config")).body.profile.avatar).toBe(image);
+
+    // walidacja: brak obrazka, nie-obrazek i limit wielkości
+    expect((await api("POST", "/api/profile/avatar", {})).status).toBe(422);
+    expect((await api("POST", "/api/profile/avatar", { image: "data:text/plain;base64,aaaa" })).status).toBe(422);
+    expect((await api("POST", "/api/profile/avatar", { image: `data:image/png;base64,${"a".repeat(700_001)}` })).status).toBe(413);
+    // nieudane próby niczego nie nadpisały
+    expect((await api("GET", "/api/profile")).body.user.avatar).toBe(image);
+
+    const removed = await api("DELETE", "/api/profile/avatar");
+    expect(removed.status).toBe(200);
+    expect(removed.body.user.avatar).toBeNull();
+    expect((await api("GET", "/api/config")).body.profile.avatar).toBeNull();
   });
 
   // Last in the file on purpose: it registers extra profiles and disables one,

@@ -38,6 +38,8 @@ export interface IdentityActor {
   displayName: string;
   role: IdentityRole;
   email?: string | null;
+  /** Zdjęcie profilowe: data URL (`data:image/*;base64,…`) albo null. */
+  avatar?: string | null;
 }
 /** One row of the admin tab's user table, straight out of SQLite. The counts
  * the tab also shows (messages, bots owned) live outside identity — see
@@ -270,6 +272,8 @@ export class IdentityStore {
       CREATE INDEX IF NOT EXISTS access_user_idx ON access_tokens(user_id);
     `);
     this.addColumnIfMissing("users", "email", "TEXT");
+    // Zdjęcie profilowe użytkownika — data URL, jak `avatarUrl` bota w bots.json.
+    this.addColumnIfMissing("users", "avatar", "TEXT");
     // Set when an owner mints a code from the admin tab, cleared the moment it
     // is spent. It is what lets a MEMBER use `recover` at all — see the gate there.
     this.addColumnIfMissing("users", "recovery_admin_issued", "INTEGER");
@@ -610,7 +614,7 @@ export class IdentityStore {
   }
 
   private actor(userId: string): IdentityActor | null {
-    const row = this.db.prepare("SELECT id, username, display_name, role, email FROM users WHERE id = ? AND disabled_at IS NULL").get(userId) as Row | undefined;
+    const row = this.db.prepare("SELECT id, username, display_name, role, email, avatar FROM users WHERE id = ? AND disabled_at IS NULL").get(userId) as Row | undefined;
     if (!row || typeof row.id !== "string" || typeof row.username !== "string" || typeof row.display_name !== "string") return null;
     return {
       userId: row.id,
@@ -618,6 +622,7 @@ export class IdentityStore {
       displayName: row.display_name,
       role: row.role === "owner" ? "owner" : "member",
       email: typeof row.email === "string" ? row.email : null,
+      avatar: typeof row.avatar === "string" ? row.avatar : null,
     };
   }
 
@@ -700,6 +705,15 @@ export class IdentityStore {
     const address = normalizeEmail(email);
     this.db.prepare("UPDATE users SET email = ? WHERE id = ? AND disabled_at IS NULL").run(address, actor.userId);
     return { ...actor, displayName: value, email: address };
+  }
+
+  /** Zdjęcie profilowe zalogowanego konta: data URL albo null (usunięcie).
+   *  Walidacja formatu i limit rozmiaru siedzą przy endpointcie — tak samo jak
+   *  przy awatarze bota. */
+  setAvatar(actor: IdentityActor, avatar: string | null): IdentityActor {
+    this.init();
+    this.db.prepare("UPDATE users SET avatar = ? WHERE id = ? AND disabled_at IS NULL").run(avatar, actor.userId);
+    return { ...actor, avatar };
   }
 
   /** The public address the server believes it is reachable on. Null until
@@ -843,9 +857,9 @@ export class IdentityStore {
     return recoveryCode;
   }
 
-  members(): Array<{ userId: string; username: string; displayName: string; role: IdentityRole; createdAt: number }> {
-    const rows = this.db.prepare("SELECT id, username, display_name, role, created_at FROM users WHERE disabled_at IS NULL ORDER BY created_at").all() as Row[];
-    return rows.filter((row) => typeof row.id === "string").map((row) => ({ userId: String(row.id), username: String(row.username), displayName: String(row.display_name), role: row.role === "owner" ? "owner" : "member", createdAt: Number(row.created_at) }));
+  members(): Array<{ userId: string; username: string; displayName: string; role: IdentityRole; createdAt: number; avatar: string | null }> {
+    const rows = this.db.prepare("SELECT id, username, display_name, role, created_at, avatar FROM users WHERE disabled_at IS NULL ORDER BY created_at").all() as Row[];
+    return rows.filter((row) => typeof row.id === "string").map((row) => ({ userId: String(row.id), username: String(row.username), displayName: String(row.display_name), role: row.role === "owner" ? "owner" : "member", createdAt: Number(row.created_at), avatar: typeof row.avatar === "string" ? row.avatar : null }));
   }
 
   private audit(userId: string | null, action: string, target?: string): void {

@@ -162,7 +162,7 @@ export interface ConfigStatus {
   /** kolejność sekcji sidebaru — wspólna dla desktopu i telefonu */
   sectionOrder?: string[];
   /** who's using the app — collected in onboarding, shown in the sidebar */
-  profile?: { name: string; email: string };
+  profile?: { name: string; email: string; avatar?: string | null };
 }
 
 /** One row of GET /api/instances — the model picker's data. */

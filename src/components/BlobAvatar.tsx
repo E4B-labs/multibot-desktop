@@ -2622,10 +2622,17 @@ export const BlobAvatar = React.forwardRef<BlobAvatarHandle, BlobAvatarProps>(
             e.lastState = motionKey
             e.stateStart = now
           }
+          /*
+            multibot: a paused mascot is one frame of the motion loop at whatever
+            `performance.now()` happens to be — a random phase. States with `squash`
+            (happy, celebrating…) then freeze mid-squash and look flattened. Zero
+            strength short-circuits `bodyTransform` to the neutral pose, so every
+            frozen avatar keeps the base silhouette's proportions.
+          */
           const transform = bodyTransform(
             MOTION[motionKey] ?? {},
             now - e.stateStart,
-            p.motionStrength ?? 1
+            p.paused ? 0 : p.motionStrength ?? 1
           )
           if (transform !== e.lastBodyTransform) {
             e.lastBodyTransform = transform

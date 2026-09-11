@@ -12,6 +12,7 @@ import {
   Crown,
   EyeOff,
   FolderPlus,
+  ImagePlus,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -25,8 +26,9 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
-import { Skeleton } from "./Loading";
+import { useStore, formatTime, type Bot, type ConfigStatus, type EngineGroup } from "@/state/store";
+import { Skeleton, Spinner } from "./Loading";
+import { AvatarCropper } from "./AvatarCropper";
 import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
 import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
@@ -95,6 +97,161 @@ function profileInitials(profile?: { name?: string; email?: string }): string {
   }
   const email = profile?.email?.trim();
   return email ? email[0]!.toUpperCase() : "?";
+}
+
+/**
+ * multibot: profil w stopce sidebara. Klik otwiera mały popover NAD stopką
+ * (zakotwiczony przy przycisku profilu, nie centralny modal) z uploadem
+ * zdjęcia profilowego — ten sam przepływ co w edycji awatara bota
+ * (ukryty input file + AvatarCropper), tylko zapis idzie w
+ * POST /api/profile/avatar. Hover podświetla jak przycisk „Wtyczki", ale
+ * TYLKO część flex-1 — z marginesem, żeby nie nachodził na koło zębate obok.
+ */
+function ProfileFooterButton() {
+  const { state, dispatch } = useStore();
+  const polish = useLanguage() === "pl";
+  const [open, setOpen] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const profile = state.config?.profile;
+  const avatar = profile?.avatar ?? null;
+
+  const close = () => {
+    setOpen(false);
+    setPendingFile(null);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  /** Odpowiedź POST/DELETE niesie świeży profil — wciskamy go w state.config,
+   *  żeby stopka odświeżyła się bez czekania na kolejny GET /api/config. */
+  const applyUser = (user: { displayName?: string; email?: string | null; avatar?: string | null }) => {
+    const config: ConfigStatus = {
+      composio: { configured: false },
+      box: { configured: false },
+      ...state.config,
+      profile: {
+        name: user.displayName ?? profile?.name ?? "",
+        email: profile?.email ?? "",
+        avatar: user.avatar ?? null,
+      },
+    };
+    dispatch({ type: "configStatus", config });
+  };
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) setPendingFile(f);
+    e.target.value = "";
+  };
+
+  const saveAvatar = async (dataUrl: string) => {
+    setBusy(true);
+    try {
+      const res = await authFetch("/api/profile/avatar", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: dataUrl }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "upload failed");
+      applyUser(body.user ?? {});
+      setPendingFile(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    setBusy(true);
+    try {
+      const res = await authFetch("/api/profile/avatar", { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "delete failed");
+      applyUser(body.user ?? {});
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={rootRef} className="relative min-w-0 flex-1">
+      <button
+        type="button"
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={polish ? "Zdjęcie profilowe" : "Profile photo"}
+        className="mr-1.5 flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+      >
+        {avatar ? (
+          <img src={avatar} alt="" className="size-8 shrink-0 rounded-full object-cover" />
+        ) : (
+          <InitialsAvatar initials={profileInitials(profile)} size={32} />
+        )}
+        <span className="truncate text-[14px] font-semibold text-ink">
+          {profile?.name?.trim() || profile?.email?.trim() || "You"}
+        </span>
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label={polish ? "Zdjęcie profilowe" : "Profile photo"}
+          className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-hairline/40 bg-card p-3 shadow-xl"
+        >
+          {!pendingFile ? (
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-full text-[12px] font-medium text-ink-secondary">
+                {polish ? "Zdjęcie profilowe" : "Profile photo"}
+              </div>
+              {avatar ? (
+                <img src={avatar} alt="avatar" className="size-[96px] rounded-full border border-hairline/30 object-cover" />
+              ) : (
+                <div className="flex size-[96px] items-center justify-center rounded-full border border-dashed border-hairline bg-inset">
+                  <ImagePlus size={24} className="text-ink-secondary" />
+                </div>
+              )}
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFilePick} />
+              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy} className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50">
+                {avatar ? (polish ? "Zmień zdjęcie" : "Change photo") : (polish ? "Prześlij zdjęcie" : "Upload photo")}
+              </button>
+              {avatar && (
+                <button type="button" onClick={removeAvatar} disabled={busy} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised disabled:opacity-50">
+                  {busy && <Spinner size={12} />}
+                  {polish ? "Usuń zdjęcie" : "Remove photo"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+              {busy && (
+                <div className="mt-2 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
+                  <Spinner size={12} /> {polish ? "Zapisywanie…" : "Saving…"}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function preview(bot: Bot): string {
@@ -1572,12 +1729,7 @@ export function Sidebar() {
           </button>
         ) : (
         <div className="flex items-center">
-          <div className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left">
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} size={32} />
-            <span className="truncate text-[14px] font-semibold text-ink">
-              {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
-            </span>
-          </div>
+          <ProfileFooterButton />
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
             className="inline-flex size-8 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"

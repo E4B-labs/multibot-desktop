@@ -2920,6 +2920,8 @@ function configStatusFor(actor: IdentityActor | null) {
       name: actor?.displayName ?? cfg.profile?.name ?? "",
       // ponytail: e-mail wciąż mieszka w config.json — `users.email` dokłada PR 2.
       email: cfg.profile?.email ?? "",
+      // zdjęcie profilowe konta (identity.db) — data URL albo null
+      avatar: actor?.avatar ?? null,
     },
     workspace: {
       id: cfg.workspace?.id ?? "default",
@@ -3319,7 +3321,7 @@ function readBody(req: IncomingMessage): Promise<any> {
 }
 
 function identityUser(actor: IdentityActor) {
-  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role, email: actor.email ?? null };
+  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role, email: actor.email ?? null, avatar: actor.avatar ?? null };
 }
 
 function identitySessionBody(session: CreatedSession & { recoveryCode?: string }, includeSessionToken = false) {
@@ -3493,7 +3495,7 @@ async function handleIdentityRoute(
       return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
     }
   }
-  if (path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/")) {
+  if (path.startsWith("/api/auth/") || path.startsWith("/api/profile") || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/")) {
     if (!actor) return identityHandled(res, 401, { error: "unauthorized" });
     try {
       if (method === "POST" && path === "/api/auth/access-token") {
@@ -3527,6 +3529,23 @@ async function handleIdentityRoute(
       const sessionPath = path.match(/^\/api\/auth\/sessions\/([^/]+)$/);
       if (method === "DELETE" && sessionPath) {
         return identityHandled(res, identity.revokeSession(actor, decodeURIComponent(sessionPath[1])) ? 200 : 404, { ok: true });
+      }
+      // multibot: zdjęcie profilowe konta — jak /api/bots/:id/avatar, tylko na
+      // ZALOGOWANYM aktorze. Kontrakt (używa go też mobile):
+      //   POST {image:"data:image/…"} → 200 {user:{…, avatar}}; DELETE → 200, avatar null.
+      if (path === "/api/profile/avatar") {
+        if (method === "POST") {
+          const body = await readBody(req);
+          const image = String(body.image ?? "").trim();
+          if (!image) return identityHandled(res, 422, { error: "image required (data:image/* base64)" });
+          if (image.length > 700_000) return identityHandled(res, 413, { error: "avatar image too large (max ~500KB)" });
+          if (!image.startsWith("data:image/")) return identityHandled(res, 422, { error: "image must be data:image/* URL" });
+          return identityHandled(res, 200, { user: identityUser(identity.setAvatar(actor, image)) });
+        }
+        if (method === "DELETE") {
+          return identityHandled(res, 200, { user: identityUser(identity.setAvatar(actor, null)) });
+        }
+        return identityHandled(res, 405, { error: "method not allowed" });
       }
       if (method === "GET" && path === "/api/profile") return identityHandled(res, 200, { user: identityUser(actor) });
       if (method === "PATCH" && path === "/api/profile") {
@@ -3611,7 +3630,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
   const langParam = url.searchParams.get("lang");
   if (langParam === "pl" || langParam === "en") uiLang = langParam;
   try {
-    const identityRoute = path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/");
+    const identityRoute = path.startsWith("/api/auth/") || path.startsWith("/api/profile") || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/");
     if (isIdentityPublicRoute(method, path) || (actor && identityRoute)) {
       if (await handleIdentityRoute(req, res, path, method, actor)) return;
     }
