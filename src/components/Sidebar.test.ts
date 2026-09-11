@@ -55,6 +55,11 @@ describe("sidebar footer alignment", () => {
 
   it("keeps the profile avatar and label aligned with Plugins", () => {
     expect(footer).toContain('inline-flex size-8 shrink-0 items-center');
+    // Slot ikony „Wtyczki" wygląda jak domyślny awatar profilu (InitialsAvatar:
+    // rounded-full bg-raised, 32 px) — wypełnione koło, bez szarego obrysu.
+    expect(footer).toContain('inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary');
+    expect(footer).not.toContain("border-white/10");
+    expect(footer).not.toContain("bg-[#151515]");
     expect(footer).toContain("<ProfileFooterButton />");
     expect(profileButton).toContain('<InitialsAvatar initials={profileInitials(profile)} size={32} />');
     expect(profileButton).toContain('truncate text-[14px] font-semibold text-ink');
@@ -81,7 +86,10 @@ describe("sidebar footer alignment", () => {
     // FIXED (nie absolute), bo `<aside>` ma overflow-hidden i ucinał prawą
     // krawędź panelu — pozycję liczy profilePopoverPosition z clampem
     expect(profileButton).toContain('"fixed z-50 rounded-2xl');
-    expect(profileButton).toContain("profilePopoverPosition(rect, width, window.innerWidth, window.innerHeight)");
+    expect(profileButton).toContain("profilePopoverPosition({ top: a.top }, { left: a.sidebarLeft, width: a.sidebarWidth }, width, window.innerWidth, window.innerHeight)");
+    // szerokość sidebara bierze z rect całego `<aside>` — środek liczy się
+    // między lewą krawędzią sidebara a uchwytem zmiany szerokości
+    expect(profileButton).toContain('rootRef.current?.closest("aside")?.getBoundingClientRect()');
     // kwadrat 216 px (mieści się w domyślnym sidebarze 240 px minus paddingi
     // stopki 2×12 px) w widoku awatara; przy kadrowaniu wraca do w-72, bo
     // podgląd croppera ma 220 px szerokości
@@ -98,19 +106,33 @@ describe("sidebar footer alignment", () => {
 });
 
 describe("profile popover position", () => {
-  it("anchors above the profile button at its left edge", () => {
-    // przycisk na dole okna 1280×900, top=860 → panel 8 px nad przyciskiem
-    expect(profilePopoverPosition({ top: 860, left: 12 }, 216, 1280, 900)).toEqual({ left: 12, bottom: 48 });
+  const sidebar = { left: 0, width: 240 };
+
+  it("centres the panel between the sidebar edge and the resize handle", () => {
+    // sidebar 240, panel 216 → left = (240 − 216) / 2 = 12; 8 px nad przyciskiem
+    expect(profilePopoverPosition({ top: 860 }, sidebar, 216, 1280, 900)).toEqual({ left: 12, bottom: 48 });
   });
 
-  it("clamps to the right viewport edge so the square is never cut", () => {
-    // wąskie okno: 216-pikselowy panel nie mieści się od left=12 — cofa się
-    expect(profilePopoverPosition({ top: 860, left: 12 }, 216, 200, 900).left).toBe(8);
-    expect(profilePopoverPosition({ top: 860, left: 100 }, 216, 300, 900).left).toBe(300 - 216 - 8);
+  it("keeps the panel clear of the resize handle in a wide sidebar", () => {
+    // sidebar 420: środek to left = 102 — daleko od uchwytu przy prawej krawędzi
+    expect(profilePopoverPosition({ top: 860 }, { left: 0, width: 420 }, 216, 1280, 900).left).toBe(102);
+    // panel niemal na całą szerokość: prawa krawędź trzyma 8 px od uchwytu
+    expect(profilePopoverPosition({ top: 860 }, { left: 20, width: 230 }, 216, 1280, 900).left).toBe(20 + 230 - 216 - 8);
   });
 
-  it("keeps the wider cropping panel fully visible too", () => {
-    expect(profilePopoverPosition({ top: 860, left: 12 }, 288, 240, 900).left).toBe(8);
+  it("clamps to the viewport edges so the square is never cut", () => {
+    // wąskie okno: 216-pikselowy panel nie mieści się — cofa się do 8 px
+    expect(profilePopoverPosition({ top: 860 }, sidebar, 216, 200, 900).left).toBe(8);
+    expect(profilePopoverPosition({ top: 860 }, { left: 100, width: 240 }, 216, 300, 900).left).toBe(300 - 216 - 8);
+  });
+
+  it("lets the wider cropper overflow the sidebar but not the window", () => {
+    // cropper 288 > sidebar 240: środkowanie dałoby −24, clamp do okna → 8;
+    // uchwytu nie wymuszamy, bo panel i tak się w sidebarze nie mieści
+    expect(profilePopoverPosition({ top: 860 }, sidebar, 288, 240, 900).left).toBe(8);
+    expect(profilePopoverPosition({ top: 860 }, sidebar, 288, 1280, 900).left).toBe(8);
+    // szeroki sidebar 420: cropper mieści się, więc stoi wyśrodkowany z clampem uchwytu
+    expect(profilePopoverPosition({ top: 860 }, { left: 0, width: 420 }, 288, 1280, 900).left).toBe(66);
   });
 });
 

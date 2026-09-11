@@ -117,19 +117,36 @@ const PROFILE_POPOVER_CROP_WIDTH = 288;
  * overflow-hidden, więc popover `absolute` był ucinany z PRAWEJ, gdy panel
  * (240 px) wystawał poza sidebar (domyślnie też 240 px, footer ma padding
  * 12 px) — prawa krawędź traciła zaokrąglone rogi. Dlatego popover jest
- * `fixed` (jak menu kontekstowe i hover-karta bota) i liczony od prostokąta
- * przycisku profilu, z clampem do viewportu.
+ * `fixed` (jak menu kontekstowe i hover-karta bota).
+ *
+ * Poziomo panel jest WYŚRODKOWANY w sidebarze: left = sidebar.left +
+ * (szerokość sidebara − szerokość panelu) / 2, czyli równy margines między
+ * lewą krawędzią sidebara a uchwytem zmiany szerokości (ResizeHandle, w-2 =
+ * 8 px przy prawej krawędzi). Panel mieszczący się w sidebarze nie może
+ * dotykać uchwytu — prawa krawędź trzyma się 8 px od krawędzi sidebara.
+ * Szerszy od sidebara cropper (288 px) zostaje wyśrodkowany względem
+ * sidebara na tyle, na ile pozwala clamp do okna — może wystawać w prawo,
+ * bo inaczej nie ma się gdzie zmieścić.
  */
+/** Uchwyt zmiany szerokości sidebara to pasek `w-2` (8 px) przy prawej
+ * krawędzi — panel zdjęcia trzyma się od niego z daleka. */
+const PROFILE_POPOVER_HANDLE_CLEARANCE = 8;
+
 export function profilePopoverPosition(
-  rect: { top: number; left: number },
+  anchor: { top: number },
+  sidebar: { left: number; width: number },
   panelWidth: number,
   innerWidth: number,
   innerHeight: number,
 ): { left: number; bottom: number } {
   const margin = 8;
+  let left = sidebar.left + (sidebar.width - panelWidth) / 2;
+  if (panelWidth + PROFILE_POPOVER_HANDLE_CLEARANCE <= sidebar.width) {
+    left = Math.min(left, sidebar.left + sidebar.width - panelWidth - PROFILE_POPOVER_HANDLE_CLEARANCE);
+  }
   return {
-    left: Math.max(margin, Math.min(rect.left, innerWidth - panelWidth - margin)),
-    bottom: Math.max(margin, innerHeight - rect.top + margin),
+    left: Math.max(margin, Math.min(Math.round(left), innerWidth - panelWidth - margin)),
+    bottom: Math.max(margin, innerHeight - anchor.top + margin),
   };
 }
 
@@ -137,7 +154,7 @@ function ProfileFooterButton() {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [open, setOpen] = useState(false);
-  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [anchor, setAnchor] = useState<{ top: number; sidebarLeft: number; sidebarWidth: number } | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -227,7 +244,18 @@ function ProfileFooterButton() {
             return;
           }
           const rect = rootRef.current?.getBoundingClientRect();
-          setAnchor(rect ? { top: rect.top, left: rect.left } : null);
+          // Rect CAŁEGO sidebara (`<aside>` z ResizeHandle) — z niego idzie
+          // szerokość do wyśrodkowania panelu między lewą krawędzią a uchwytem.
+          const aside = rootRef.current?.closest("aside")?.getBoundingClientRect();
+          setAnchor(
+            rect
+              ? {
+                  top: rect.top,
+                  sidebarLeft: aside?.left ?? 0,
+                  sidebarWidth: aside?.width ?? DEFAULT_SIDEBAR_WIDTH,
+                }
+              : null,
+          );
           setOpen(true);
         }}
         aria-expanded={open}
@@ -262,9 +290,9 @@ function ProfileFooterButton() {
             pendingFile ? "w-72" : "w-[216px] aspect-square",
           )}
           style={(() => {
-            const rect = anchor ?? { top: window.innerHeight, left: 8 };
+            const a = anchor ?? { top: window.innerHeight, sidebarLeft: 0, sidebarWidth: DEFAULT_SIDEBAR_WIDTH };
             const width = pendingFile ? PROFILE_POPOVER_CROP_WIDTH : PROFILE_POPOVER_SIZE;
-            const pos = profilePopoverPosition(rect, width, window.innerWidth, window.innerHeight);
+            const pos = profilePopoverPosition({ top: a.top }, { left: a.sidebarLeft, width: a.sidebarWidth }, width, window.innerWidth, window.innerHeight);
             return { left: pos.left, bottom: pos.bottom };
           })()}
         >
@@ -1761,7 +1789,10 @@ export function Sidebar() {
             collapsed ? "justify-center px-0" : "",
           )}
         >
-          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-[#151515] text-ink-secondary">
+          {/* multibot: slot ikony jak DOMYŚLNY awatar profilu (InitialsAvatar:
+              rounded-full bg-raised, 32 px) — wypełnione koło bez obrysu,
+              ikona w text-ink-secondary jak inicjały. */}
+          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
             <Plug size={18} />
           </span>
             {!collapsed && <span className="text-[14px] font-semibold text-ink">{polish ? "Wtyczki" : "Plugins"}</span>}
