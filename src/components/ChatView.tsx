@@ -39,7 +39,7 @@ import { botDisplayName } from "@/lib/botNames";
 import { authFetch } from "@/lib/auth";
 import { peerActivityGroupFor } from "@/lib/peerActivity";
 // multibot: wygasłe logowanie harnessu — banerka z przyciskiem naprawy
-import { AuthExpiredBanner } from "./AuthExpiredBanner";
+import { AuthExpiredBanner, LoginExpiredCard } from "./AuthExpiredBanner";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -837,6 +837,10 @@ export function ChatView({ bot }: { bot: Bot }) {
             switch (m.kind) {
               case "secret":
                 child = <SecretRequestCard key={m.id} botId={bot.id} message={m} />;
+                break;
+              // multibot: karta „logowanie wygasło" z przyciskiem odświeżenia
+              case "login":
+                child = <LoginExpiredCard key={m.id} message={m} />;
                 break;
               case "options":
                 // multibot: karta przekazania komputera ma własny render

@@ -38,6 +38,12 @@ import { historyBlock } from "./history.ts";
 
 const DRIVER_KIND = "claudeAgent";
 
+/** Syntetyczny komunikat CLI o padniętym logowaniu — zawsze od pierwszego znaku. */
+const CLI_AUTH_ERROR = /^\s*Failed to authenticate\b/i;
+/** Powód błędu idzie do transkryptu i pusha — klucz API, gdyby CLI go
+ * zacytowało, nie może tam trafić. */
+const redactKeys = (text: string) => text.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-…");
+
 // Gdzie może leżeć `.credentials.json` claude'a. Na Termuxie `claude` to shim
 // (`proot-distro login debian -- …`), więc plik siedzi w rootfs kontenera pod
 // `/root`, a nie w HOME harnessu. Ścieżka do korzenia zmienia się między
@@ -59,7 +65,43 @@ export function claudeCredentialPaths(
 // Klucz w środowisku to też zalogowanie — tak chodzi CLIProxyAPI i każdy
 // własny endpoint (`ANTHROPIC_BASE_URL`), gdzie żadnego `.credentials.json` nie ma.
 export const claudeIsAuthenticated = (env: Record<string, string | undefined> = process.env): boolean =>
-  Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) || claudeCredentialPaths(env).some(existsSync);
+  claudeAuthState(env).authenticated;
+
+/**
+ * multibot: sama obecność `.credentials.json` nie znaczy „zalogowany". Telefon
+ * Kacpra 11.09.2026: plik JEST, ale `claudeAiOauth.expiresAt` = 0 — CLI
+ * próbowało odświeżyć OAuth, padło i wyzerowało datę; sonda mówiła „zalogowany",
+ * a każda tura kończyła się „Failed to authenticate". Data w przeszłości (albo 0)
+ * = `expired`: refresh token MOŻE jeszcze zadziałać, ale bot ma o tym powiedzieć
+ * PRZED turą, nie po. Brak pola = stary format, plik liczy się jak dotąd.
+ */
+export function claudeAuthState(
+  env: Record<string, string | undefined> = process.env,
+): { authenticated: boolean; reason?: "expired" | "missing" } {
+  // Liczy się to, co dostaje DZIECKO: `spawnWorker` zdejmuje ANTHROPIC_API_KEY
+  // ze środowiska CLI (klucz z powłoki nie ma logować Claude Code'a), więc
+  // klucz nie jest zalogowaniem; `ANTHROPIC_AUTH_TOKEN` (CLIProxyAPI) przechodzi.
+  if (env.ANTHROPIC_AUTH_TOKEN) return { authenticated: true };
+  const file = claudeCredentialPaths(env).find(existsSync);
+  if (!file) return { authenticated: false, reason: "missing" };
+  let oauth: { expiresAt?: unknown; refreshTokenExpiresAt?: unknown } | undefined;
+  try {
+    oauth = JSON.parse(readFileSync(file, "utf8"))?.claudeAiOauth;
+  } catch {
+    return { authenticated: true }; // nieczytelny plik: nie zgadujemy, CLI powie
+  }
+  // Wygasły ACCESS token (`expiresAt` w przeszłości, zwykle +6 h od logowania)
+  // to normalny stan między sesjami: CLI odświeża go na starcie tokenem
+  // odświeżającym i dopiero wtedy przepisuje plik. Martwe logowanie to
+  // `expiresAt` wyzerowane przez CLI po nieudanym odświeżeniu (telefon) albo
+  // wygasły REFRESH token. Wartości w ms (> 1e11); minuta luzu na zegar.
+  const expiresAt = oauth?.expiresAt;
+  const refreshExpiresAt = oauth?.refreshTokenExpiresAt;
+  const wiped = typeof expiresAt === "number" && expiresAt <= 0;
+  const refreshDead = typeof refreshExpiresAt === "number" && refreshExpiresAt > 1e11 && refreshExpiresAt <= Date.now() - 60_000;
+  if (wiped || refreshDead) return { authenticated: false, reason: "expired" };
+  return { authenticated: true };
+}
 
 export interface ClaudeConfig {
   cli: string;
@@ -335,7 +377,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const { instanceId, config } = input;
     const listeners = new Set<RuntimeEventListener>();
     type Broker = ReturnType<typeof createPermissionBroker>;
-    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean };
+    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean; /** powód już zgłoszony jako runtime.error w tej turze */ failed?: string };
     type Worker = {
       child: ReturnType<typeof spawn>;
       signature: string;
@@ -399,6 +441,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      // multibot: wygasły OAuth znany PRZED turą (plik z `expiresAt` 0 lub w
+      // przeszłości) — nie stawiamy CLI, żeby po 30 s zimnego startu usłyszeć
+      // to samo. Ta sama trójka zdarzeń, co przy padniętym procesie: index.ts
+      // parkuje bota na `needsAttention`, stawia banerkę i kartę logowania.
+      // Tylko `expired`: brak pliku zostawiamy CLI (klucz może przyjść inaczej).
+      // Rozgrzewka (`warmOnly`) nie jest turą — bez zdarzeń, jak dotąd; karta ma
+      // stanąć przy wiadomości człowieka, nie przy starcie serwera.
+      if (!(turn as SendTurnInput & { warmOnly?: boolean }).warmOnly && claudeAuthState().reason === "expired") {
+        const turnId = newId();
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Failed to authenticate: claude OAuth session expired. Sign in again to continue." });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "auth_expired", cost: null });
+        return { turnId };
+      }
       const policy = turnPolicy(threadId);
       const turnId = newId();
       const selectedModel = cliModel(turn.model);
@@ -656,7 +712,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // A stale CLI reports "…or newer is required" as ordinary assistant
             // text; staleCliNotice starts `claude update` and says so.
             const text = staleCliNotice(firstText(msg.content));
-            if (text.trim()) {
+            // multibot: CLI 2.1.268 nie wychodzi z kodem 1 przy wygasłym OAuth
+            // — wstawia SYNTETYCZNY komunikat „Failed to authenticate: …" jako
+            // wiadomość asystenta (bez strumienia delt) i kończy `result` z
+            // `is_error`. Telefon Kacpra 11.09.2026 21:18: zdanie wylądowało
+            // w dymku bota. Rozpoznajemy WYŁĄCZNIE kształt CLI: tekst zaczyna
+            // się od „Failed to authenticate" i nic z niego nie popłynęło
+            // deltą — zwykła odpowiedź modelu o „401" czy „OAuth session
+            // expired" zostaje dymkiem (recenzja #182: 6/8 normalnych
+            // odpowiedzi łapało się na luźne `authFailure()`).
+            const cliAuthError = CLI_AUTH_ERROR.test(text) && !worker!.current!.sawStreamDelta;
+            if (cliAuthError && !worker!.current!.failed) {
+              worker!.current!.failed = text.trim();
+              emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(text.trim()).slice(0, 300) });
+            } else if (text.trim() && !cliAuthError) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!worker!.current!.sawStreamDelta) {
                 emit({ ...base(threadId, worker!.current!.turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
@@ -686,9 +755,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               }
             }
             break;
-          case "result":
+          case "result": {
+            // multibot: `result.is_error` niesie PRAWDZIWY powód w `result`
+            // (albo w `errors`). Bez tego tura padała po cichu i index.ts
+            // dopisywał „model nic nie napisał" — mylące, gdy powodem jest
+            // wygasłe logowanie. Gdy CLI nie podało słowa, a plik poświadczeń
+            // zniknął, powód i tak jest znany: bot nie jest zalogowany.
+            if (o.is_error === true && !worker!.current!.failed) {
+              const reason = (typeof o.result === "string" ? o.result : Array.isArray(o.errors) ? o.errors.join("; ") : "").trim()
+                || (!claudeIsAuthenticated() ? "Failed to authenticate: claude is not logged in" : "");
+              if (reason) {
+                worker!.current!.failed = reason;
+                emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(reason).slice(0, 300) });
+              }
+            }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
             break;
+          }
         }
       };
       worker.onLine = handleLine;

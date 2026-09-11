@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool } from "./auth-failure.ts";
+import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool, openLoginCard, openLoginCards } from "./auth-failure.ts";
 
 // multibot: tabela zamiast reguł per-dostawca. Nowy harness dopisuje tu wiersz,
 // nie gałąź w kodzie — a negatywy pilnują dwóch rzeczy: żeby „token" z
@@ -114,5 +114,29 @@ describe("podpięcie w serwerze", () => {
     // prośbę rozpoznajemy po JEJ treści — nazwa mogła przyjść z tekstu błędu,
     // a wtedy nie zgadza się z harnessem bota i nie dałoby się jej zgasić
     expect(index).toContain("loginExpiredTool(bot.needsAttention) !== toolId");
+  });
+});
+
+// multibot: karta „logowanie wygasło" — dedupe i gaszenie PER NARZĘDZIE
+// (recenzja #182: bot zmienia harness, karta claude'a nie gaśnie od codexa).
+describe("karty logowania w wątku", () => {
+  const card = (id: string, tool: string, signedIn?: boolean) => ({ id, kind: "login", login: { tool, signedIn } });
+  const msgs = [
+    { id: "t1", kind: "text" },
+    card("c1", "claude", true),
+    card("c2", "codex"),
+    card("c3", "claude"),
+  ];
+
+  it("otwarta karta liczy się tylko dla swojego narzędzia", () => {
+    expect(openLoginCard(msgs, "claude")?.id).toBe("c3");
+    expect(openLoginCard(msgs, "codex")?.id).toBe("c2");
+    expect(openLoginCard(msgs, "opencode")).toBeUndefined();
+    expect(openLoginCard([card("c9", "claude", true)], "claude")).toBeUndefined();
+  });
+
+  it("do zgaszenia idą karty tego narzędzia, zgaszone i cudze zostają", () => {
+    expect(openLoginCards(msgs, "claude").map((m) => m.id)).toEqual(["c3"]);
+    expect(openLoginCards(msgs, "codex").map((m) => m.id)).toEqual(["c2"]);
   });
 });

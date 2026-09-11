@@ -135,6 +135,19 @@ describe("Store", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
 
+  // multibot: karta „logowanie wygasło" to zwykła wiadomość — trwa po restarcie
+  // i `patchMessage` przełącza ją w „zalogowano ponownie".
+  it("keeps a login-expired card and its signed-in flip across reload", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "login", login: { tool: "claude" } });
+    expect(card.login).toEqual({ tool: "claude" });
+    expect(store.patchMessage(bot.threadId, card.id, { login: { tool: "claude", signedIn: true } })?.login?.signedIn).toBe(true);
+    const back = new Store(selection).messagesFor(bot.threadId).find((m) => m.id === card.id)!;
+    expect(back.kind).toBe("login");
+    expect(back.login).toEqual({ tool: "claude", signedIn: true });
+  });
+
   it("patchMessage merges card patches and returns null for unknown ids", () => {
     const store = new Store(selection);
     const bot = store.createBot();

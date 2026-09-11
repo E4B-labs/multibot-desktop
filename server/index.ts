@@ -46,7 +46,8 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
-import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool } from "./auth-failure.ts";
+import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool, openLoginCard, openLoginCards } from "./auth-failure.ts";
+import { claudeAuthState } from "./drivers/claude.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
@@ -1985,6 +1986,14 @@ bus.subscribe((event: RuntimeEvent) => {
         if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
         turnOrigin.delete(bot.id);
         broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
+        // multibot: karta w transkrypcie z przyciskiem „Odśwież logowanie" —
+        // banerka znika przy przełączeniu bota, karta zostaje tam, gdzie
+        // tura padła. Jedna otwarta karta na bota i narzędzie: powtórka nie
+        // dokłada drugiej. `text` = zdanie dla starych bundli (mobile bez
+        // renderera `login` pokaże dymek zamiast pustki).
+        if (!openLoginCard(store.messagesFor(bot.threadId), expiredTool)) {
+          pushMessage({ role: "bot", kind: "login", login: { tool: expiredTool }, text: note });
+        }
       } else {
         endTurnPush(bot.id, "failed", event.message.slice(0, 120));
       }
@@ -2052,11 +2061,24 @@ bus.subscribe((event: RuntimeEvent) => {
       // budzi telefon banerką, a karta (pytanie, zgoda, sekret, konektor) stoi
       // w czacie i sama mówi, na czym stanęło.
       const toldUser = turnToldUser.delete(bot.id);
+      // Udana tura z odpowiedzią = logowanie działa; otwarta karta „logowanie
+      // wygasło" ma to pokazać, zamiast wisieć jako wieczna prośba.
+      if (event.ok && saidThisTurn) {
+        const tool = cliToolIdFor(bot);
+        if (tool) resolveLoginCards(event.threadId, tool);
+      }
+      // Tura nieudana (`ok: false`) bez zgłoszonego powodu to nadal cisza, ale
+      // nie podpisujemy jej „model nic nie napisał", jakby to była jego decyzja.
       const silentNote = !saidThisTurn && !frame && !toldUser && origin === "user"
-        ? t(
-          "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
-          '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
-        )
+        ? event.ok
+          ? t(
+            "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
+            '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
+          )
+          : t(
+            `(tura przerwana błędem${event.stopReason ? ` — ${event.stopReason}` : ""}; napisz „kontynuuj”, żeby spróbować jeszcze raz)`,
+            `(turn failed${event.stopReason ? ` — ${event.stopReason}` : ""}; say "continue" to try again)`,
+          )
         : "";
       if (silentNote) pushMessage({ role: "bot", kind: "text", text: silentNote });
       turnUsedTool.delete(event.threadId);
@@ -3212,6 +3234,11 @@ function validBaseUrl(value: string): boolean {
   }
 }
 
+/** multibot: `claude auth login` przerwane wychodzi z kodem 0 — „udany" job
+ * nie dowodzi logowania. Dla claude'a pytamy sondę pliku; inne CLI nie mają
+ * sondy i job pozostaje jedynym świadkiem. */
+const loginProbePasses = (toolId: string): boolean => toolId !== "claude" || claudeAuthState().authenticated;
+
 /** multibot: zdejmuje `needsAttention` z botów, które czekały na logowanie do
  * tego narzędzia. Wołane po udanym `cli-login`; innych powodów czekania nie
  * rusza, bo rozpoznaje własny prefiks. */
@@ -3220,6 +3247,19 @@ function clearLoginExpired(toolId: string): void {
     if (loginExpiredTool(bot.needsAttention) !== toolId) continue;
     store.patchBot(bot.id, { needsAttention: null });
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    resolveLoginCards(bot.threadId, toolId);
+  }
+}
+
+/** multibot: logowanie do TEGO narzędzia znów działa (udany cli-login, udana
+ * tura z odpowiedzią) — jego otwarte karty w wątku przechodzą w „Zalogowano
+ * ponownie". */
+function resolveLoginCards(threadId: string, tool: string): void {
+  for (const message of openLoginCards(store.messagesFor(threadId), tool)) {
+    const patched = store.patchMessage(threadId, message.id, { login: { ...message.login!, signedIn: true } });
+    // `message.patch`, nie `message`: powłoka trzyma wiadomość o znanym id i
+    // zwykłą ramkę `message` pomija (messageAdded), więc karta by nie zgasła.
+    if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
   }
 }
 
@@ -5588,9 +5628,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         const off = setupJobs.subscribe(job.id, (next) => {
           if (next.status === "running") return;
           off();
-          if (next.status === "succeeded") clearLoginExpired(tool.id);
+          if (next.status === "succeeded" && loginProbePasses(tool.id)) clearLoginExpired(tool.id);
         });
-      } else if (job.status === "succeeded") {
+      } else if (job.status === "succeeded" && loginProbePasses(tool.id)) {
         // spawn padł (albo skończył) synchronicznie — nie ma na co czekać
         clearLoginExpired(tool.id);
       }

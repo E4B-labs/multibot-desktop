@@ -80,7 +80,9 @@ export interface SkillRefInfo {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret";
+  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret" | "login";
+  /** multibot: karta „logowanie wygasło" (server/store.ts) */
+  login?: { tool: string; signedIn?: boolean };
   text?: string;
   card?: OptionCardData;
   secret?: { target: string; label: string; description: string; placeholder?: string; helpUrl?: string; requestKey: string; provided?: boolean; dismissed?: boolean };
