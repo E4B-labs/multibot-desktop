@@ -118,8 +118,8 @@ describe("awatar w nagłówku czatu", () => {
     );
   });
 
-  it("liczy propsy tym samym helperem co pasek boczny", () => {
-    expect(chat).toContain("sidebarAvatarProps(bot)");
+  it("liczy propsy helperem, który NIGDY nie animuje (drugi blob obok paska nad composerem to drugi sygnał tej samej tury)", () => {
+    expect(chat).toContain("staticAvatarProps(bot)");
     expect(chat).toContain("animated={headerAvatar.animated}");
   });
 });
@@ -266,7 +266,7 @@ describe("małe awatary rozmów botów", () => {
     expect(card).toContain('role="link"');
     expect(card).toContain('size={20}');
     expect(card).toContain('shape="blob"');
-    expect(card).toContain("{...sidebarAvatarProps(bot)}");
+    expect(card).toContain("{...staticAvatarProps(bot)}");
     expect(card).toContain("inline-flex items-center gap-1 rounded-full");
     expect(card).not.toContain("-space-x-1");
     // obwódka hovera nie może być obcinana przez `overflow-hidden` wiersza
@@ -293,7 +293,7 @@ describe("małe awatary rozmów botów", () => {
   it("oddziela avatary nagłówka i nadawcy w temporary chacie", () => {
     expect(roomPanel).toContain("bg-app ring-2 ring-app");
     expect(roomPanel).toContain('shape="blob"');
-    expect(roomPanel).toContain("{...sidebarAvatarProps(bot)}");
+    expect(roomPanel).toContain("{...staticAvatarProps(bot)}");
     expect(roomPanel).not.toContain("state={stateForBot(bot)}");
   });
 });

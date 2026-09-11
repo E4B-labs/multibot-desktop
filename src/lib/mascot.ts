@@ -109,19 +109,128 @@ export const BOT_MOTIONS = [
 
 export type BotMotion = "none" | (typeof BOT_MOTIONS)[number];
 
+/** To, co pasek nad composerem wie o turze, a czego nie ma w samym `Bot`. */
+export type LiveTurn = Omit<Parameters<typeof stripMascotState>[0], "bot">;
+
+type AvatarProps = { state: BotState; motion: BotMotion; animated: boolean; motionKey: number };
+
 /**
- * Awatar bota poza paskiem nad composerem: ZAWSZE nieruchomy — neutralny stan
- * "idle", zero beatow, `animated:false` -> `paused` w BlobAvatar. Takze gdy
- * bot pracuje.
- *
- * Jeden animowany bot na cala aplikacje, ten na pasku nad composerem; o jego
- * stanie decyduje `stripMascotState`. Pasek boczny, naglowek czatu, wiersz
- * grupy i karta hovera wolaja ten helper i stoja.
+ * Stany, które wolno animować poza paskiem nad composerem: wyłącznie te z ŻYWEJ
+ * tury, bo każda animacja to pętla rAF na cały czas trwania stanu. Stany
+ * czekania na człowieka (`confused`, `alerting`) i `notifying` potrafią wisieć
+ * godzinami — dostają minę (plus istniejącą kropkę), nie animację.
  */
-export function sidebarAvatarProps(
-  _bot: Bot,
-): { state: BotState; motion: BotMotion; animated: boolean; motionKey: number } {
-  return { state: "idle", motion: "none", animated: false, motionKey: 0 };
+const ANIMATED_ROSTER_STATES = new Set<BotState>(["working", "thinking", "thinking-dots", "loading", "celebrate", "listening"]);
+
+/**
+ * Awatar bota w rosterze, wierszu grupy i kafelku hovera: ta sama tabela stanów
+ * co pasek nad composerem (`stripMascotState`), więc zajęty bot pracuje także
+ * w rosterze. Bezczynny wraca do miny wybranej w ustawieniach
+ * (`mascotExpression`), a bez niej do „idle" — i stoi.
+ */
+export function sidebarAvatarProps(bot: MascotBotProfile, live: LiveTurn = {}): AvatarProps {
+  const strip = stripMascotState({ bot, ...live });
+  const state = strip ?? normalizeState(bot.mascotExpression) ?? "idle";
+  return { state, motion: "none", animated: strip !== null && ANIMATED_ROSTER_STATES.has(state), motionKey: 0 };
+}
+
+/**
+ * Awatar, który NIGDY się nie rusza: nagłówek czatu, chipy pokoju. Obok paska
+ * nad composerem drugi animowany blob byłby drugim sygnałem tej samej tury.
+ */
+export function staticAvatarProps(bot: Pick<MascotBotProfile, "mascotExpression">): AvatarProps {
+  return { state: normalizeState(bot.mascotExpression) ?? "idle", motion: "none", animated: false, motionKey: 0 };
+}
+
+/**
+ * Czy zegar rostera ma tykać: jakaś tura żyje albo któryś wątek jeszcze świętuje
+ * jej koniec (`celebrate` gaśnie po `CELEBRATE_MS` bez żadnego eventu). Poza
+ * tym oknem żaden wiersz tabeli nie zależy od czasu, więc zegar może stać.
+ */
+export function mascotClockActive(
+  bots: readonly Pick<MascotBotProfile, "busy">[],
+  runtime: Record<string, RuntimePhase>,
+  now: number,
+): boolean {
+  if (bots.some((b) => b.busy)) return true;
+  return Object.values(runtime).some((phase) => phase.kind === "done" && now - phase.at < CELEBRATE_MS);
+}
+
+type Lang = "en" | "pl";
+const t = (lang: Lang, en: string, pl: string) => (lang === "pl" ? pl : en);
+
+/**
+ * Nazwa narzędzia (to, co driver wstawia w `activity.tool.name`: `Bash`,
+ * `mcp__computer__navigate`, treść komendy z codexa, `edit`, `error: …`) →
+ * krótkie zdanie po ludzku. Nigdy nie oddaje surowej nazwy.
+ */
+export function toolPhrase(name: string, lang: Lang = "en"): string {
+  const raw = name.trim();
+  const n = raw.toLowerCase();
+  if (n.startsWith("error:")) return t(lang, "Hit an error", "Napotkał błąd");
+  const mcp = /^mcp__([a-z0-9-]+)__(.+)$/.exec(n);
+  if (mcp) {
+    const [, server, tool] = mcp;
+    if (server === "computer") {
+      if (/navigate|open|url|back/.test(tool)) return t(lang, "Browses the web", "Przegląda internet");
+      if (/screenshot|read_page|find|screen|page_text/.test(tool)) return t(lang, "Looks at the screen", "Patrzy na ekran");
+      return t(lang, "Uses the computer", "Obsługuje komputer");
+    }
+    if (server === "agents") return t(lang, "Asks a colleague", "Pyta kolegę");
+    return t(lang, `Uses ${server.replace(/[-_]+/g, " ")}`, `Używa: ${server.replace(/[-_]+/g, " ")}`);
+  }
+  // Dokładne nazwy narzędzi Claude'a PRZED prefiksami komend: `Grep`/`ls` to
+  // czytanie plików, nie „ls -la" z powłoki.
+  if (/^(read|glob|grep|ls|notebookread)$/.test(n)) return t(lang, "Reads files", "Czyta pliki");
+  if (/^(write|edit|multiedit|notebookedit|filechange)$/.test(n)) return t(lang, "Edits files", "Edytuje pliki");
+  if (/^(bash|shell|cmd|powershell|pwsh|sh|zsh|exec|commandexecution)$/.test(n) || /^(bash|sh|pwsh|powershell|cmd|npm|npx|node|git|python|pip|curl|ls|cat|cd|mkdir|rm|grep|find|make|cargo|go|docker)\b/.test(n)) {
+    return t(lang, "Runs a command", "Uruchamia polecenie");
+  }
+  if (/^(websearch|web_search)$/.test(n)) return t(lang, "Searches the web", "Szuka w sieci");
+  if (/^(webfetch|fetch)$/.test(n)) return t(lang, "Reads a web page", "Czyta stronę");
+  if (/^(agent|task)$/.test(n)) return t(lang, "Delegates a task", "Zleca zadanie");
+  if (/^(ask_bot|askbot)$/.test(n)) return t(lang, "Asks a colleague", "Pyta kolegę");
+  if (n === "skill") return t(lang, "Uses a skill", "Używa umiejętności");
+  if (/^(todowrite|todo)$/.test(n)) return t(lang, "Plans the work", "Planuje pracę");
+  if (/browse|navigate/.test(n)) return t(lang, "Browses the web", "Przegląda internet");
+  if (/screen/.test(n)) return t(lang, "Looks at the screen", "Patrzy na ekran");
+  return t(lang, "Uses a tool", "Używa narzędzia");
+}
+
+/**
+ * „Co bot teraz robi" — jedno zdanie do kafelka hovera. `null`, gdy nic:
+ * bezczynny bot nie dostaje podpisu. Mina i zdanie pochodzą z tej samej
+ * tabeli, więc nigdy nie mówią dwóch różnych rzeczy.
+ */
+export function activityPhrase(bot: MascotBotProfile, live: LiveTurn = {}, lang: Lang = "en"): string | null {
+  const state = stripMascotState({ bot, ...live });
+  if (state === null) return null;
+  const last = bot.messages?.[bot.messages.length - 1] as (MascotMessage & { tool?: { name?: string } }) | undefined;
+  switch (state) {
+    case "confused":
+      return t(lang, "Waits for your answer", "Czeka na Twoją odpowiedź");
+    case "alerting":
+      return t(lang, "Needs your attention", "Potrzebuje Twojej uwagi");
+    case "working":
+      // tylko narzędzie W LOCIE; skończone (ok rozstrzygnięte) już nie mówi, co bot robi
+      if (last?.kind === "activity" && last.tool?.name && last.tool.ok === undefined) return toolPhrase(last.tool.name, lang);
+      if (last?.kind === "screen") return t(lang, "Looks at the screen", "Patrzy na ekran");
+      return t(lang, "Works on it", "Pracuje nad tym");
+    case "thinking":
+      return t(lang, "Thinks", "Myśli");
+    case "thinking-dots":
+      return t(lang, "Writes a reply", "Pisze odpowiedź");
+    case "loading":
+      return t(lang, "Warms up the model", "Rozgrzewa model");
+    case "celebrate":
+      return t(lang, "Just finished", "Właśnie skończył");
+    case "listening":
+      return t(lang, "Listens to a colleague", "Słucha kolegi");
+    case "notifying":
+      return t(lang, "Has something new", "Ma coś nowego");
+    default:
+      return t(lang, "Works on it", "Pracuje nad tym");
+  }
 }
 
 /**
