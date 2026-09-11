@@ -36,7 +36,10 @@ export interface HarnessRoutine {
    * rutyny, ale `list()`/`routineView()` go nie zwracają — jedyny moment, w
    * którym wychodzi na świat, to odpowiedź `enableWebhookTrigger`. */
   webhookSecret?: string;
-  last_runs: Array<{ at: string; status: "queued" | "error"; error?: string }>;
+  /** Historia przebiegów, najnowszy pierwszy. `queued` to stan PRZEJŚCIOWY:
+   * dispatch tylko kolejkuje turę, więc prawdziwy wynik (`ok`/`error`)
+   * dopisuje `settleRun` na końcu tury. */
+  last_runs: Array<{ at: string; status: "queued" | "ok" | "error"; error?: string }>;
   nextRunAt: number | null;
 }
 
@@ -180,6 +183,10 @@ export function routineTurnText(name: string, prompt: string, payload?: string |
 export class HarnessRoutines {
   private jobs: HarnessRoutine[] = [];
   private running = new Set<string>();
+  /** botId → id rutyny, której tura właśnie leci (wpis `queued` czeka na wynik).
+   * Klucz to BOT, nie rutyna: bot robi jedną turę naraz, a koniec tury zgłasza
+   * serwer właśnie po botId. */
+  private pending = new Map<string, string>();
   private file: string;
   private dispatch: Dispatch;
   private now: Clock;
@@ -338,7 +345,10 @@ export class HarnessRoutines {
       // Advance before dispatch: crash/restart cannot replay a token-spending turn.
       job.nextRunAt = job.enabled ? nextRun(job.schedule, this.now()) : null;
       await this.dispatch(job, payload);
+      // Tura dopiero wystartowała — `dispatch` wraca, zanim model cokolwiek
+      // zrobi. Wynik dopisze `settleRun`, gdy serwer zamelduje koniec tury.
       job.last_runs.unshift({ at: new Date(this.now()).toISOString(), status: "queued" });
+      this.pending.set(job.botId, job.id);
     } catch (error) {
       job.last_runs.unshift({
         at: new Date(this.now()).toISOString(),
@@ -350,6 +360,23 @@ export class HarnessRoutines {
       this.running.delete(job.id);
       this.persist();
     }
+  }
+
+  /** Zamknij przebieg rutyny wynikiem tury: `error` z tekstem albo `ok`.
+   * Woła to serwer na KAŻDYM końcu tury (udanym, błędnym, przerwanym,
+   * ubitym watchdogiem), więc żaden wpis nie zostaje na zawsze w `queued`.
+   * Bot bez wiszącej rutyny → nic się nie dzieje. */
+  settleRun(botId: string, error?: string | null): boolean {
+    const routineId = this.pending.get(botId);
+    if (!routineId) return false;
+    this.pending.delete(botId);
+    const entry = this.jobs.find((job) => job.id === routineId)?.last_runs[0];
+    if (!entry || entry.status !== "queued") return false;
+    entry.status = error ? "error" : "ok";
+    // Ogon stack trace'u nie ma po co puchnąć w routines.json ani w panelu.
+    if (error) entry.error = String(error).slice(0, 500);
+    this.persist();
+    return true;
   }
 
   private persist(): void {

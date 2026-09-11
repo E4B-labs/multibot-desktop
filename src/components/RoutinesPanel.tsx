@@ -118,6 +118,21 @@ function nextRunLine(r: Routine, polish: boolean): string | null {
   return `${polish ? "Następne uruchomienie" : "Next run"}: ${formatNextRun(r.next_run_at, polish)}`;
 }
 
+// Wynik przebiegu słowem, nie surowym kodem statusu. `queued` to stan
+// przejściowy — tura już leci, wyniku jeszcze nie ma (server/routines.ts).
+export function runLabel(status: string | null | undefined, polish: boolean): string {
+  if (status === "ok") return polish ? "Sukces" : "Success";
+  if (status === "error") return polish ? "Błąd" : "Failed";
+  return polish ? "W toku" : "Running";
+}
+
+const RUN_DOT: Record<string, string> = { ok: "bg-success", error: "bg-danger" };
+
+export function runTitle(run: Routine["last_runs"][number], polish: boolean): string {
+  const head = `${new Date(run.at).toLocaleString()} — ${runLabel(run.status, polish)}`;
+  return run.error ? `${head}: ${run.error}` : head;
+}
+
 function RoutineForm({
   routinePath,
   routine,
@@ -362,13 +377,17 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
   };
 
 
+  // Wynik NA POCZĄTKU: przy domyślnej szerokości panelu ogon linii i tak się
+  // nie mieści, a to właśnie sukces/porażka są tu informacją. Pełne zdanie
+  // („Ostatnie uruchomienie …") zostaje w podpowiedzi.
   const lastRunLine = (r: Routine) => {
     const run = r.last_runs[0];
     if (!run) return polish ? "Brak uruchomień" : "No runs yet";
-    const when = new Date(run.at).toLocaleString();
-    return run.error
-      ? `${polish ? "Ostatnie uruchomienie" : "Last run"} ${when} — ${run.error}`
-      : `${polish ? "Ostatnie uruchomienie" : "Last run"} ${when}${run.status ? ` — ${run.status}` : ""}`;
+    return `${runLabel(run.status, polish)} · ${new Date(run.at).toLocaleString()}`;
+  };
+  const lastRunTitle = (r: Routine) => {
+    const run = r.last_runs[0];
+    return run ? `${polish ? "Ostatnie uruchomienie" : "Last run"} ${runTitle(run, polish)}` : lastRunLine(r);
   };
 
   return (
@@ -471,9 +490,29 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
                       {nextRunLine(r, polish) && (
                         <div className="mt-0.5 text-[12px] text-ink-secondary">{nextRunLine(r, polish)}</div>
                       )}
-                      <div className="mt-0.5 truncate text-[12px] text-ink-secondary" title={lastRunLine(r)}>
+                      {/* Historia sukcesów i porażek: kropka na przebieg
+                          (najnowszy z lewej) + wynik ostatniego. Do 0.5.45
+                          historia znała tylko „w kolejce" i „błąd", więc
+                          sukces nie istniał. */}
+                      <div className="mt-0.5 truncate text-[12px] text-ink-secondary" title={lastRunTitle(r)}>
                         {lastRunLine(r)}
                       </div>
+                      {r.last_runs.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-[3px]">
+                          {r.last_runs.slice(0, 10).map((run, i) => (
+                            <span
+                              key={`${run.at}-${i}`}
+                              title={runTitle(run, polish)}
+                              className={cn("size-1.5 rounded-full", RUN_DOT[run.status ?? ""] ?? "bg-raised-hover")}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {r.last_runs[0]?.error && (
+                        <div className="mt-0.5 truncate text-[12px] text-danger" title={r.last_runs[0].error}>
+                          {r.last_runs[0].error}
+                        </div>
+                      )}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">

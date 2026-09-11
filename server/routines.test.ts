@@ -39,12 +39,71 @@ describe("driver-neutral routines", () => {
     expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ botId: "bot-custom", prompt: "check now" }), undefined);
   });
 
+  // Dispatch tylko KOLEJKUJE turę (`startTurn` wraca, zanim model cokolwiek
+  // zrobi), więc do 0.5.45 historia nie znała słowa „sukces" — tylko „queued"
+  // i „error". Wynik dopisuje serwer na końcu tury przez `settleRun`.
+  it("turns a queued run into ok when the turn finishes, twice in a row", async () => {
+    let now = 1_000;
+    const routines = new HarnessRoutines(file(), async () => {}, () => now, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.list("bot-cli")[0].last_runs[0].status).toBe("queued"); // tura dopiero leci
+    expect(routines.settleRun("bot-cli")).toBe(true);
+
+    now = 2_000;
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli")).toBe(true);
+
+    expect(routines.list("bot-cli")[0].last_runs.map((run) => run.status)).toEqual(["ok", "ok"]);
+    expect(routines.list("bot-cli")[0].last_runs[0].error).toBeUndefined();
+  });
+
+  it("records the failure text when the turn ends badly, and ignores bots with nothing pending", async () => {
+    const path = file();
+    const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+
+    await routines.runNow("bot-cli", job.id);
+    expect(routines.settleRun("bot-cli", "the provider stopped responding")).toBe(true);
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({
+      status: "error",
+      error: "the provider stopped responding",
+    });
+
+    // drugie zameldowanie tego samego końca tury nic nie psuje…
+    expect(routines.settleRun("bot-cli", "spóźniony błąd")).toBe(false);
+    // …i zwykła tura bota bez rutyny też nie dopisuje się do cudzej historii
+    expect(routines.settleRun("bot-inny")).toBe(false);
+    expect(routines.list("bot-cli")[0].last_runs).toHaveLength(1);
+
+    // wynik przeżywa restart — siedzi w routines.json, nie w pamięci
+    expect(JSON.parse(readFileSync(path, "utf8"))[0].last_runs[0].status).toBe("error");
+  });
+
+  it("keeps at most 20 history entries, newest first", async () => {
+    let now = 1_000;
+    const routines = new HarnessRoutines(file(), async () => {}, () => now, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "summarize" });
+    for (let i = 0; i < 25; i++) {
+      now += 1_000;
+      await routines.runNow("bot-cli", job.id);
+      routines.settleRun("bot-cli");
+    }
+    const runs = routines.list("bot-cli")[0].last_runs;
+    expect(runs).toHaveLength(20);
+    expect(runs.every((run) => run.status === "ok")).toBe(true);
+    expect(new Date(runs[0].at).getTime()).toBeGreaterThan(new Date(runs[19].at).getTime());
+  });
+
   it("persists jobs and records unavailable or busy driver failures", async () => {
     const path = file();
     const routines = new HarnessRoutines(path, async () => { throw new Error("bot is already working"); }, () => 1_000, 0);
     const job = routines.create("bot-codex", { name: "Work", prompt: "go" });
     await routines.runNow("bot-codex", job.id);
     expect(routines.list("bot-codex")[0].last_runs[0]).toMatchObject({ status: "error", error: "bot is already working" });
+    // tura nigdy nie wystartowała, więc nie ma czego zamykać wynikiem
+    expect(routines.settleRun("bot-codex")).toBe(false);
 
     const restored = new HarnessRoutines(path, async () => {}, () => 2_000, 0);
     expect(restored.list("bot-codex")).toHaveLength(1);
