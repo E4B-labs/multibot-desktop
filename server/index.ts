@@ -326,7 +326,11 @@ const gatedTurnBots = new Set<string>();
  *  czatu). Jedno miejsce dla obu, bo koniec tury jest ten sam: `turn.completed`,
  *  `runtime.error`, przerwanie i watchdog wołają tę funkcję. */
 function releaseTurnSlot(botId: string): void {
-  const wasActing = computerControl.setAgentActing(botId, false);
+  // Tura ZAGNIEŻDŻONA (comms depth > 0) kończy się na tym samym wątku co tura
+  // zewnętrzna, która dalej trwa — gaszenie znacznika na jej końcu zgasiłoby
+  // ikonę w środku roboty. Slot i tak bierze wyłącznie tura główna (`gated`).
+  const nested = (activeCommsDepth.get(botId) ?? 0) > 0;
+  const wasActing = !nested && computerControl.setAgentActing(botId, false);
   const hadSlot = gatedTurnBots.delete(botId);
   if (hadSlot) computerControl.releaseAgent(botId);
   if (wasActing || hadSlot) broadcast({ kind: "computer-queue", ...computerControl.control() });
@@ -1486,6 +1490,18 @@ function eventVisible(payload: unknown, actor: IdentityActor | null): boolean {
     return event.kind === "workspace" && event.botId === undefined
       ? Boolean(actor)
       : canReadBot(botFor(event.botId), actor);
+  }
+  // Stan dzierżawy komputera niesie ID BOTÓW (`agentActing`, `agentOwner`,
+  // `agentQueue`) — prywatny bot nie ma się przez to wysypać całemu zespołowi.
+  // Ramka bez żadnego id (czyli „nikt nie pracuje") jedzie do każdego
+  // zalogowanego: to ona gasi ikonę na końcu tury.
+  if (event.kind === "computer-queue") {
+    const named = [
+      ...(Array.isArray(event.agentActing) ? event.agentActing : []),
+      ...(Array.isArray(event.agentQueue) ? event.agentQueue : []),
+      ...(typeof event.agentOwner === "string" ? [event.agentOwner] : []),
+    ];
+    return named.length === 0 ? Boolean(actor) : named.every((id) => canReadBot(botFor(id), actor));
   }
   if (event.kind === "goal") {
     const bot = store.botByThread(String(event.goal?.ownerThread ?? ""));
@@ -3268,6 +3284,12 @@ async function deleteGroupRecord(id: string): Promise<{ found: boolean }> {
 
 async function deleteBotRecord(bot: BotRecord): Promise<void> {
   await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // Skasowany w trakcie pracy na komputerze bot nie dostanie już `turn.completed`,
+  // więc jego id zostałoby w znaczniku „pracuje" (i w kolejce slotów) na zawsze.
+  // Licznik tur zdejmujemy PRZED zwolnieniem: bota nie ma, więc nie ma też tury
+  // zewnętrznej, dla której `releaseTurnSlot` oszczędzałby znacznik.
+  activeCommsDepth.delete(bot.id);
+  releaseTurnSlot(bot.id);
   stopScreenPoller(bot.id);
   harnessRoutines.deleteBot(bot.id);
   reminders.deleteBot(bot.id);

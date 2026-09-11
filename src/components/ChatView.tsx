@@ -559,6 +559,9 @@ export function ChatView({ bot }: { bot: Bot }) {
   // Jeden przycisk na obie powłoki: w przeglądarce stoi w rzędzie ikon zawsze,
   // na pulpicie (gdzie akcje siedzą pod „⋮") pokazuje się TYLKO wtedy, gdy bot
   // pracuje na komputerze — inaczej status byłby schowany w zwiniętym menu.
+  const computerLabel = computerActing
+    ? polish ? "Bot pracuje na komputerze" : "The bot is using the computer"
+    : polish ? "Komputer bota" : "Bot's computer";
   const computerButton = (
     <button
       onClick={() => dispatch({ type: "toggleComputer" })}
@@ -566,17 +569,15 @@ export function ChatView({ bot }: { bot: Bot }) {
         "relative rounded-md p-1.5 hover:bg-raised",
         computerActing || state.computerOpen ? "text-accent" : "text-ink hover:text-ink",
       )}
-      title={
-        computerActing
-          ? polish ? "Bot pracuje na komputerze" : "The bot is using the computer"
-          : polish ? "Komputer bota" : "Bot's computer"
-      }
-      aria-label={polish ? "Komputer bota" : "Bot's computer"}
+      title={computerLabel}
+      // Czytnik ekranu ma słyszeć to samo, co mówi dymek — sam kolor ikony nie
+      // niesie dla niego niczego.
+      aria-label={computerLabel}
       data-computer-acting={computerActing ? "1" : undefined}
     >
       <Monitor size={18} />
       {computerActing && (
-        <span aria-hidden className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-accent" />
+        <span aria-hidden className="absolute right-1 top-1 size-1.5 rounded-full bg-accent motion-safe:animate-pulse" />
       )}
     </button>
   );

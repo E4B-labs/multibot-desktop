@@ -78,17 +78,21 @@ export function control(now = Date.now()): Control {
 }
 
 /** Take or extend the user's lease. Idempotent — re-acquiring a live lease is a
- *  renewal, not a conflict. */
+ *  renewal, not a conflict.
+ *
+ *  Kształt odpowiedzi to pełne `control()`, razem ze stanem agentów: człowiek
+ *  z klawiaturą nadal ma widzieć, że bot pracuje. Panel odnawia dzierżawę
+ *  w pętli, więc gołe `{owner, expiresAt}` czyściło mu ten widok co kilka sekund. */
 export function acquire(now = Date.now()): Control {
   leaseExpiresAt = now + LEASE_MS;
-  return { owner: "user", expiresAt: leaseExpiresAt };
+  return control(now);
 }
 
 export const renew = acquire;
 
 export function release(): Control {
   leaseExpiresAt = null;
-  return { owner: "agent", ...agentState() };
+  return control();
 }
 
 /** Admit this bot's turn. Resolves at once while the fleet is under

@@ -602,7 +602,10 @@ export function reducer(state: AppState, action: Action): AppState {
     case "setModel":
       return updateBot(state, action.botId, (b) => ({ ...b, modelSelection: action.selection }));
     case "connected":
-      return { ...state, connected: action.value };
+      // Zerwany strumień znaczy, że ramka końca tury już nie przyjdzie — ikona
+      // komputera zostałaby zapalona do następnej tury. Po odzyskaniu łącza
+      // widok odbuduje pierwsza ramka `computer-queue`.
+      return { ...state, connected: action.value, ...(action.value ? {} : { computerActing: [] }) };
     case "error":
       return {
         ...(action.message && state.selectedId

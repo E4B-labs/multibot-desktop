@@ -31,6 +31,22 @@ describe("computerActing", () => {
     expect(reducer(first, { type: "computerActing", botIds: ["b2"] }).computerActing).toEqual(["b2"]);
   });
 
+  // Dokładnie to wyliczenie robi nagłówek czatu: `state.computerActing.includes(bot.id)`.
+  // Sygnał jest PER BOT — maszyna jest jedna, ale czat bota, który nic nie robi,
+  // świecić nie ma.
+  it("akcent zapala się tylko u bota, który pracuje", () => {
+    const s = reducer(initialState, { type: "computerActing", botIds: ["b2"] });
+    expect(s.computerActing.includes("b2")).toBe(true);
+    expect(s.computerActing.includes("b1")).toBe(false);
+  });
+
+  it("zerwane połączenie gasi ikonę, bo ramka końca tury już nie przyjdzie", () => {
+    const working = reducer(initialState, { type: "computerActing", botIds: ["b1"] });
+    expect(reducer(working, { type: "connected", value: false }).computerActing).toEqual([]);
+    // Odzyskane połączenie niczego nie zgaduje — czeka na ramkę z serwera.
+    expect(reducer(working, { type: "connected", value: true }).computerActing).toEqual(["b1"]);
+  });
+
   // Ramka jest jedna dla całego stanu dzierżawy; brak `agentActing` znaczy
   // „nikt nie pracuje", a nie „nie wiadomo" — inaczej ikona zostawałaby zapalona
   // po turze, bo koniec tury wysyła ramkę BEZ tego pola.

@@ -118,9 +118,15 @@ describe("agentActing (poziom Status)", () => {
     expect(control().agentActing).toEqual(["beta"]);
   });
 
+  // Panel odnawia dzierżawę w pętli i rysuje się także z ODPOWIEDZI, nie tylko
+  // z SSE, więc `acquire`/`renew`/`release` muszą zwracać pełny kształt
+  // `control()`. Gołe `{owner, expiresAt}` kasowało widok pracy bota co kilka
+  // sekund przejęcia.
   it("przejęcie komputera przez człowieka nie gubi informacji, kto pracował", () => {
     const now = 8_000_000;
     setAgentActing("alpha", true);
+    expect(acquire(now)).toMatchObject({ owner: "user", expiresAt: now + LEASE_MS, agentActing: ["alpha"] });
+    expect(release()).toMatchObject({ owner: "agent", agentActing: ["alpha"] });
     acquire(now);
     expect(control(now)).toMatchObject({ owner: "user", agentActing: ["alpha"] });
   });
