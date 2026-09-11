@@ -44,6 +44,9 @@ describe("turnToolsText", () => {
     expect(text).toContain("content_base64");
     expect(text).toContain("do not save it to disk first");
     expect(text).toContain("Never say a file is sent");
+    // Zmierzone po tej zmianie: przy `content_base64` model przestal podawac
+    // `name` i trzy pliki wyladowaly w czacie jako „file", „file", „file".
+    expect(text).toContain("always set `name` with its extension");
   });
 
   it("says plainly when nothing is mounted", () => {
