@@ -109,7 +109,7 @@ function profileInitials(profile?: { name?: string; email?: string }): string {
  */
 /** Bok kwadratowego panelu zdjęcia profilowego (px) i szerokość panelu na czas
  * kadrowania (cropper ma podgląd 220 px + padding). */
-const PROFILE_POPOVER_SIZE = 240;
+const PROFILE_POPOVER_SIZE = 216;
 const PROFILE_POPOVER_CROP_WIDTH = 288;
 
 /**
@@ -248,16 +248,18 @@ function ProfileFooterButton() {
         <div
           role="dialog"
           aria-label={polish ? "Zdjęcie profilowe" : "Profile photo"}
-          // Kwadrat z zaokrąglonymi rogami: bok 240 px (w-60 + aspect-square)
-          // dobrany tak, by oba stany awatara (bez zdjęcia i ze zdjęciem +
-          // „Usuń zdjęcie") mieściły się bez ucinania; treść wyśrodkowana.
+          // Kwadrat z zaokrąglonymi rogami: bok 216 px — mieści się w
+          // domyślnym sidebarze 240 px minus paddingi stopki (2×12 px), więc
+          // panel nie wystaje poza sidebar. Oba stany awatara (bez zdjęcia
+          // i ze zdjęciem + „Usuń zdjęcie") mieszczą się bez ucinania:
+          // podgląd 80 px + gap-2. Treść wyśrodkowana.
           // Cropper potrzebuje 220 px podglądu, więc na czas kadrowania
           // panel wraca do szerokości w-72 bez wymuszania kwadratu.
           // FIXED zamiast absolute: `<aside>` sidebara ma overflow-hidden i
           // ucinał panelowi prawą krawędź (patrz profilePopoverPosition).
           className={cn(
             "fixed z-50 rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl",
-            pendingFile ? "w-72" : "w-60 aspect-square",
+            pendingFile ? "w-72" : "w-[216px] aspect-square",
           )}
           style={(() => {
             const rect = anchor ?? { top: window.innerHeight, left: 8 };
@@ -267,14 +269,14 @@ function ProfileFooterButton() {
           })()}
         >
           {!pendingFile ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3">
+            <div className="flex h-full flex-col items-center justify-center gap-2">
               <div className="w-full text-center text-[12px] font-medium text-ink-secondary">
                 {polish ? "Zdjęcie profilowe" : "Profile photo"}
               </div>
               {avatar ? (
-                <img src={avatar} alt="avatar" className="size-[96px] rounded-full border border-hairline/30 object-cover" />
+                <img src={avatar} alt="avatar" className="size-[80px] rounded-full border border-hairline/30 object-cover" />
               ) : (
-                <div className="flex size-[96px] items-center justify-center rounded-full border border-dashed border-hairline bg-inset">
+                <div className="flex size-[80px] items-center justify-center rounded-full border border-dashed border-hairline bg-inset">
                   <ImagePlus size={24} className="text-ink-secondary" />
                 </div>
               )}

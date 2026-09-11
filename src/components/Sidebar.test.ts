@@ -82,12 +82,17 @@ describe("sidebar footer alignment", () => {
     // krawędź panelu — pozycję liczy profilePopoverPosition z clampem
     expect(profileButton).toContain('"fixed z-50 rounded-2xl');
     expect(profileButton).toContain("profilePopoverPosition(rect, width, window.innerWidth, window.innerHeight)");
-    // kwadrat 240 px z zaokrąglonymi rogami w widoku awatara; przy kadrowaniu
-    // wraca do w-72, bo podgląd croppera ma 220 px szerokości
-    expect(profileButton).toContain('pendingFile ? "w-72" : "w-60 aspect-square"');
+    // kwadrat 216 px (mieści się w domyślnym sidebarze 240 px minus paddingi
+    // stopki 2×12 px) w widoku awatara; przy kadrowaniu wraca do w-72, bo
+    // podgląd croppera ma 220 px szerokości
+    expect(profileButton).toContain('pendingFile ? "w-72" : "w-[216px] aspect-square"');
+    expect(sidebarSource).toContain("const PROFILE_POPOVER_SIZE = 216");
+    // podgląd zdjęcia 80 px + gap-2 — oba stany (bez zdjęcia i ze zdjęciem
+    // + „Usuń zdjęcie") mieszczą się w 216 px bez ucinania
+    expect(profileButton).toContain('size-[80px] rounded-full border border-hairline/30 object-cover');
     expect(profileButton).toContain("rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl");
     // treść wyśrodkowana w pionie i poziomie wewnątrz kwadratu
-    expect(profileButton).toContain('"flex h-full flex-col items-center justify-center gap-3"');
+    expect(profileButton).toContain('"flex h-full flex-col items-center justify-center gap-2"');
     expect(profileButton).toContain("w-full text-center text-[12px]");
   });
 });
@@ -95,13 +100,13 @@ describe("sidebar footer alignment", () => {
 describe("profile popover position", () => {
   it("anchors above the profile button at its left edge", () => {
     // przycisk na dole okna 1280×900, top=860 → panel 8 px nad przyciskiem
-    expect(profilePopoverPosition({ top: 860, left: 12 }, 240, 1280, 900)).toEqual({ left: 12, bottom: 48 });
+    expect(profilePopoverPosition({ top: 860, left: 12 }, 216, 1280, 900)).toEqual({ left: 12, bottom: 48 });
   });
 
   it("clamps to the right viewport edge so the square is never cut", () => {
-    // wąskie okno: 240-pikselowy panel nie mieści się od left=12 — cofa się
-    expect(profilePopoverPosition({ top: 860, left: 12 }, 240, 200, 900).left).toBe(8);
-    expect(profilePopoverPosition({ top: 860, left: 100 }, 240, 300, 900).left).toBe(300 - 240 - 8);
+    // wąskie okno: 216-pikselowy panel nie mieści się od left=12 — cofa się
+    expect(profilePopoverPosition({ top: 860, left: 12 }, 216, 200, 900).left).toBe(8);
+    expect(profilePopoverPosition({ top: 860, left: 100 }, 216, 300, 900).left).toBe(300 - 216 - 8);
   });
 
   it("keeps the wider cropping panel fully visible too", () => {
