@@ -1,4 +1,4 @@
-import { ChevronLeft, ImagePlus, Pencil, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImagePlus, Pencil, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
@@ -14,6 +14,7 @@ import { botDisplayName, botDisplayTitle } from "@/lib/botNames";
 import { AvatarCropper } from "./AvatarCropper";
 import { Spinner } from "./Loading";
 import { SidePanel } from "./ResizablePanel";
+import { UsagePanel } from "./UsagePanel";
 
 function Field({
   label,
@@ -109,6 +110,10 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   // Kliknięcie awatara otwiera panel wyglądu; wybór konkretnego trybu odbywa
   // się w zakładkach Bot / Prześlij.
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>("closed");
+  // multibot: „Zużycie" zajmuje ten sam slot co ustawienia (własny SidePanel
+  // z własną zapamiętaną szerokością), a „Wstecz" wraca tutaj. Bez nowej flagi
+  // w sklepie — panel jest dostępny wyłącznie stąd.
+  const [usageOpen, setUsageOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -167,6 +172,8 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       setAvatarBusy(false);
     }
   };
+
+  if (usageOpen) return <UsagePanel bot={bot} onBack={() => setUsageOpen(false)} />;
 
   return (
     <SidePanel
@@ -394,6 +401,20 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </div>
             <ModelPicker bot={bot} />
           </div>
+
+          <button
+            type="button"
+            onClick={() => setUsageOpen(true)}
+            className="flex w-full items-center justify-between gap-4 rounded-xl bg-card p-3 text-left hover:bg-raised"
+          >
+            <div>
+              <div className="text-[14px] font-medium text-ink">{polish ? "Zużycie" : "Usage"}</div>
+              <div className="mt-0.5 text-[12px] text-ink-secondary">
+                {polish ? "Tokeny i tury zużyte przez tego bota" : "Tokens and turns this bot has used"}
+              </div>
+            </div>
+            <ChevronRight size={16} className="shrink-0 text-ink-secondary" />
+          </button>
 
           <EngineAutonomy key={`autonomy-${bot.id}`} bot={bot} />
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-3">
