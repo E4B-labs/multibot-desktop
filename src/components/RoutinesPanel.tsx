@@ -43,7 +43,11 @@ interface Routine {
   prompt: string;
   enabled: boolean;
   trigger: { type: string; url: string; events: string[] } | null;
-  last_runs: Array<{ at: string; status?: string | null; error?: string | null }>;
+  /** `status`: queued | ok | error | unknown. `reason` to KOD porażki znanej
+   * harnessowi (server/routines.ts) — tłumaczymy go tutaj, żeby historia nie
+   * zamarzła w języku, jaki serwer miał w chwili awarii; `error` to surowy
+   * komunikat dostawcy. */
+  last_runs: Array<{ at: string; status?: string | null; error?: string | null; reason?: string | null }>;
   next_run_at: number | null;
 }
 
@@ -119,18 +123,45 @@ function nextRunLine(r: Routine, polish: boolean): string | null {
 }
 
 // Wynik przebiegu słowem, nie surowym kodem statusu. `queued` to stan
-// przejściowy — tura już leci, wyniku jeszcze nie ma (server/routines.ts).
+// przejściowy (tura leci), `unknown` — harness zgasł w trakcie i nikt już tego
+// nie rozstrzygnie, więc myślnik zamiast wiecznego „w toku" (server/routines.ts).
 export function runLabel(status: string | null | undefined, polish: boolean): string {
   if (status === "ok") return polish ? "Sukces" : "Success";
   if (status === "error") return polish ? "Błąd" : "Failed";
-  return polish ? "W toku" : "Running";
+  if (status === "queued") return polish ? "W toku" : "Running";
+  return "—";
 }
 
 const RUN_DOT: Record<string, string> = { ok: "bg-success", error: "bg-danger" };
 
+const RUN_REASON: Record<string, [string, string]> = {
+  interrupted: ["Przerwane przez użytkownika", "Interrupted by the user"],
+  watchdog: ["Dostawca przestał odpowiadać", "The provider stopped responding"],
+  "login-expired": ["Logowanie do CLI wygasło", "The CLI login expired"],
+  "harness-stopped": ["Harness został zatrzymany", "The harness was stopped"],
+};
+
+/** Czym skończył się przebieg: nasz kod powodu po ludzku albo — gdy to padło
+ * po stronie dostawcy — jego własny komunikat. */
+export function runFailure(run: Routine["last_runs"][number], polish: boolean): string | null {
+  const known = run.reason ? RUN_REASON[run.reason] : undefined;
+  if (known) return polish ? known[0] : known[1];
+  return run.reason || run.error || null;
+}
+
 export function runTitle(run: Routine["last_runs"][number], polish: boolean): string {
   const head = `${new Date(run.at).toLocaleString()} — ${runLabel(run.status, polish)}`;
-  return run.error ? `${head}: ${run.error}` : head;
+  const why = runFailure(run, polish);
+  return why ? `${head}: ${why}` : head;
+}
+
+/** Pasek kropek niesie znaczenie samym KOLOREM, więc czytnik ekranu dostaje
+ * jedno zdanie z podsumowaniem zamiast dziesięciu bezimiennych punktów. */
+export function runsSummary(runs: Routine["last_runs"], polish: boolean): string {
+  const count = (status: string) => runs.filter((run) => run.status === status).length;
+  return polish
+    ? `Historia przebiegów: ${count("ok")} udanych, ${count("error")} nieudanych z ${runs.length}`
+    : `Run history: ${count("ok")} successful, ${count("error")} failed out of ${runs.length}`;
 }
 
 function RoutineForm({
@@ -498,7 +529,11 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
                         {lastRunLine(r)}
                       </div>
                       {r.last_runs.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-[3px]">
+                        <div
+                          className="mt-1 flex flex-wrap gap-[3px]"
+                          role="img"
+                          aria-label={runsSummary(r.last_runs.slice(0, 10), polish)}
+                        >
                           {r.last_runs.slice(0, 10).map((run, i) => (
                             <span
                               key={`${run.at}-${i}`}
@@ -508,9 +543,12 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
                           ))}
                         </div>
                       )}
-                      {r.last_runs[0]?.error && (
-                        <div className="mt-0.5 truncate text-[12px] text-danger" title={r.last_runs[0].error}>
-                          {r.last_runs[0].error}
+                      {r.last_runs[0] && runFailure(r.last_runs[0], polish) && (
+                        <div
+                          className="mt-0.5 truncate text-[12px] text-danger"
+                          title={runFailure(r.last_runs[0], polish)!}
+                        >
+                          {runFailure(r.last_runs[0], polish)}
                         </div>
                       )}
                       </div>

@@ -376,7 +376,7 @@ function armBusyWatchdog(botId: string): void {
       turnUserText.delete(b.threadId);
       // multibot: turę ubił watchdog, nie model — spóźnione `turn.completed`
       // nie ma zostawiać znacznika „bot nic nie napisał" ani pushować końca.
-      harnessRoutines.settleRun(botId, t("dostawca przestał odpowiadać", "the provider stopped responding"));
+      harnessRoutines.settleRun(botId, { reason: "watchdog" });
       turnOrigin.delete(botId);
       releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
       broadcast({ kind: "bot", bot: store.bot(botId) });
@@ -1988,7 +1988,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // bez człowieka ta tura i każda następna padnie tak samo. Powtórka
         // tej samej prośby już nie brzęczy.
         if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
-        harnessRoutines.settleRun(bot.id, note); // ta gałąź omija `endTurnPush`
+        harnessRoutines.settleRun(bot.id, { reason: "login-expired" }); // ta gałąź omija `endTurnPush`
         turnOrigin.delete(bot.id);
         broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
         // multibot: karta w transkrypcie z przyciskiem „Odśwież logowanie" —
@@ -5039,7 +5039,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       turnUserText.delete(bot.threadId);
       // multibot: przerwanie to decyzja człowieka — brak tekstu w takiej turze
       // nie jest ciszą modelu i nie dostaje znacznika ani powiadomienia.
-      harnessRoutines.settleRun(bot.id, t("przerwane przez użytkownika", "interrupted by the user"));
+      harnessRoutines.settleRun(bot.id, { reason: "interrupted" });
       turnOrigin.delete(bot.id);
       stopScreenPoller(bot.id);
       releaseTurnSlot(bot.id);

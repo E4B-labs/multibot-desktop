@@ -1,13 +1,12 @@
-// multibot: historia rutyny ma pokazywać WYNIK, nie samo „w kolejce". Test
-// pilnuje trzech rzeczy: słowa zamiast surowego statusu (dwujęzycznie),
-// podpowiedzi kropki z tekstem błędu i tego, że karta rutyny naprawdę rysuje
-// pasek przebiegów oraz ostatni błąd.
-import { readFileSync } from "node:fs";
+// multibot: historia rutyny ma pokazywać WYNIK, nie samo „w kolejce". Panel
+// jest ostatnim ogniwem: nazywa wynik po ludzku, tłumaczy KOD porażki, który
+// przyszedł z serwera, i nie udaje, że przebieg trwa, gdy nikt go już nie
+// rozstrzygnie.
 import { describe, expect, it } from "vitest";
 
-import { runLabel, runTitle } from "./RoutinesPanel";
+import { runFailure, runLabel, runTitle, runsSummary } from "./RoutinesPanel";
 
-const panel = readFileSync(new URL("./RoutinesPanel.tsx", import.meta.url), "utf8");
+const at = new Date(2026, 8, 11, 9, 5).toISOString();
 
 describe("wynik przebiegu rutyny", () => {
   it("nazywa sukces, porażkę i przebieg w toku, w języku czytelnika", () => {
@@ -17,24 +16,45 @@ describe("wynik przebiegu rutyny", () => {
     expect(runLabel("error", true)).toBe("Błąd");
     // `queued` to stan przejściowy — tura leci, wyniku jeszcze nie ma
     expect(runLabel("queued", true)).toBe("W toku");
-    expect(runLabel(undefined, false)).toBe("Running");
   });
 
-  it("podpowiedź kropki niesie czas, wynik i — przy porażce — tekst błędu", () => {
-    const at = new Date(2026, 8, 11, 9, 5).toISOString();
-    expect(runTitle({ at, status: "ok" }, true)).toContain("Sukces");
-    expect(runTitle({ at, status: "ok" }, true)).not.toContain(":undefined");
-    const failed = runTitle({ at, status: "error", error: "the provider stopped responding" }, false);
+  it("nie melduje „w toku” o przebiegu, którego nikt już nie rozstrzygnie", () => {
+    // `unknown` = harness zgasł w trakcie; tak samo wygląda historia sprzed `ok`
+    expect(runLabel("unknown", true)).toBe("—");
+    expect(runLabel("unknown", false)).toBe("—");
+    expect(runLabel(undefined, false)).toBe("—");
+    expect(runLabel(null, true)).toBe("—");
+  });
+
+  it("tłumaczy kod porażki od harnessu i zostawia komunikat dostawcy bez zmian", () => {
+    expect(runFailure({ at, status: "error", reason: "interrupted" }, true)).toBe("Przerwane przez użytkownika");
+    expect(runFailure({ at, status: "error", reason: "interrupted" }, false)).toBe("Interrupted by the user");
+    expect(runFailure({ at, status: "error", reason: "watchdog" }, false)).toBe("The provider stopped responding");
+    expect(runFailure({ at, status: "unknown", reason: "harness-stopped" }, true)).toBe("Harness został zatrzymany");
+    // surowy tekst dostawcy idzie jak stoi — nie ma go jak przetłumaczyć
+    expect(runFailure({ at, status: "error", error: "bot is already working" }, true)).toBe("bot is already working");
+    // nieznany kod z nowszego serwera: lepiej pokazać kod niż nic
+    expect(runFailure({ at, status: "error", reason: "future-code" }, true)).toBe("future-code");
+    expect(runFailure({ at, status: "ok" }, true)).toBeNull();
+  });
+
+  it("podpowiedź kropki niesie czas, wynik i — przy porażce — powód", () => {
+    // udany przebieg kończy się samym wynikiem — bez doklejonego powodu
+    expect(runTitle({ at, status: "ok" }, true)).toMatch(/— Sukces$/);
+    const failed = runTitle({ at, status: "error", reason: "watchdog" }, false);
     expect(failed).toContain("Failed");
-    expect(failed).toContain("the provider stopped responding");
+    expect(failed).toContain("The provider stopped responding");
   });
 
-  it("karta rysuje pasek ostatnich przebiegów i ostatni błąd", () => {
-    expect(panel).toContain("r.last_runs.slice(0, 10).map");
-    expect(panel).toContain('RUN_DOT: Record<string, string> = { ok: "bg-success", error: "bg-danger" }');
-    expect(panel).toContain("r.last_runs[0]?.error &&");
-    // wynik na początku linii — ogon i tak się nie mieści przy 360 px
-    expect(panel).toContain("`${runLabel(run.status, polish)} · ${new Date(run.at).toLocaleString()}`");
-    expect(panel).toContain("text-[12px] text-danger");
+  it("pasek kropek mówi kolorem, więc czytnik ekranu dostaje zdanie", () => {
+    const runs = [
+      { at, status: "ok" },
+      { at, status: "error", reason: "interrupted" },
+      { at, status: "ok" },
+      { at, status: "unknown" },
+    ];
+    expect(runsSummary(runs, true)).toBe("Historia przebiegów: 2 udanych, 1 nieudanych z 4");
+    expect(runsSummary(runs, false)).toBe("Run history: 2 successful, 1 failed out of 4");
+    expect(runsSummary([], false)).toBe("Run history: 0 successful, 0 failed out of 0");
   });
 });
