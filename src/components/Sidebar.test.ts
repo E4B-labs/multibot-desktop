@@ -58,7 +58,27 @@ describe("sidebar avatar", () => {
     expect(card).toContain("data-mb-bot-activity");
     const row = sidebarSource.slice(sidebarSource.indexOf("function BotListItem"), sidebarSource.indexOf("function GroupContextMenu"));
     expect(row).toContain("onTouchStart={(e) => onHover?.(bot.id");
+    // scroll palcem i menu kontekstowe (Android long-press) kasują kafelek
+    expect(row).toContain("onTouchMove={() => onUnhover?.()}");
     expect(row).toContain("onTouchEnd={() => onUnhover?.()}");
+    expect(row.slice(row.indexOf("onContextMenu"), row.indexOf("onTouchStart"))).toContain("onUnhover?.();");
+    // szyna (przypięta siatka) — te same gesty
+    const grid = sidebarSource.slice(sidebarSource.indexOf("rowBots.map((b) =>"), sidebarSource.indexOf("</button>", sidebarSource.indexOf("rowBots.map((b) =>")));
+    expect(grid).toContain("onTouchStart={(e) => showHoverCard(b.id");
+    expect(grid).toContain("onTouchMove={() => hideHoverCard()}");
+    expect(grid.slice(grid.indexOf("onContextMenu"), grid.indexOf("onMouseEnter"))).toContain("hideHoverCard();");
+  });
+
+  it("jeden zegar rostera, gated na turę lub świętowanie, podany w dół", () => {
+    const sidebar = sidebarSource.slice(sidebarSource.indexOf("export function Sidebar()"));
+    expect(sidebar).toContain("useMascotClock(mascotClockActive(state.bots, state.runtime, Date.now()))");
+    // każdy wiersz i każda grupa dostają ten sam `now`; żaden nie ma własnego interwału
+    expect(sidebar.match(/now=\{clock\}/g)?.length).toBe(4);
+    expect(sidebarSource.match(/useMascotClock\(/g)?.length).toBe(2); // definicja + jedno użycie
+    // nieaktywny zegar oddaje świeży czas — nie zamarza na ostatnim ticku
+    expect(sidebarSource).toContain("return active ? clock : Date.now();");
+    // `focused` idzie do tabeli stanów (notifying tylko przy oknie w tle)
+    expect(sidebarSource).toContain("focused: typeof document === \"undefined\" || document.hasFocus()");
   });
 });
 

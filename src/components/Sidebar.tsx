@@ -31,7 +31,7 @@ import { Skeleton, Spinner } from "./Loading";
 import { AvatarCropper } from "./AvatarCropper";
 import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { activityPhrase, CELEBRATE_MS, type LiveTurn, type RuntimePhase, sidebarAvatarProps } from "@/lib/mascot";
+import { activityPhrase, type LiveTurn, mascotClockActive, type RuntimePhase, sidebarAvatarProps } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
@@ -74,9 +74,12 @@ export function groupMemberAvatarProps(bot: Bot, live: LiveTurn = {}) {
 }
 
 /**
+ * JEDEN zegar dla całego rostera (wiersze, grupy, szyna, kafelek hovera).
  * Wiersze tabeli stanów zależne od czasu (loading po 10 s, celebrate gaśnie po
- * 1 s) nie mają własnego eventu — przy żywej turze tykamy co pół sekundy, tak
- * jak pasek nad composerem. Bez tury zegar stoi i nic się nie przelicza.
+ * 1 s) nie mają własnego eventu — tykamy co pół sekundy, ale tylko dopóki
+ * `mascotClockActive` (żywa tura albo okno świętowania). Nieaktywny zegar
+ * oddaje świeże `Date.now()`, więc nigdy nie zamarza na wartości sprzed
+ * ostatniego ticka — to właśnie trzymało `celebrate` w nieskończoność.
  */
 function useMascotClock(active: boolean): number {
   const [clock, setClock] = useState(() => Date.now());
@@ -86,12 +89,17 @@ function useMascotClock(active: boolean): number {
     const timer = setInterval(() => setClock(Date.now()), 500);
     return () => clearInterval(timer);
   }, [active]);
-  return clock;
+  return active ? clock : Date.now();
 }
 
 /** Fazę tury i strumień tekstu trzyma store per wątek, nie per bot. */
-function liveTurn(state: { runtime: Record<string, RuntimePhase>; streaming: Record<string, string> }, bot: Bot, now?: number): LiveTurn {
-  return { runtime: state.runtime[bot.threadId] ?? null, streaming: state.streaming[bot.threadId] !== undefined, now };
+function liveTurn(state: { runtime: Record<string, RuntimePhase>; streaming: Record<string, string> }, bot: Bot, now: number): LiveTurn {
+  return {
+    runtime: state.runtime[bot.threadId] ?? null,
+    streaming: state.streaming[bot.threadId] !== undefined,
+    focused: typeof document === "undefined" || document.hasFocus(),
+    now,
+  };
 }
 
 function readSidebarWidth(key: string, fallback: number): number {
@@ -831,21 +839,21 @@ function BotListItem({
   collapsed,
   onHover,
   onUnhover,
+  now,
 }: {
   bot: Bot;
   onMenu: (menu: MenuState) => void;
   collapsed?: boolean;
   onHover?: (botId: string, rect: DOMRect) => void;
   onUnhover?: () => void;
+  /** wspólny zegar rostera (`useMascotClock` w Sidebar) */
+  now: number;
 }) {
   const { state, dispatch } = useStore();
   // U20: zaznaczenie ma być jedno — po otwarciu grupy bot przestaje być
   // podświetlony (inaczej świecą dwa: grupa i ostatni bot).
   const selected = state.selectedId === bot.id && !state.groupOpen;
-  // Zegar tyka tylko przy żywej turze albo w sekundzie świętowania po niej.
-  const runtime = state.runtime[bot.threadId];
-  const clock = useMascotClock(!!bot.busy || (runtime?.kind === "done" && Date.now() - runtime.at < CELEBRATE_MS));
-  const avatar = sidebarAvatarProps(bot, liveTurn(state, bot, clock));
+  const avatar = sidebarAvatarProps(bot, liveTurn(state, bot, now));
   const lang = useLanguage();
   const last = bot.messages[bot.messages.length - 1];
   return (
@@ -853,11 +861,16 @@ function BotListItem({
       onClick={() => dispatch({ type: "select", id: bot.id })}
       onContextMenu={(e) => {
         e.preventDefault();
+        // Android: długie przytrzymanie strzela `contextmenu` — kafelek hovera
+        // nie może stać pod menu kontekstowym.
+        onUnhover?.();
         onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
       }}
       // Dotyk: przytrzymanie wiersza pokazuje ten sam kafelek co hover (350 ms
-      // opóźnienia siedzi w `showHoverCard`, więc zwykłe tapnięcie go nie budzi).
+      // opóźnienia siedzi w `showHoverCard`, więc zwykłe tapnięcie go nie budzi);
+      // przesunięcie palca (scroll) kasuje go, zanim wyskoczy.
       onTouchStart={(e) => onHover?.(bot.id, e.currentTarget.getBoundingClientRect())}
+      onTouchMove={() => onUnhover?.()}
       onTouchEnd={() => onUnhover?.()}
       onTouchCancel={() => onUnhover?.()}
       // multibot 0.1.46: bota można przeciągnąć na wiersz grupy (filtracja składu)
@@ -1118,12 +1131,15 @@ function GroupRow({
   collapsed,
   onMenu,
   onUpdated,
+  now,
 }: {
   group: EngineGroup;
   bots: Bot[];
   collapsed?: boolean;
   onMenu: (menu: GroupMenuState) => void;
   onUpdated: (group: EngineGroup) => void;
+  /** wspólny zegar rostera (`useMascotClock` w Sidebar) */
+  now: number;
 }) {
   const { state, dispatch } = useStore();
   const lang = useLanguage();
@@ -1209,7 +1225,7 @@ function GroupRow({
                 avatarUrl={member.avatarUrl}
                 shape={member.mascotShape}
                 size={layout === "solo" ? 48 : 24}
-                {...groupMemberAvatarProps(member, liveTurn(state, member))}
+                {...groupMemberAvatarProps(member, liveTurn(state, member, now))}
                 trackPointerWhenPaused
               />
             </span>
@@ -1420,8 +1436,8 @@ export function Sidebar() {
   // przejeżdżaniu myszką przez listę; wyjazd z wiersza kasuje go natychmiast.
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Jeden zegar dla szyny i kafelka hovera; wiersze listy mają własny.
-  const clock = useMascotClock(state.bots.some((b) => b.busy));
+  // Jeden zegar dla całego rostera; tyka tylko przy żywej turze lub świętowaniu.
+  const clock = useMascotClock(mascotClockActive(state.bots, state.runtime, Date.now()));
   const showHoverCard = (botId: string, rect: DOMRect) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     const { top, left } = hoverCardPosition(rect, window.innerWidth, window.innerHeight);
@@ -1717,10 +1733,15 @@ export function Sidebar() {
                     onClick={() => dispatch({ type: "select", id: b.id })}
                     onContextMenu={(e) => {
                       e.preventDefault();
+                      hideHoverCard();
                       setMenu({ botId: b.id, x: e.clientX, y: e.clientY });
                     }}
                     onMouseEnter={(e) => showHoverCard(b.id, e.currentTarget.getBoundingClientRect())}
                     onMouseLeave={() => hideHoverCard()}
+                    onTouchStart={(e) => showHoverCard(b.id, e.currentTarget.getBoundingClientRect())}
+                    onTouchMove={() => hideHoverCard()}
+                    onTouchEnd={() => hideHoverCard()}
+                    onTouchCancel={() => hideHoverCard()}
                     // multibot: cały podświetlany kafelek to scope śledzenia buźki.
                     data-mb-avatar-scope
                     className={cn(
@@ -1764,6 +1785,7 @@ export function Sidebar() {
               collapsed={collapsed}
               onHover={showHoverCard}
               onUnhover={hideHoverCard}
+              now={clock}
             />
           ))}
           {groups === null && state.hydrated && <Skeleton className="h-9 w-full" />}
@@ -1775,6 +1797,7 @@ export function Sidebar() {
               collapsed={collapsed}
               onMenu={setGroupMenu}
               onUpdated={(next) => setGroups((gs) => (gs ?? []).map((x) => (x.id === next.id ? next : x)))}
+              now={clock}
             />
           ))}
           {!collapsed &&
@@ -1800,6 +1823,7 @@ export function Sidebar() {
                         collapsed={collapsed}
                         onHover={showHoverCard}
                         onUnhover={hideHoverCard}
+                        now={clock}
                       />
                     ))}
                     {section.groups.map((g) => (
@@ -1810,6 +1834,7 @@ export function Sidebar() {
                         collapsed={collapsed}
                         onMenu={setGroupMenu}
                         onUpdated={(next) => setGroups((gs) => (gs ?? []).map((x) => (x.id === next.id ? next : x)))}
+                        now={clock}
                       />
                     ))}
                   </>

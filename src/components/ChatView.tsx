@@ -18,7 +18,7 @@ import { formatPeerEnvelope, parsePeerEnvelope } from "@/lib/peerEnvelope";
 import { PeerBadge } from "./PeerBadge";
 import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSessions";
 import { BotAvatar } from "./Avatar";
-import { BOT_COLORS, sidebarAvatarProps } from "@/lib/mascot";
+import { BOT_COLORS, staticAvatarProps } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CopyMessageButton } from "./CopyMessageButton";
 import { OptionCard } from "./OptionCard";
@@ -362,7 +362,7 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
         } as CSSProperties}
         className="inline-flex items-center gap-1 rounded-full min-w-0 px-1.5 py-0.5 text-[var(--bot-ink)] [box-shadow:0_0_0_1px_var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))] hover:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:outline focus-visible:outline-1 focus-visible:outline-focus focus-visible:outline-offset-1 transition-[background-color] duration-150"
       >
-        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...sidebarAvatarProps(bot)} />
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...staticAvatarProps(bot)} />
         <span className="truncate">{name}</span>
       </span>
     );
@@ -458,7 +458,7 @@ function RoomChip({ message }: { message: Message }) {
         {opening && <Spinner size={13} />}
         <span className="flex items-center gap-1 font-medium text-ink">
           {owner && (
-            <BotAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" size={18} {...sidebarAvatarProps(owner)} />
+            <BotAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" size={18} {...staticAvatarProps(owner)} />
           )}
           {owner ? botDisplayName(owner, polish ? "pl" : "en") : room.ownerBotId}
         </span>
@@ -467,7 +467,7 @@ function RoomChip({ message }: { message: Message }) {
         </span>
         {peers.map((peer) => (
           <span key={peer.id} className="flex items-center gap-1 font-medium text-ink">
-            <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" size={18} {...sidebarAvatarProps(peer)} />
+            <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" size={18} {...staticAvatarProps(peer)} />
             {botDisplayName(peer, polish ? "pl" : "en")}
           </span>
         ))}
@@ -548,10 +548,10 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
-  // multibot: awatar w naglowku czatu trzyma sie tej samej zasady co pasek
-  // boczny i wiersz grupy — stoi nieruchomo ZAWSZE, takze gdy bot pracuje.
-  // Jedyny animowany bot w aplikacji siedzi na pasku nad composerem.
-  const headerAvatar = sidebarAvatarProps(bot);
+  // multibot: awatar w naglowku czatu stoi nieruchomo ZAWSZE, takze gdy bot
+  // pracuje — jedynym animowanym sygnalem tury w widoku czatu jest pasek nad
+  // composerem (roster ma wlasna regule: `sidebarAvatarProps`).
+  const headerAvatar = staticAvatarProps(bot);
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on

@@ -18,7 +18,7 @@ import { MOTION, bodyTransform, type BlobState } from "./BlobAvatar";
 const dir = fileURLToPath(new URL(".", import.meta.url));
 
 /** Wylaczona animacja: wprost, przez propsy helpera albo przez jego spread. */
-const STILL = /animated=\{(false|[\w.]+\.animated)\}|\{\.\.\.(sidebarAvatarProps|groupMemberAvatarProps)\(/;
+const STILL = /animated=\{(false|[\w.]+\.animated)\}|\{\.\.\.(sidebarAvatarProps|groupMemberAvatarProps|staticAvatarProps)\(/;
 
 /** Kazdy tag <BotAvatar ...> z pliku, razem z jego propsami. */
 function avatarTags(source: string): string[] {
