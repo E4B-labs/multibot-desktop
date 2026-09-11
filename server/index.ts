@@ -76,7 +76,7 @@ import * as mcpConnectors from "./mcp-connectors.ts";
 import { probeMcp } from "./mcp-probe.ts";
 import * as googleWorkspace from "./google-workspace.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { HarnessRoutines, oneShotAt, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
+import { HarnessRoutines, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
 import { Reminders, SNOOZE_DEFAULT_MIN } from "./reminders.ts";
 import { GroupStore, groupMemberId, threadIdOfGroupMember } from "./group-store.ts";
 import { budgetLeft, isAcknowledgement, isDuplicateOfLast, RoomStore, ROOM_DONE_MARKER, type RoomRecord } from "./rooms.ts";
@@ -1470,8 +1470,13 @@ function eventVisible(payload: unknown, actor: IdentityActor | null): boolean {
     return bot ? canReadBot(bot, actor) : true;
   }
   // multibot: banerka niesie tytuł i treść od bota — prywatny bot nie może jej
-  // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`).
-  if (event.kind === "notify") return canReadBot(botFor(event.botId), actor);
+  // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`), a
+  // `only` zawęża dalej: przypomnienie członka zespołu na współdzielonym bocie
+  // budzi TYLKO jego pulpit, nie cały zespół.
+  if (event.kind === "notify") {
+    if (Array.isArray(event.only) && !(actor && event.only.includes(actor.userId))) return false;
+    return canReadBot(botFor(event.botId), actor);
+  }
   // Ten sam zasięg: prośba o odświeżenie logowania dotyczy KONKRETNEGO bota.
   if (event.kind === "auth-expired") return canReadBot(botFor(event.botId), actor);
   if (event.kind === "screen" || event.kind === "workspace" || event.kind === "computer") {
@@ -1593,7 +1598,8 @@ function notifyUser(
   // jedną linię pod nazwą bota — `pushBody` pozwala napisać ją inaczej, zamiast
   // powtarzać nagłówek w treści.
   pushForBot(botId, kind, options.pushBody ?? (body || title), options.only);
-  broadcast({ kind: "notify", botId, title, body });
+  // `only` jedzie w ramce, żeby `eventVisible` doręczył banerkę tylko adresatowi
+  broadcast({ kind: "notify", botId, title, body, ...(options.only ? { only: options.only } : {}) });
 }
 
 /** Konektory, o których podłączenie bot może poprosić kartą (`request_connection`).
@@ -3002,11 +3008,10 @@ const setupJobs = new SetupJobs(join(DATA_DIR, "setup-jobs.json"), (job) =>
 // jako osobny, oznaczony blok — `routineTurnText` jest JEDNYM wspólnym
 // miejscem składania dla wszystkich ścieżek (webhook, tick, Run now).
 const harnessRoutines = new HarnessRoutines(join(DATA_DIR, "routines.json"), async (routine, payload) => {
-  // Rutyna z konkretną datą to przypomnienie: człowiek ma dostać banerkę i push
-  // w zaplanowanej chwili, a nie dopiero wtedy, gdy bot skończy myśleć.
-  // tytułem banerki jest sama treść przypomnienia — powtórzona w body dałaby
-  // „kawa / kawa"; push i tak bierze nazwę bota jako tytuł
-  if (oneShotAt(routine.schedule) !== null) notifyUser(routine.botId, routine.name, "", "reminder");
+  // Rutyna (także jednorazowa, z datą ISO) jest CICHA: to zaplanowana praca
+  // bota, nie prośba do człowieka. Gdy bot naprawdę czegoś chce, woła w swojej
+  // turze `notify_user`; przypomnienia dla człowieka to osobne rekordy
+  // (`Reminders` niżej) i tylko one brzęczą automatycznie.
   await startTurn(routine.botId, routineTurnText(routine.name, routine.prompt, payload), { origin: "routine", routineName: routine.name });
 });
 
@@ -3717,7 +3722,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         const privateBot = caller.visibility === "private";
         const teamActions = new Set(["team.memory.list", "team.memory.graph", "team.memory.markdown.get", "team.memory.add"]);
         if (privateBot && teamActions.has(action)) return json(res, 404, { error: "team scope unavailable to private bot" });
-        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "reminders.list", "groups.list", "device.info", "file.read"]);
+        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "reminders.list", "groups.list", "device.info", "file.read",
+          // `notify_user` nie jest władzą nad niczym — to celowa prośba o uwagę
+          // człowieka, więc działa też u bota tylko-do-odczytu (limituje ją
+          // `allowNotify`, nie profil dostępu).
+          "user.notify"]);
         if (access === "read-only" && !readOnlyActions.has(action)) return json(res, 403, { error: "read-only access" });
         const requireFull = () => {
           if (access !== "full") throw Object.assign(new Error("Full Access required for this action"), { status: 403 });
@@ -4380,6 +4389,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       if (patch.fastMode !== undefined && typeof patch.fastMode !== "boolean") {
         return json(res, 400, { error: "fastMode must be boolean" });
+      }
+      // multibot: widoczność też przez ogólny PATCH — te same reguły co
+      // /sharing (walidacja wartości, prawo zarządzania, właściciel zostaje
+      // dopisany, żeby prywatny bot miał KOGO powiadamiać pushem).
+      if (body.visibility !== undefined) {
+        if (body.visibility !== "team" && body.visibility !== "private") {
+          return json(res, 422, { error: "visibility must be team or private" });
+        }
+        const target = store.bot(m[1]);
+        if (target && !canManageBot(target, actor)) return json(res, 403, { error: "bot owner access required" });
+        patch.visibility = body.visibility;
+        patch.ownerId = target?.ownerId ?? actor?.userId;
       }
       // multibot: kolor spoza allowlisty szedl dotad prosto do bazy i wracal do
       // klienta, ktory rysowal bota domyslna zielenia — bot z zapisanym

@@ -144,6 +144,7 @@ export class Reminders {
     if (ms > this.now() + MAX_AHEAD_MS) throw new Error("reminder time is too far ahead");
     const pending = this.items.filter((item) => item.botId === botId && item.status === "pending").length;
     if (pending >= PENDING_PER_BOT_MAX) throw new Error(`too many pending reminders (max ${PENDING_PER_BOT_MAX})`);
+    this.armSoon(ms);
     const item: Reminder = {
       id: newId(),
       botId,
@@ -187,7 +188,21 @@ export class Reminders {
     item.firedAt = null;
     item.status = "pending";
     this.persist();
+    this.armSoon(next);
     return { ...item };
+  }
+
+  /** Przypomnienie bliższe niż pełny takt odpala PUNKTUALNIE, nie „przy okazji
+   * następnego taktu" — „przypomnij mi za minutę" spóźnione o pół taktu wygląda
+   * jak zepsute. Dalsze terminy zostają przy zwykłym takcie (bez wiszących
+   * timerów na miesiące naprzód); `tick()` jest idempotentny, więc dubel z
+   * taktem niczego nie odpali drugi raz. */
+  private armSoon(atMs: number): void {
+    if (!this.timer) return;
+    const delay = atMs - this.now();
+    if (delay > this.tickMs * 2) return;
+    const shot = setTimeout(() => this.tick(), Math.max(0, delay) + 5);
+    shot.unref?.();
   }
 
   tick(): void {
