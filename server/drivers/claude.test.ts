@@ -7,7 +7,7 @@
 // script Windows cannot exec, and the broker is a unix socket. Both now
 // go through resolveCliSpawn / permissionSocketPath, so they run
 // everywhere.
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -67,6 +67,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_DUMP;
     delete process.env.FAKE_CLAUDE_DEAF_FLAG;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_CONFIG_DIR;
     delete process.env.MULTIBOT_FIRST_EVENT_MS;
     delete process.env.MULTIBOT_FIRST_EVENT_COLD_MS;
     delete process.env.MULTIBOT_WARM_WORKERS;
@@ -433,6 +434,32 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false });
     const error = recorder.events.find((e) => e.type === "runtime.error")!;
     expect(error.message).toContain("Reached max turns");
+  });
+
+  // multibot: wygasły OAuth znany z pliku — tura pada od razu, CLI nie startuje
+  it("an expired credentials file fails the turn before the CLI is spawned", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "mb-claude-expired-"));
+    writeFileSync(join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { expiresAt: 0 } }));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-expired", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "auth_expired" });
+    expect(recorder.events.map((e) => e.type)).toEqual(["turn.started", "runtime.error", "turn.completed"]);
+    expect(recorder.events[1]).toMatchObject({ message: expect.stringContaining("OAuth session expired") });
+    expect(existsSync(dump)).toBe(false); // fake CLI never ran
+    expect(instance.adapter.hasSession("t-expired")).toBe(false);
+  });
+
+  it("a warm-up request is not a turn: the expired-login gate stays silent", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "mb-claude-expired-warm-"));
+    writeFileSync(join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { expiresAt: 0 } }));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    await create("persistent");
+    await instance.adapter.sendTurn({ threadId: "t-warm-expired", text: "", warmOnly: true } as never);
+    expect(recorder.events).toEqual([]);
   });
 
   it("skips malformed protocol lines without losing the turn", async () => {

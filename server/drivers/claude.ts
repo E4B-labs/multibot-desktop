@@ -60,7 +60,31 @@ export function claudeCredentialPaths(
 // Klucz w środowisku to też zalogowanie — tak chodzi CLIProxyAPI i każdy
 // własny endpoint (`ANTHROPIC_BASE_URL`), gdzie żadnego `.credentials.json` nie ma.
 export const claudeIsAuthenticated = (env: Record<string, string | undefined> = process.env): boolean =>
-  Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) || claudeCredentialPaths(env).some(existsSync);
+  claudeAuthState(env).authenticated;
+
+/**
+ * multibot: sama obecność `.credentials.json` nie znaczy „zalogowany". Telefon
+ * Kacpra 11.09.2026: plik JEST, ale `claudeAiOauth.expiresAt` = 0 — CLI
+ * próbowało odświeżyć OAuth, padło i wyzerowało datę; sonda mówiła „zalogowany",
+ * a każda tura kończyła się „Failed to authenticate". Data w przeszłości (albo 0)
+ * = `expired`: refresh token MOŻE jeszcze zadziałać, ale bot ma o tym powiedzieć
+ * PRZED turą, nie po. Brak pola = stary format, plik liczy się jak dotąd.
+ */
+export function claudeAuthState(
+  env: Record<string, string | undefined> = process.env,
+): { authenticated: boolean; reason?: "expired" | "missing" } {
+  if (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) return { authenticated: true };
+  const file = claudeCredentialPaths(env).find(existsSync);
+  if (!file) return { authenticated: false, reason: "missing" };
+  let expiresAt: unknown;
+  try {
+    expiresAt = JSON.parse(readFileSync(file, "utf8"))?.claudeAiOauth?.expiresAt;
+  } catch {
+    return { authenticated: true }; // nieczytelny plik: nie zgadujemy, CLI powie
+  }
+  if (typeof expiresAt === "number" && expiresAt <= Date.now()) return { authenticated: false, reason: "expired" };
+  return { authenticated: true };
+}
 
 export interface ClaudeConfig {
   cli: string;
@@ -400,6 +424,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      // multibot: wygasły OAuth znany PRZED turą (plik z `expiresAt` 0 lub w
+      // przeszłości) — nie stawiamy CLI, żeby po 30 s zimnego startu usłyszeć
+      // to samo. Ta sama trójka zdarzeń, co przy padniętym procesie: index.ts
+      // parkuje bota na `needsAttention`, stawia banerkę i kartę logowania.
+      // Tylko `expired`: brak pliku zostawiamy CLI (klucz może przyjść inaczej).
+      // Rozgrzewka (`warmOnly`) nie jest turą — bez zdarzeń, jak dotąd; karta ma
+      // stanąć przy wiadomości człowieka, nie przy starcie serwera.
+      if (!(turn as SendTurnInput & { warmOnly?: boolean }).warmOnly && claudeAuthState().reason === "expired") {
+        const turnId = newId();
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Failed to authenticate: claude OAuth session expired. Sign in again to continue." });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "auth_expired", cost: null });
+        return { turnId };
+      }
       const policy = turnPolicy(threadId);
       const turnId = newId();
       const selectedModel = cliModel(turn.model);
