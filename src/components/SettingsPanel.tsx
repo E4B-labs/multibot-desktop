@@ -126,7 +126,13 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       const match = !needle || (card.textContent ?? "").toLocaleLowerCase().includes(needle);
       (card as HTMLElement).style.display = match ? "" : "none";
     }
-  }, [query, appearanceMode]);
+    // `usageOpen` w zależnościach, bo powrót z „Zużycia" montuje te karty od
+    // nowa (wczesne wyjście niżej) — bez tego wpisane szukanie przestawało
+    // filtrować, choć w polu dalej stał tekst.
+  }, [query, appearanceMode, usageOpen]);
+  // Przełączenie bota przy otwartym „Zużyciu" wraca do ustawień — inaczej
+  // otwierasz ustawienia innego bota i widzisz od razu jego licznik.
+  useEffect(() => setUsageOpen(false), [bot.id]);
   const patch = (
     p: Partial<
       Pick<Bot, "name" | "title" | "description" | "notifications" | "color" | "mascotExpression" | "mascotShape" | "avatarUrl">
@@ -173,7 +179,9 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
     }
   };
 
-  if (usageOpen) return <UsagePanel bot={bot} onBack={() => setUsageOpen(false)} />;
+  // `key` = świeży panel per bot: bez tego odpowiedź poprzedniego bota po
+  // szybkim przełączeniu wpisałaby się do panelu nowego.
+  if (usageOpen) return <UsagePanel key={bot.id} bot={bot} onBack={() => setUsageOpen(false)} />;
 
   return (
     <SidePanel

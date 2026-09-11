@@ -39,10 +39,12 @@ describe("skala prawego panelu i czatu", () => {
     expect(panel).not.toContain("Zdjęcie zostanie przycięte do koła jak na Facebooku/GrokBot");
   });
 
-  it("filtr szukajki wie o rozwijanej karcie wyglądu", () => {
+  it("filtr szukajki wie o rozwijanej karcie wyglądu i o powrocie z Zużycia", () => {
     // Bez `appearanceMode` w zależnościach karta rozwinięta przy aktywnym
-    // szukaniu ominęłaby filtr i została na ekranie.
-    expect(panel).toContain("[query, appearanceMode]");
+    // szukaniu ominęłaby filtr i została na ekranie. `usageOpen` z tego samego
+    // powodu: powrót z panelu „Zużycie" montuje karty od nowa, więc bez
+    // przeliczenia wszystkie wracają widoczne mimo tekstu w szukajce.
+    expect(panel).toContain("[query, appearanceMode, usageOpen]");
   });
 
   it("nic w panelu nie jest już większe niż 14 px", () => {

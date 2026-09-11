@@ -75,30 +75,66 @@ export function usageRows(usage: BotUsage, polish: boolean): { key: string; labe
   ];
 }
 
+/** Licznik rośnie w trakcie tury, więc panel odświeża się sam — inaczej
+ * otwarty obok pracującego bota pokazywałby stan sprzed minuty. */
+export const POLL_MS = 5000;
+
+/** `stop` = nie ma po co pytać dalej (bota już nie ma). `retry` = jednorazowy
+ * błąd: sieć mrugnęła, serwer się restartuje. */
+export type PollResult = "ok" | "retry" | "stop";
+
+export function pollUsage(load: () => Promise<PollResult>, intervalMs = POLL_MS): () => void {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stop = () => {
+    if (timer !== undefined) clearInterval(timer);
+    timer = undefined;
+  };
+  const run = () => void load().then((result) => { if (result === "stop") stop(); });
+  run();
+  // `.then` powyżej leci mikrozadaniem, więc `timer` jest już przypisany,
+  // zanim pierwsza odpowiedź może poprosić o zatrzymanie.
+  timer = setInterval(run, intervalMs);
+  return stop;
+}
+
+/** Surowy numer statusu nic nie mówi — panel ma powiedzieć, co się stało. */
+export function usageErrorMessage(status: number, polish: boolean): string {
+  if (status === 404) return polish ? "Tego bota już nie ma." : "This bot no longer exists.";
+  if (status === 401 || status === 403) {
+    return polish ? "Brak dostępu do zużycia tego bota." : "You cannot see this bot's usage.";
+  }
+  if (status === 0) return polish ? "Brak połączenia z serwerem." : "No connection to the server.";
+  if (status >= 500) {
+    return polish ? `Serwer nie oddał zużycia (błąd ${status}).` : `The server could not return usage (error ${status}).`;
+  }
+  return polish ? `Nie udało się pobrać zużycia (${status}).` : `Could not load usage (${status}).`;
+}
+
 export function UsagePanel({ bot, onBack }: { bot: Bot; onBack: () => void }) {
   const polish = useLanguage() === "pl";
   const [usage, setUsage] = useState<BotUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(
-    () =>
-      authFetch(`/api/bots/${bot.id}/usage`)
-        .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-        .then((body) => {
-          setUsage(parseUsage(body));
-          setError(null);
-        })
-        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))),
-    [bot.id],
-  );
+  const load = useCallback(async (): Promise<PollResult> => {
+    let response: Response;
+    try {
+      response = await authFetch(`/api/bots/${bot.id}/usage`);
+    } catch {
+      // Serwer na telefonie znika na chwilę przy przełączeniu sieci — to nie
+      // powód, żeby przestać pytać.
+      setError(usageErrorMessage(0, polish));
+      return "retry";
+    }
+    if (!response.ok) {
+      setError(usageErrorMessage(response.status, polish));
+      return response.status === 404 ? "stop" : "retry";
+    }
+    setUsage(parseUsage(await response.json().catch(() => ({}))));
+    setError(null);
+    return "ok";
+  }, [bot.id, polish]);
 
-  // Licznik rośnie w trakcie tury, więc panel odświeża się sam — inaczej
-  // otwarty obok pracującego bota pokazywałby stan sprzed minuty.
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => clearInterval(timer);
-  }, [load]);
+  useEffect(() => pollUsage(load), [load]);
 
   return (
     <SidePanel
@@ -141,10 +177,7 @@ export function UsagePanel({ bot, onBack }: { bot: Bot; onBack: () => void }) {
         )}
 
         {error && (
-          <div className="mt-4 rounded-xl bg-card p-3 text-[13px] text-danger">
-            {polish ? "Nie udało się pobrać zużycia: " : "Could not load usage: "}
-            {error}
-          </div>
+          <div className="mt-4 rounded-xl bg-card p-3 text-[13px] text-danger">{error}</div>
         )}
 
         {usage && (

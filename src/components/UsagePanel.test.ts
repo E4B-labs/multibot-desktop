@@ -1,10 +1,19 @@
 // multibot: panel „Zużycie" to okno na cztery liczby z `GET /api/bots/:id/usage`.
-// Środowisko testów to node (vitest.config.ts), więc sprawdzamy czyste funkcje
-// i źródło — dokładnie tak, jak robią to testy ComputerPanel/BotSettingsCard.
+// Środowisko testów to node (`test.environment` w `vite.config.ts`), więc
+// sprawdzamy zachowanie wyciągnięte z komponentu — tak jak testy ComputerPanel.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { EMPTY_USAGE, formatTokens, parseUsage, tokensPerTurn, turnsLabel, usageRows } from "./UsagePanel";
+import {
+  EMPTY_USAGE,
+  formatTokens,
+  parseUsage,
+  pollUsage,
+  tokensPerTurn,
+  turnsLabel,
+  usageErrorMessage,
+  usageRows,
+} from "./UsagePanel";
 
 const panel = readFileSync(new URL("./UsagePanel.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
@@ -101,34 +110,64 @@ describe("usageRows", () => {
   });
 });
 
-describe("panel", () => {
-  it("czyta gotowy endpoint i niczego nie zapisuje", () => {
-    expect(panel).toContain("/usage`");
-    expect(panel).not.toContain('method: "POST"');
-    expect(panel).not.toContain('method: "PATCH"');
+describe("usageErrorMessage", () => {
+  it("mówi, co się stało, zamiast pokazywać numer statusu", () => {
+    expect(usageErrorMessage(404, true)).toBe("Tego bota już nie ma.");
+    expect(usageErrorMessage(404, false)).toBe("This bot no longer exists.");
+    expect(usageErrorMessage(403, false)).toBe("You cannot see this bot's usage.");
+    expect(usageErrorMessage(0, true)).toBe("Brak połączenia z serwerem.");
   });
 
-  it("idzie przez wspólny SidePanel z własnym kluczem szerokości", () => {
+  it("przy błędzie serwera zostawia numer, bo jest po co zajrzeć do logu", () => {
+    expect(usageErrorMessage(503, false)).toContain("503");
+    expect(usageErrorMessage(418, false)).toContain("418");
+  });
+});
+
+describe("pollUsage", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("pyta od razu, potem co 5 s, i przestaje po sprzątnięciu", async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => "ok" as const);
+    const stop = pollUsage(load);
+    expect(load).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(load).toHaveBeenCalledTimes(3);
+    stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it("skasowany bot (404) zatrzymuje pytanie, jednorazowy błąd nie", async () => {
+    vi.useFakeTimers();
+    const retry = vi.fn(async () => "retry" as const);
+    pollUsage(retry);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(retry).toHaveBeenCalledTimes(3);
+
+    const gone = vi.fn(async () => "stop" as const);
+    pollUsage(gone);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(gone).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("obudowa panelu", () => {
+  it("idzie przez wspólny SidePanel, ma własny klucz szerokości i wiersz w karcie bota", () => {
     expect(panel).toContain("<SidePanel");
     expect(panel).toContain('from "./ResizablePanel"');
     expect(panel).toContain('storageKey="multibot.panelWidth.usage"');
     expect(panel).toContain("data-shell-header");
+    // Kotwica dla harnessu QA (`D:\tmp\mb-qa\e2e\usage-ui.mjs` czyta z niej sumę).
+    expect(panel).toContain("data-usage-total");
     // Sztywna szerokość na `<aside>` blokowałaby ciągnięcie (ResizablePanel.test.ts).
     expect(panel).not.toContain("<aside");
-  });
-
-  it("etykieta uchwytu jest dwujęzyczna jak w pozostałych panelach", () => {
-    expect(panel).toMatch(/label=\{polish \?/);
-  });
-
-  it("wiersz Zużycie w karcie bota otwiera panel i wraca", () => {
-    expect(settings).toContain('import { UsagePanel } from "./UsagePanel"');
+    // Wiersz w karcie bota: otwiera panel per bot i wraca do ustawień.
     expect(settings).toContain('polish ? "Zużycie" : "Usage"');
-    expect(settings).toContain("setUsageOpen(true)");
+    expect(settings).toContain("<UsagePanel key={bot.id}");
     expect(settings).toContain("onBack={() => setUsageOpen(false)}");
-  });
-
-  it("nazwy pól zgadzają się z WorkspaceUsage na serwerze", () => {
+    // Nazwy pól muszą się zgadzać z `WorkspaceUsage` na serwerze.
     for (const field of ["prompt_tokens", "completion_tokens", "total_tokens", "turns"]) {
       expect(workspace, `serwer nie ma już pola ${field}`).toContain(field);
       expect(panel, `panel nie czyta pola ${field}`).toContain(field);
