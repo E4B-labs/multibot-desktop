@@ -2,12 +2,13 @@
 // atrapą CLI, a zamiast exp.host lokalny serwerek, który zbiera payloady
 // (`MULTIBOT_EXPO_PUSH_URL`) i odpowiada ticketami jak exp.host.
 //
-// Od 10.09.2026 telefon brzęczy TYLKO od przypomnień i od `notify_user` —
-// reguła siedzi w `shouldNotify` (test jednostkowy: push-gate.test.ts), a ta
-// suita pilnuje, że tak jest naprawdę na całej drodze: pytanie do człowieka,
-// koniec tury i tura bot-bot milczą, przypomnienie i `notify_user` brzęczą,
-// wyłączony przełącznik bota ucisza także je, ładunek jest dostarczalny na
-// Androidzie, a ticket `DeviceNotRegistered` kasuje urządzenie z configu.
+// Od 11.09.2026 (K4) telefon brzęczy wtedy, gdy praca STANĘŁA na człowieku:
+// karta z pytaniem, przypomnienie, `notify_user`. Reguła siedzi w
+// `shouldNotify` (test jednostkowy: push-gate.test.ts), a ta suita pilnuje, że
+// tak jest naprawdę na całej drodze: koniec tury i tura bot-bot milczą, CICHY
+// PRZEBIEG RUTYNY milczy, rutyna która PYTA brzęczy, wyłączony przełącznik
+// bota ucisza wszystko, ładunek jest dostarczalny na Androidzie, a ticket
+// `DeviceNotRegistered` kasuje urządzenie z configu.
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -153,6 +154,13 @@ describe("push na telefon (fake ACP fleet)", () => {
               FAKE_ACP_REMINDER_TEXT: "dentysta",
               FAKE_ACP_REMINDER_IN_MS: "120000",
             },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
+          // bot, którego CLI pada z wygasłym logowaniem — `authFailure()`
+          // rozpoznaje tę treść i serwer parkuje bota na `needsAttention`
+          grokAuthExpired: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "crash-mid-turn", FAKE_ACP_CRASH_TEXT: "grok: invalid api key" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
           grokConnect: {
@@ -340,14 +348,50 @@ describe("push na telefon (fake ACP fleet)", () => {
     }
   }, 45_000);
 
-  it("pytanie do człowieka NIE brzęczy telefonu (ani start tury)", async () => {
+  // multibot (K4): bot stoi na karcie i czeka — to JEST powód, żeby brzęknąć.
+  // Raz: start tury ani jej koniec nie dokładają drugiego powiadomienia.
+  it("pytanie do człowieka brzęczy telefon dokładnie raz, kanałem `asks`", async () => {
     const botId = await newBot("Pytacz", "grokAsk");
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zdecyduj coś" })).status).toBe(202);
-    // karta czeka na człowieka dłużej niż 8 s — gdyby cokolwiek pushowało,
-    // zdążyłoby w tym oknie
+    await until(() => kinds(botId).includes("question"), 30_000);
+    // karta czeka na człowieka dłużej niż 8 s — gdyby start/koniec tury też
+    // pushował, zdążyłby w tym oknie
     await until(() => false, 8_000);
+    // `kinds` liczy WIADOMOŚCI, a jedno powiadomienie leci na każde zapisane
+    // urządzenie — liczy się więc zbiór rodzajów, nie długość listy
+    expect(new Set(kinds(botId))).toEqual(new Set(["question"]));
+    const ask = pushes.find((p) => p.data?.botId === botId && p.data?.kind === "question");
+    expect(ask?.title).toBe("Pytacz");
+    expect(ask?.channelId).toBe("asks");
+  }, 60_000);
+
+  // multibot (K4): najważniejsza reguła tej fali — rutyna, która po cichu
+  // zrobiła swoje, NIE budzi telefonu. Kończy się `finished`, a `finished`
+  // nie przechodzi bramki.
+  it("rutyna: cichy przebieg nie powiadamia", async () => {
+    const botId = await newBot("Cicha rutyna", "happy");
+    const routine = (await api("POST", `/api/bots/${botId}/routines`, {
+      name: "raport", prompt: "zrób raport", schedule: "0 4 * * *",
+    })).body;
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    // tura naprawdę poszła…
+    await until(() => false, 15_000);
+    const bot = await botState(botId);
+    expect((bot?.messages ?? []).some((m: any) => m.role === "bot" && m.kind === "text" && m.text)).toBe(true);
+    // …i telefon o niej nie usłyszał
     expect(kinds(botId)).toEqual([]);
-  }, 40_000);
+  }, 70_000);
+
+  // …ale rutyna, która o coś PYTA, brzęczy: wtedy praca stanęła na człowieku.
+  it("rutyna, która pyta człowieka, brzęczy", async () => {
+    const botId = await newBot("Pytająca rutyna", "grokAsk");
+    const routine = (await api("POST", `/api/bots/${botId}/routines`, {
+      name: "decyzja", prompt: "zapytaj o decyzję", schedule: "0 4 * * *",
+    })).body;
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    await until(() => kinds(botId).includes("question"), 30_000);
+    expect(new Set(kinds(botId))).toEqual(new Set(["question"]));
+  }, 70_000);
 
   it("koniec tury użytkownika: cisza", async () => {
     const botId = await newBot("Szybki", "happy");
@@ -374,6 +418,28 @@ describe("push na telefon (fake ACP fleet)", () => {
     expect(kinds(askerId)).toEqual([]);
   }, 60_000);
 
+  // multibot (recenzja PR #184, HIGH): `startTurn` gasił `needsAttention` przy
+  // KAŻDEJ nieizolowanej turze, więc rutyna co 5 minut kasowała prośbę o
+  // logowanie, zastawała wygasły token i stawiała ją od nowa — dedup `repeat`
+  // nigdy nie widział powtórki i telefon brzęczał dwanaście razy na godzinę.
+  it("rutyna na wygasłym logowaniu brzęczy RAZ, nie przy każdym przebiegu", async () => {
+    const botId = await newBot("Wygasły", "grokAuthExpired");
+    const routine = (await api("POST", `/api/bots/${botId}/routines`, {
+      name: "puls", prompt: "sprawdź pocztę", schedule: "0 4 * * *",
+    })).body;
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    await until(() => kinds(botId).includes("attention"), 30_000);
+    const afterFirst = pushes.filter((p) => p.data?.botId === botId).length;
+    // prośba stoi na rekordzie bota — rutyna nie ma prawa jej zgasić
+    expect((await botState(botId))?.needsAttention).toBeTruthy();
+
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    await until(() => false, 12_000);
+    expect(pushes.filter((p) => p.data?.botId === botId).length).toBe(afterFirst);
+    expect(new Set(kinds(botId))).toEqual(new Set(["attention"]));
+    expect((await botState(botId))?.needsAttention).toBeTruthy();
+  }, 90_000);
+
   it("wyłączony przełącznik bota ucisza nawet przypomnienie", async () => {
     const botId = await newBot("Cichy", "happy");
     await api("PATCH", `/api/bots/${botId}`, { notifications: false });
@@ -397,7 +463,9 @@ describe("push na telefon (fake ACP fleet)", () => {
     expect(reminder?.ttl).toBe(24 * 3600);
     // ładunek dostarczalny na Androidzie
     expect(reminder?.priority).toBe("high");
-    expect(reminder?.channelId).toBe("default");
+    // przypomnienia mają własny kanał Androida, żeby dało się je wyciszyć
+    // osobno od próśb bota
+    expect(reminder?.channelId).toBe("reminders");
     expect(reminder?.sound).toBe("default");
     expect(reminder?.data).toMatchObject({ botId, kind: "reminder" });
 
