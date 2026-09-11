@@ -150,7 +150,10 @@ export function profilePopoverPosition(
   };
 }
 
-function ProfileFooterButton() {
+/** `collapsed` — wariant dla zwężonej szyny (80 px): sam awatar 32 px bez
+ *  nazwy, ten sam popover uploadu (fixed + clamp w profilePopoverPosition,
+ *  więc panel 216 px przy szynie 80 px cofa się do left = 8 od okna). */
+function ProfileFooterButton({ collapsed = false }: { collapsed?: boolean }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [open, setOpen] = useState(false);
@@ -235,7 +238,7 @@ function ProfileFooterButton() {
   };
 
   return (
-    <div ref={rootRef} className="relative min-w-0 flex-1">
+    <div ref={rootRef} className={collapsed ? "relative" : "relative min-w-0 flex-1"}>
       <button
         type="button"
         onClick={() => {
@@ -261,16 +264,22 @@ function ProfileFooterButton() {
         aria-expanded={open}
         aria-haspopup="dialog"
         title={polish ? "Zdjęcie profilowe" : "Profile photo"}
-        className="mr-1.5 flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+        className={
+          collapsed
+            ? "flex shrink-0 items-center rounded-full hover:bg-raised/50"
+            : "mr-1.5 flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+        }
       >
         {avatar ? (
           <img src={avatar} alt="" className="size-8 shrink-0 rounded-full object-cover" />
         ) : (
           <InitialsAvatar initials={profileInitials(profile)} size={32} />
         )}
-        <span className="truncate text-[14px] font-semibold text-ink">
-          {profile?.name?.trim() || profile?.email?.trim() || "You"}
-        </span>
+        {!collapsed && (
+          <span className="truncate text-[14px] font-semibold text-ink">
+            {profile?.name?.trim() || profile?.email?.trim() || "You"}
+          </span>
+        )}
       </button>
       {open && (
         <div
@@ -1778,15 +1787,19 @@ export function Sidebar() {
       </div>
 
       {/* Footer */}
-      <div className={cn("pb-3 pt-2", collapsed ? "px-1" : "px-3")}>
+      {/* multibot: w szynie (80 px) stopka trzyma pl-2 — Wtyczki i awatar
+          profilu NIE dotykają lewej krawędzi okna; kolumna: Wtyczki nad
+          awatarem, koło zębate obok awatara (8+32+4+32 = 76 ≤ 80, nic nie
+          wystaje poza szynę). */}
+      <div className={cn("pb-3 pt-2", collapsed ? "pl-2 pr-1" : "px-3")}>
         {/* multibot: Rozmowy botów i Mapa zespołu przeniesione do 3-kropek
             w nagłówku czatu (prawy górny róg) — tu celowo puste. */}
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
           title={collapsed ? (polish ? "Wtyczki" : "Plugins") : undefined}
           className={cn(
-            "flex w-full items-center rounded-xl gap-3 px-3 py-2 text-left hover:bg-raised/50",
-            collapsed ? "justify-center px-0" : "",
+            "flex items-center text-left hover:bg-raised/50",
+            collapsed ? "rounded-full py-1" : "w-full gap-3 rounded-xl px-3 py-2",
           )}
         >
           {/* multibot: slot ikony jak DOMYŚLNY awatar profilu (InitialsAvatar:
@@ -1797,20 +1810,23 @@ export function Sidebar() {
           </span>
             {!collapsed && <span className="text-[14px] font-semibold text-ink">{polish ? "Wtyczki" : "Plugins"}</span>}
         </button>
-        {/* multibot: w szynie nazwa użytkownika znika, a ustawienia aplikacji
-            zostają — awatar profilu bez nazwy nic nie wnosi, a koło zębate
-            jest jedynym wejściem w ustawienia. */}
+        {/* multibot: w szynie nazwa użytkownika znika, ale awatar profilu
+            zostaje (klik → ten sam popover uploadu zdjęcia), a koło zębate
+            stoi obok niego w tym samym wierszu. */}
         {collapsed ? (
-          <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className="inline-flex size-8 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"
-            title={polish ? "Ustawienia aplikacji" : "App settings"}
-          >
-            <span className="relative inline-flex">
-              <Settings size={20} />
-              <UpdateBadge />
-            </span>
-          </button>
+          <div className="flex items-center gap-1 pt-1">
+            <ProfileFooterButton collapsed />
+            <button
+              onClick={() => dispatch({ type: "toggleAppSettings" })}
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"
+              title={polish ? "Ustawienia aplikacji" : "App settings"}
+            >
+              <span className="relative inline-flex">
+                <Settings size={20} />
+                <UpdateBadge />
+              </span>
+            </button>
+          </div>
         ) : (
         <div className="flex items-center">
           <ProfileFooterButton />

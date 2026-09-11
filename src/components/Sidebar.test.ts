@@ -76,6 +76,22 @@ describe("sidebar footer alignment", () => {
     expect(footer).toContain('dispatch({ type: "toggleAppSettings" })');
   });
 
+  // Szyna 80 px: Wtyczki NAD awatarem profilu (ta sama kolumna od lewej),
+  // koło zębate obok awatara. pl-2 = elementy nie dotykają lewej krawędzi;
+  // 8 (pl) + 32 (awatar) + 4 (gap) + 32 (gear) = 76 ≤ 80 — nic nie wystaje.
+  it("stacks Plugins above the profile row in the collapsed rail", () => {
+    expect(footer).toContain('collapsed ? "pl-2 pr-1" : "px-3"');
+    expect(footer).toContain("<ProfileFooterButton collapsed />");
+    // kolejność: Wtyczki → profil → ustawienia
+    expect(footer.indexOf("togglePlugins")).toBeLessThan(footer.indexOf("<ProfileFooterButton collapsed />"));
+    expect(footer.indexOf("<ProfileFooterButton collapsed />")).toBeLessThan(footer.indexOf("toggleAppSettings"));
+    // wiersz profil + gear; gear 32 px w tym samym wierszu, shrink-0
+    expect(footer).toContain('"flex items-center gap-1 pt-1"');
+    expect(footer).toContain("size-8 shrink-0 items-center justify-center rounded-md");
+    // wariant collapsed przycisku profilu: sam awatar, bez nazwy i paddingów
+    expect(profileButton).toContain('"flex shrink-0 items-center rounded-full hover:bg-raised/50"');
+  });
+
   it("shows the uploaded photo as a 32px circle and opens the popover", () => {
     expect(profileButton).toContain('className="size-8 shrink-0 rounded-full object-cover"');
     expect(profileButton).toContain('accept="image/*"');
@@ -124,6 +140,11 @@ describe("profile popover position", () => {
     // wąskie okno: 216-pikselowy panel nie mieści się — cofa się do 8 px
     expect(profilePopoverPosition({ top: 860 }, sidebar, 216, 200, 900).left).toBe(8);
     expect(profilePopoverPosition({ top: 860 }, { left: 100, width: 240 }, 216, 300, 900).left).toBe(300 - 216 - 8);
+  });
+
+  it("clamps to the window for the 80px collapsed rail", () => {
+    // szyna 80 < panel 216: środkowanie dałoby −68 → clamp do okna, left = 8
+    expect(profilePopoverPosition({ top: 860 }, { left: 0, width: 80 }, 216, 1280, 900).left).toBe(8);
   });
 
   it("lets the wider cropper overflow the sidebar but not the window", () => {
