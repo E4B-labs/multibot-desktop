@@ -254,7 +254,7 @@ export function ResizeHandle({ resize, className }: { resize: ResizableWidth; cl
         className,
       )}
     >
-      <span className="h-full w-px bg-transparent transition-colors group-hover:bg-accent/50 group-focus-visible:bg-accent" />
+      <span className="h-full w-px bg-transparent transition-colors group-focus-visible:bg-accent" />
     </div>
   );
 }
