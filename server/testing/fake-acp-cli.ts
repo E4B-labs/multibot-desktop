@@ -214,6 +214,16 @@ function handle(msg: any) {
       // `final_answer`, harness nie dostał `assistant_text` i w czacie nie
       // pojawiło się nic; dla człowieka wyglądało to jak zgubiona wiadomość.
       if (mode === "silent") return complete();
+      if (mode === "send-files" && agentsMcp) {
+        const calls = JSON.parse(readFileSync(process.env.FAKE_ATTACHMENT_CALLS!, "utf8"));
+        void (async () => {
+          const replies: string[] = [];
+          for (const args of calls) replies.push(await driveMcp(agentsMcp!, [{ name: "send_file", args: () => args }]));
+          writeFileSync(process.env.FAKE_ATTACHMENT_RESULTS!, JSON.stringify(replies));
+          complete(); // Deliberately no assistant_text after send_file.
+        })().catch((error) => out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(error) } }));
+        return;
+      }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);
