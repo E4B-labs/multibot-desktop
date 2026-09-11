@@ -395,3 +395,36 @@ describe("pobranie pliku przez powłokę telefonu", () => {
     expect(chat).toContain("if (url) window.open(url, \"_blank\", \"noopener,noreferrer\");");
   });
 });
+
+// multibot K2: wzmianka nie może zniknąć w chwili wysłania. Composer koloruje
+// `@Imię` w trakcie pisania; dymek użytkownika leci czystym tekstem, więc bez
+// MentionText wracał tam surowy zapis i chip „gasł" po Enterze.
+describe("wzmianka w wysłanej wiadomości użytkownika", () => {
+  const peerBadge = readFileSync(new URL("./PeerBadge.tsx", import.meta.url), "utf8");
+
+  it("dymek użytkownika renderuje treść przez MentionText, nie gołe {body}", () => {
+    expect(chat).toContain("<MentionText text={body} />");
+    expect(chat).toContain('import { MentionText, PeerBadge } from "./PeerBadge";');
+  });
+
+  it("MentionText używa tego samego tokenizera i tej samej pigułki co reszta", () => {
+    expect(peerBadge).toContain('import { splitMentions } from "@/lib/mentions";');
+    expect(peerBadge).toContain("<BotChip key={index} bot={bot} />");
+    // bez wzmianki zwraca sam tekst — żadnego nowego opakowania w dymku
+    expect(peerBadge).toContain("if (!parts.some((part) => part.name)) return <>{text}</>;");
+  });
+
+  // K2 (recenzja PR #185, p. 9): pigułka w wysłanej wiadomości ma kolor bota,
+  // tak jak ta w composerze. Przepis `--bot`/`--bot-ink` stoi w JEDNYM miejscu.
+  it("pigułka wysłanej wiadomości bierze kolor bota z jednego przepisu", () => {
+    expect(peerBadge).toContain("export function botChipStyle(color?: BotColor): CSSProperties");
+    expect(peerBadge).toContain('"--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))"');
+    expect(peerBadge).toContain("text-[var(--bot-ink)]");
+    expect(peerBadge).toContain("bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))]");
+    expect(peerBadge, "pigułka wróciła do szarego bg-raised").not.toContain("bg-raised px-2 py-0.5");
+    // każda droga do pigułki ustawia zmienne — bez nich `color-mix` jest
+    // nieprawidłowy i tekst traci kolor
+    expect(peerBadge).toContain("<span style={botChipStyle(bot.color)} className={cn(BOT_CHIP_CLASS, className)}>");
+    expect(peerBadge).toContain('<span style={botChipStyle()} className={cn(BOT_CHIP_CLASS, "mr-1.5")}>');
+  });
+});

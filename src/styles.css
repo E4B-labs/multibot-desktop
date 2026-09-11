@@ -207,7 +207,10 @@ body {
      otwartym panelu bocznym. Poziom nadal czyta `aria-label`, wiec czytnik
      nic nie traci. Powyzej 700 px nic sie nie zmienia. */
   [data-composer-row] { flex-wrap: wrap; }
-  [data-composer-row] > [data-composer-input] { order: -1; flex-basis: 100%; }
+  /* K2: celem jest pudelko pola (`data-composer-field`), bo od tej pory pole
+     siedzi w nim razem z warstwa podswietlenia wzmianek. Samo
+     `[data-composer-input]` przestalo byc dzieckiem rzedu. */
+  [data-composer-row] > [data-composer-field] { order: -1; flex-basis: 100%; }
   [data-composer-row] > button > span,
   [data-composer-row] > div > button > span { display: none; }
 }
@@ -283,6 +286,19 @@ body {
 [data-composer-input]::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* multibot K2: gdy w szkicu jest wzmianka, litery pola są przezroczyste —
+   maluje je warstwa pod spodem (Composer.tsx, MentionHighlight). Chrome NIE
+   rysuje wtedy podświetlenia zaznaczenia w ogóle: przy `color: transparent`
+   pomija cały pas i Ctrl+A wyglądało, jakby nic nie było zaznaczone (zmierzone
+   na zrzutach `sel-plain.png` vs `sel-mention.png`). Jawne tło przywraca pas,
+   a kolory systemowe dają dokładnie ten sam wygląd co pole bez wzmianki — stąd
+   `Highlight`/`HighlightText`, nie nasze tokeny. Reguła celuje w `data-mentions`,
+   więc każda inna wiadomość zostaje na domyślnym zachowaniu przeglądarki. */
+[data-composer-input][data-mentions]::selection {
+  color: HighlightText;
+  background: Highlight;
 }
 
 @keyframes panel-in {

@@ -15,7 +15,7 @@ import { ReplyQuote, replyTargetOf } from "./ReplyQuote";
 import { routineStartName, slashCommandLabel } from "@/lib/transcriptChips";
 import { useStore, type Bot, type Message } from "@/state/store";
 import { formatPeerEnvelope, parsePeerEnvelope } from "@/lib/peerEnvelope";
-import { PeerBadge } from "./PeerBadge";
+import { MentionText, PeerBadge } from "./PeerBadge";
 import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSessions";
 import { BotAvatar } from "./Avatar";
 import { BOT_COLORS, staticAvatarProps } from "@/lib/mascot";
@@ -231,7 +231,10 @@ function Bubble({
               className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
             >
               {envelope && <PeerBadge name={envelope.from} />}
-              {body}
+              {/* multibot K2: wzmianka zostaje pigułką także po wysłaniu —
+                  composer pokazuje ją w trakcie pisania, dymek użytkownika
+                  dotąd wracał do surowego „@Imię". Patrz MentionText. */}
+              <MentionText text={body} />
             </div>
             {/* multibot: skalowane tym samym wsp. co reszta treści dymka */}
             {collapsible && (
