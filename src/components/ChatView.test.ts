@@ -364,3 +364,16 @@ describe("seria dymków czatu", () => {
     expect(chat, "oba znaczniki na jednym elemencie").not.toMatch(/data-mb-side=[^\n]*data-mb-bubble|data-mb-bubble=[^\n]*data-mb-side/);
   });
 });
+
+// Trzeci poziom widoczności (Status). Do 0.5.45 ikona komputera świeciła
+// WYŁĄCZNIE wtedy, gdy panel był otwarty — czyli nigdy dlatego, że bot klika.
+describe("ikona komputera w nagłówku", () => {
+  it("akcent bierze się z pracy bota, nie tylko z otwartego panelu", () => {
+    expect(chat).toContain("const computerActing = state.computerActing.includes(bot.id);");
+    expect(chat).toContain('computerActing || state.computerOpen ? "text-accent" : "text-ink hover:text-ink"');
+  });
+
+  it("na pulpicie przycisk wychodzi na wierzch tylko w trakcie pracy", () => {
+    expect(chat).toContain("{computerActing && computerButton}");
+  });
+});

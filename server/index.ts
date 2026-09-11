@@ -321,10 +321,15 @@ const activeCommsDepth = new Map<string, number>();
 // bierze tylko tura główna (nieizolowana, depth 0) — tura zagnieżdżona czekałaby
 // na slot trzymany przez własnego wołającego.
 const gatedTurnBots = new Set<string>();
-/** Koniec tury (udany, błędny, przerwany, ubity watchdogiem) oddaje slot. */
+/** Koniec tury (udany, błędny, przerwany, ubity watchdogiem) oddaje slot ORAZ
+ *  gasi znacznik „bot pracuje na komputerze" (poziom Status — ikona w nagłówku
+ *  czatu). Jedno miejsce dla obu, bo koniec tury jest ten sam: `turn.completed`,
+ *  `runtime.error`, przerwanie i watchdog wołają tę funkcję. */
 function releaseTurnSlot(botId: string): void {
-  if (!gatedTurnBots.delete(botId)) return;
-  broadcast({ kind: "computer-queue", ...computerControl.releaseAgent(botId) });
+  const wasActing = computerControl.setAgentActing(botId, false);
+  const hadSlot = gatedTurnBots.delete(botId);
+  if (hadSlot) computerControl.releaseAgent(botId);
+  if (wasActing || hadSlot) broadcast({ kind: "computer-queue", ...computerControl.control() });
 }
 // multibot (U1): prywatny Store nie zna izolowanych wątków grupy, ale ich
 // zużycie nadal należy do konkretnego bota.
@@ -1817,7 +1822,15 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.started":
       if (event.itemType === "tool") {
         turnUsedTool.add(event.threadId);
-        if (event.title?.startsWith("mcp__computer__")) turnUsedComputer.add(event.threadId);
+        if (event.title?.startsWith("mcp__computer__")) {
+          turnUsedComputer.add(event.threadId);
+          // Poziom Status: ikona komputera w nagłówku czatu zapala się, bo bot
+          // WŁAŚNIE klika, a nie dlatego, że ktoś otworzył panel. Gaśnie
+          // w `releaseTurnSlot` na końcu tury.
+          if (computerControl.setAgentActing(bot.id, true)) {
+            broadcast({ kind: "computer-queue", ...computerControl.control() });
+          }
+        }
         // The WORK a member does for the group belongs to the group too: a row
         // of "Read file" pills in a private chat that holds no group message is
         // the same leak in a quieter shape. `turnUsedTool` above is bookkeeping

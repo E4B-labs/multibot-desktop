@@ -3,7 +3,7 @@
 // path is tested for real rather than slept through.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { LEASE_MS, acquire, acquireAgent, agentMayAct, control, release, releaseAgent, resetAgentQueue } from "./computer-control.ts";
+import { LEASE_MS, acquire, acquireAgent, agentMayAct, control, release, releaseAgent, resetAgentQueue, setAgentActing } from "./computer-control.ts";
 
 beforeEach(() => { release(); resetAgentQueue(); });
 
@@ -81,5 +81,47 @@ describe("shared computer turn queue", () => {
     await beta;
     expect(betaStarted).toBe(true);
     expect(control().agentOwner).toBe("beta");
+  });
+});
+
+// Trzeci poziom widoczności (Status): ikona komputera w nagłówku czatu świeci,
+// bo bot WŁAŚNIE klika — nie dlatego, że ktoś otworzył panel. Serwer nadaje to
+// polem `agentActing` w ramce `computer-queue`, więc pole musi pojawiać się
+// i znikać dokładnie wtedy, kiedy bot bierze się za komputer i kończy turę.
+describe("agentActing (poziom Status)", () => {
+  afterEach(() => { resetAgentQueue(); });
+
+  it("nie ma pola, dopóki żaden bot nie dotknął komputera", async () => {
+    await acquireAgent("alpha"); // sam slot tury to jeszcze nie praca na komputerze
+    expect(control().agentActing).toBeUndefined();
+  });
+
+  it("zapala się na pierwszym narzędziu komputera i gaśnie na końcu tury", () => {
+    expect(setAgentActing("alpha", true)).toBe(true);
+    expect(control().agentActing).toEqual(["alpha"]);
+    expect(setAgentActing("alpha", false)).toBe(true);
+    expect(control().agentActing).toBeUndefined();
+  });
+
+  it("kolejne narzędzie tej samej tury nie nadaje drugiej ramki", () => {
+    expect(setAgentActing("alpha", true)).toBe(true);
+    expect(setAgentActing("alpha", true)).toBe(false);
+    expect(setAgentActing("beta", false)).toBe(false); // bot, który nic nie robił
+    expect(control().agentActing).toEqual(["alpha"]);
+  });
+
+  it("dwa boty naraz siedzą na liście osobno", () => {
+    setAgentActing("alpha", true);
+    setAgentActing("beta", true);
+    expect(control().agentActing).toEqual(["alpha", "beta"]);
+    setAgentActing("alpha", false);
+    expect(control().agentActing).toEqual(["beta"]);
+  });
+
+  it("przejęcie komputera przez człowieka nie gubi informacji, kto pracował", () => {
+    const now = 8_000_000;
+    setAgentActing("alpha", true);
+    acquire(now);
+    expect(control(now)).toMatchObject({ owner: "user", agentActing: ["alpha"] });
   });
 });
