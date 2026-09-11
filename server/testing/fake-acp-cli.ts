@@ -29,6 +29,9 @@
 //                   JSON line ({mode, at, prompt}) — lets tests pin what text
 //                   actually reached the CLI and when
 //   FAKE_ACP_TURN_MS  how long the `busy` mode's turn runs (default 5000)
+//   FAKE_ACP_CRASH_TEXT  what `crash-mid-turn` writes to stderr before dying
+//                   (default a generic provider failure) — lets a test hand the
+//                   server a message `authFailure()` reads as an expired login
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
@@ -262,7 +265,10 @@ function handle(msg: any) {
         // klucza, ubity proces, wyjątek dostawcy. Harness zamienia to na
         // zdarzenie runtime.error — i to jest jedyny sygnał, że tura się
         // skończyła, bo turn.completed już nie przyjdzie.
-        process.stderr.write("fake-acp: simulated provider failure mid-turn\n");
+        // FAKE_ACP_CRASH_TEXT pozwala podstawić TREŚĆ awarii — testy
+        // wygasłego logowania potrzebują zdania, które rozpoznaje
+        // `authFailure()`, a nie naszego generycznego.
+        process.stderr.write(`${process.env.FAKE_ACP_CRASH_TEXT ?? "fake-acp: simulated provider failure mid-turn"}\n`);
         process.exit(4);
       }
       if (mode === "script") {

@@ -156,6 +156,13 @@ describe("push na telefon (fake ACP fleet)", () => {
             },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
+          // bot, którego CLI pada z wygasłym logowaniem — `authFailure()`
+          // rozpoznaje tę treść i serwer parkuje bota na `needsAttention`
+          grokAuthExpired: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "crash-mid-turn", FAKE_ACP_CRASH_TEXT: "grok: invalid api key" },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
           grokConnect: {
             driver: "grokAgent",
             environment: { FAKE_ACP_MODE: "request-connection" },
@@ -410,6 +417,28 @@ describe("push na telefon (fake ACP fleet)", () => {
     expect(kinds(helperId)).toEqual([]);
     expect(kinds(askerId)).toEqual([]);
   }, 60_000);
+
+  // multibot (recenzja PR #184, HIGH): `startTurn` gasił `needsAttention` przy
+  // KAŻDEJ nieizolowanej turze, więc rutyna co 5 minut kasowała prośbę o
+  // logowanie, zastawała wygasły token i stawiała ją od nowa — dedup `repeat`
+  // nigdy nie widział powtórki i telefon brzęczał dwanaście razy na godzinę.
+  it("rutyna na wygasłym logowaniu brzęczy RAZ, nie przy każdym przebiegu", async () => {
+    const botId = await newBot("Wygasły", "grokAuthExpired");
+    const routine = (await api("POST", `/api/bots/${botId}/routines`, {
+      name: "puls", prompt: "sprawdź pocztę", schedule: "0 4 * * *",
+    })).body;
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    await until(() => kinds(botId).includes("attention"), 30_000);
+    const afterFirst = pushes.filter((p) => p.data?.botId === botId).length;
+    // prośba stoi na rekordzie bota — rutyna nie ma prawa jej zgasić
+    expect((await botState(botId))?.needsAttention).toBeTruthy();
+
+    expect((await api("POST", `/api/bots/${botId}/routines/${routine.id}/run`)).status).toBe(200);
+    await until(() => false, 12_000);
+    expect(pushes.filter((p) => p.data?.botId === botId).length).toBe(afterFirst);
+    expect(new Set(kinds(botId))).toEqual(new Set(["attention"]));
+    expect((await botState(botId))?.needsAttention).toBeTruthy();
+  }, 90_000);
 
   it("wyłączony przełącznik bota ucisza nawet przypomnienie", async () => {
     const botId = await newBot("Cichy", "happy");

@@ -3,9 +3,11 @@
 // brzęczy to, na co człowiek ma ODPOWIEDZIEĆ, plus przypomnienie i
 // `notify_user`. Cykl życia tury milczy — i to jest powód, dla którego RUTYNA
 // nie powiadamia o każdym przebiegu.
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { allowNotify, channelForKind, NOTIFY_GAP_MS, resetNotifyLimit, shouldNotify, type PushKind } from "./push.ts";
+import { allowCardPush, allowNotify, channelForKind, NOTIFY_GAP_MS, PUSH_DEDUP_MS, resetNotifyLimit, shouldNotify, type PushKind } from "./push.ts";
 
 /** Cykl życia tury: to samo, czym kończy się KAŻDY cichy przebieg rutyny. */
 const SILENT: PushKind[] = ["started", "finished", "failed"];
@@ -42,6 +44,39 @@ describe("channelForKind", () => {
   });
 });
 
+// multibot (K4, recenzja PR #184): osiem zgód w jednej turze albo runda grupy
+// dwunastu botów dawały dwanaście brzęczyków o tym samym. Karty zostają
+// wszystkie — dedup dotyczy tylko powiadomienia.
+describe("allowCardPush", () => {
+  it("ten sam rodzaj karty od tego samego bota brzęczy raz w oknie", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    expect(allowCardPush("bot-a", "approval", t0)).toBe(true);
+    expect(allowCardPush("bot-a", "approval", t0 + 1)).toBe(false);
+    expect(allowCardPush("bot-a", "approval", t0 + PUSH_DEDUP_MS - 1)).toBe(false);
+    expect(allowCardPush("bot-a", "approval", t0 + PUSH_DEDUP_MS)).toBe(true);
+  });
+
+  it("inny rodzaj karty i inny bot mają własne okna", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    expect(allowCardPush("bot-a", "approval", t0)).toBe(true);
+    expect(allowCardPush("bot-a", "question", t0)).toBe(true);
+    expect(allowCardPush("bot-b", "approval", t0)).toBe(true);
+  });
+
+  it("przypomnienia, notify_user i wygasłe logowanie NIE są deduplikowane tutaj", () => {
+    resetNotifyLimit();
+    const t0 = 1_000_000;
+    // przypomnienia ustawił człowiek na konkretne godziny — połknięcie
+    // drugiego byłoby zgubieniem tego, o co sam poprosił
+    for (const kind of ["reminder", "notify", "attention"] as PushKind[]) {
+      expect(allowCardPush("bot-a", kind, t0)).toBe(true);
+      expect(allowCardPush("bot-a", kind, t0 + 1)).toBe(true);
+    }
+  });
+});
+
 describe("allowNotify", () => {
   it("pierwsze wołanie przechodzi, kolejne w oknie 10 minut sklejają się", () => {
     resetNotifyLimit();
@@ -63,5 +98,21 @@ describe("allowNotify", () => {
     const t0 = 1_000_000;
     expect(allowNotify("bot-a", t0)).toBe(true);
     expect(allowNotify("bot-b", t0)).toBe(true);
+  });
+});
+
+// Bramka bez podpięcia jest martwa, a dwie z tych rzeczy to jedna linia w
+// `server/index.ts` — dokładnie taka, jaką łatwo zgubić przy scalaniu.
+describe("podpięcie w serwerze", () => {
+  const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+
+  it("pushForBot dedupuje powtórzone karty", () => {
+    expect(index).toContain("if (!allowCardPush(botId, kind)) return;");
+  });
+
+  it("komunikat o zmianie adresu serwera nie jedzie kanałem próśb bota", () => {
+    // `data.kind` tej trasy to „notify", a to `channelForKind` mapuje na
+    // `asks` — adres serwera nie jest prośbą bota, więc kanał podany jawnie
+    expect(index).toContain('[owner.userId], "default")');
   });
 });

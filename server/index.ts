@@ -31,7 +31,7 @@ import {
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
 import * as composio from "./composio.ts";
 // multibot (U28): powiadomienia push, gdy bot wchodzi w needsAttention.
-import { registerPushDevice, notifyPushDevices, shouldNotify, allowNotify, type PushKind } from "./push.ts";
+import { registerPushDevice, notifyPushDevices, shouldNotify, allowCardPush, allowNotify, type PushKind } from "./push.ts";
 import {
   BUILT_IN_CLI_IDS,
   DEFAULT_INSTANCE_CONFIGS,
@@ -248,7 +248,7 @@ initNetAddress({
     if (report.current) identity.updateSetupAddress(report.current);
     const owner = identity.members().find((member) => member.role === "owner");
     if (owner && report.current) {
-      void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId]).catch(() => {});
+      void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId], "default").catch(() => {});
     }
   },
 });
@@ -1593,6 +1593,9 @@ function pushForBot(botId: string, kind: PushKind, body: string, only?: string[]
   if (!bot || bot.notifications === false) return;
   // JEDYNA bramka „czy to w ogóle powiadomienie" — patrz `shouldNotify`
   if (!shouldNotify(kind)) return;
+  // Karta zostaje w czacie ZAWSZE (dołożył ją wołający); tu odpada tylko
+  // powtórzony brzęczyk o tym samym — patrz `allowCardPush`.
+  if (!allowCardPush(botId, kind)) return;
   // `only` wygrywa nad widocznością bota: przypomnienie należy do KONKRETNEGO
   // człowieka, także wtedy, gdy ustawił je bot widoczny dla całego zespołu.
   const audience = only ?? (bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined);
@@ -2715,8 +2718,14 @@ opts?: {
     })();
 
 
-  // multibot (D7): kolejna tura usera JEST odpowiedzią na to, na co bot czekał
-  if (!isolated && bot.needsAttention != null) store.patchBot(bot.id, { needsAttention: null });
+  // multibot (D7): kolejna tura usera JEST odpowiedzią na to, na co bot czekał.
+  // Tylko USERA: rutyna co 5 minut gasiła prośbę o logowanie, po czym ta sama
+  // rutyna zastawała wygasły token i stawiała ją od nowa — dedup `repeat`
+  // nigdy nie widział powtórki, więc telefon brzęczał dwanaście razy na
+  // godzinę o tym samym (`allowNotify` pilnuje tylko `notify`).
+  if (!isolated && (opts?.origin ?? "user") === "user" && bot.needsAttention != null) {
+    store.patchBot(bot.id, { needsAttention: null });
+  }
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request

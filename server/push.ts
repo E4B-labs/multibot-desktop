@@ -65,9 +65,34 @@ export function allowNotify(botId: string, now = Date.now()): boolean {
   return true;
 }
 
-/** Tylko dla testów: czyści okno limitu. */
+/** Dedup kart: JEDEN brzęczyk na rodzaj prośby na bota w krótkim oknie.
+ * Tura, w której bot prosi o osiem zgód po kolei, i runda grupy dwunastu botów
+ * dawały dwanaście powiadomień o tym samym — telefon robił się młotkiem.
+ * Karty zostają wszystkie (dokłada je `store.appendMessage`, nie ta bramka),
+ * znika tylko powtórzony brzęczyk.
+ *
+ * Nie dotyczy `reminder` (człowiek sam ustawił godzinę — tego nie wolno
+ * połknąć) ani `notify` (ma własne, ostrzejsze okno `allowNotify`) ani
+ * `attention`, którego pilnuje stan `needsAttention` na rekordzie bota:
+ * powtórka tej samej prośby o logowanie nie brzęczy w ogóle, niezależnie od
+ * czasu. */
+export const PUSH_DEDUP_MS = 30_000;
+const DEDUPED: readonly PushKind[] = ["question", "handoff", "approval"];
+const lastCardPushAt = new Map<string, number>();
+
+export function allowCardPush(botId: string, kind: PushKind, now = Date.now()): boolean {
+  if (!DEDUPED.includes(kind)) return true;
+  const key = `${botId}:${kind}`;
+  const last = lastCardPushAt.get(key);
+  if (last !== undefined && now - last < PUSH_DEDUP_MS) return false;
+  lastCardPushAt.set(key, now);
+  return true;
+}
+
+/** Tylko dla testów: czyści okna limitów. */
 export function resetNotifyLimit(): void {
   lastNotifyAt.clear();
+  lastCardPushAt.clear();
 }
 
 export function registerPushDevice(id: string, token: string, botId?: string, userId?: string): void {
@@ -102,6 +127,7 @@ export async function notifyPushDevices(
   botId?: string,
   data?: Record<string, string>,
   audienceUserIds?: string[],
+  channel?: string,
 ): Promise<void> {
   const cfg = loadConfig();
   const devices = cfg.pushDevices ?? {};
@@ -127,8 +153,10 @@ export async function notifyPushDevices(
       body,
       priority: PRIORITY,
       // kanał niesie rodzaj sprawy (`channelForKind`); `data.kind` ustawia
-      // `pushForBot`, a wywołania bez niego zostają na kanale domyślnym
-      channelId: channelForKind(data?.kind as PushKind | undefined),
+      // `pushForBot`, a wywołania bez niego zostają na kanale domyślnym.
+      // `channel` podaje wołający, gdy `data.kind` nie opisuje kanału —
+      // komunikat serwera o zmianie adresu nie jest prośbą bota.
+      channelId: channel ?? channelForKind(data?.kind as PushKind | undefined),
       sound: "default",
       ttl,
       ...(data ? { data } : {}),
