@@ -107,10 +107,37 @@ function profileInitials(profile?: { name?: string; email?: string }): string {
  * POST /api/profile/avatar. Hover podświetla jak przycisk „Wtyczki", ale
  * TYLKO część flex-1 — z marginesem, żeby nie nachodził na koło zębate obok.
  */
+/** Bok kwadratowego panelu zdjęcia profilowego (px) i szerokość panelu na czas
+ * kadrowania (cropper ma podgląd 220 px + padding). */
+const PROFILE_POPOVER_SIZE = 240;
+const PROFILE_POPOVER_CROP_WIDTH = 288;
+
+/**
+ * multibot: pozycja panelu zdjęcia profilowego. Sidebar (`<aside>`) ma
+ * overflow-hidden, więc popover `absolute` był ucinany z PRAWEJ, gdy panel
+ * (240 px) wystawał poza sidebar (domyślnie też 240 px, footer ma padding
+ * 12 px) — prawa krawędź traciła zaokrąglone rogi. Dlatego popover jest
+ * `fixed` (jak menu kontekstowe i hover-karta bota) i liczony od prostokąta
+ * przycisku profilu, z clampem do viewportu.
+ */
+export function profilePopoverPosition(
+  rect: { top: number; left: number },
+  panelWidth: number,
+  innerWidth: number,
+  innerHeight: number,
+): { left: number; bottom: number } {
+  const margin = 8;
+  return {
+    left: Math.max(margin, Math.min(rect.left, innerWidth - panelWidth - margin)),
+    bottom: Math.max(margin, innerHeight - rect.top + margin),
+  };
+}
+
 function ProfileFooterButton() {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -194,7 +221,15 @@ function ProfileFooterButton() {
     <div ref={rootRef} className="relative min-w-0 flex-1">
       <button
         type="button"
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => {
+          if (open) {
+            close();
+            return;
+          }
+          const rect = rootRef.current?.getBoundingClientRect();
+          setAnchor(rect ? { top: rect.top, left: rect.left } : null);
+          setOpen(true);
+        }}
         aria-expanded={open}
         aria-haspopup="dialog"
         title={polish ? "Zdjęcie profilowe" : "Profile photo"}
@@ -218,10 +253,18 @@ function ProfileFooterButton() {
           // „Usuń zdjęcie") mieściły się bez ucinania; treść wyśrodkowana.
           // Cropper potrzebuje 220 px podglądu, więc na czas kadrowania
           // panel wraca do szerokości w-72 bez wymuszania kwadratu.
+          // FIXED zamiast absolute: `<aside>` sidebara ma overflow-hidden i
+          // ucinał panelowi prawą krawędź (patrz profilePopoverPosition).
           className={cn(
-            "absolute bottom-full left-0 z-50 mb-2 rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl",
+            "fixed z-50 rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl",
             pendingFile ? "w-72" : "w-60 aspect-square",
           )}
+          style={(() => {
+            const rect = anchor ?? { top: window.innerHeight, left: 8 };
+            const width = pendingFile ? PROFILE_POPOVER_CROP_WIDTH : PROFILE_POPOVER_SIZE;
+            const pos = profilePopoverPosition(rect, width, window.innerWidth, window.innerHeight);
+            return { left: pos.left, bottom: pos.bottom };
+          })()}
         >
           {!pendingFile ? (
             <div className="flex h-full flex-col items-center justify-center gap-3">

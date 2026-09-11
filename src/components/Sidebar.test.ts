@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Bot } from "@/state/store";
-import { clampSidebarWidth, groupMemberAvatarProps, hoverCardPosition, sidebarAvatarProps } from "./Sidebar";
+import { clampSidebarWidth, groupMemberAvatarProps, hoverCardPosition, profilePopoverPosition, sidebarAvatarProps } from "./Sidebar";
 // Ciągnięcie liczy wspólna mechanika paneli — szyna wnosi tylko swoje domknięcie.
 import { panelWidthFromDrag } from "./ResizablePanel";
 
@@ -77,8 +77,11 @@ describe("sidebar footer alignment", () => {
     expect(profileButton).toContain("<AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />");
     expect(profileButton).toContain('"/api/profile/avatar", { method: "POST"');
     expect(profileButton).toContain('"/api/profile/avatar", { method: "DELETE"');
-    // popover nad stopką, zakotwiczony przy przycisku — nie centralny modal
-    expect(profileButton).toContain("absolute bottom-full left-0");
+    // popover nad stopką, zakotwiczony przy przycisku — nie centralny modal;
+    // FIXED (nie absolute), bo `<aside>` ma overflow-hidden i ucinał prawą
+    // krawędź panelu — pozycję liczy profilePopoverPosition z clampem
+    expect(profileButton).toContain('"fixed z-50 rounded-2xl');
+    expect(profileButton).toContain("profilePopoverPosition(rect, width, window.innerWidth, window.innerHeight)");
     // kwadrat 240 px z zaokrąglonymi rogami w widoku awatara; przy kadrowaniu
     // wraca do w-72, bo podgląd croppera ma 220 px szerokości
     expect(profileButton).toContain('pendingFile ? "w-72" : "w-60 aspect-square"');
@@ -86,6 +89,23 @@ describe("sidebar footer alignment", () => {
     // treść wyśrodkowana w pionie i poziomie wewnątrz kwadratu
     expect(profileButton).toContain('"flex h-full flex-col items-center justify-center gap-3"');
     expect(profileButton).toContain("w-full text-center text-[12px]");
+  });
+});
+
+describe("profile popover position", () => {
+  it("anchors above the profile button at its left edge", () => {
+    // przycisk na dole okna 1280×900, top=860 → panel 8 px nad przyciskiem
+    expect(profilePopoverPosition({ top: 860, left: 12 }, 240, 1280, 900)).toEqual({ left: 12, bottom: 48 });
+  });
+
+  it("clamps to the right viewport edge so the square is never cut", () => {
+    // wąskie okno: 240-pikselowy panel nie mieści się od left=12 — cofa się
+    expect(profilePopoverPosition({ top: 860, left: 12 }, 240, 200, 900).left).toBe(8);
+    expect(profilePopoverPosition({ top: 860, left: 100 }, 240, 300, 900).left).toBe(300 - 240 - 8);
+  });
+
+  it("keeps the wider cropping panel fully visible too", () => {
+    expect(profilePopoverPosition({ top: 860, left: 12 }, 288, 240, 900).left).toBe(8);
   });
 });
 
