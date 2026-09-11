@@ -20,7 +20,7 @@ import {
   type FleetEnvironment,
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
-import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
@@ -59,6 +59,7 @@ import {
   ensureComputer,
   resumeComputer,
   exec as computerExec,
+  readComputerFile,
 } from "./hosted-computer.ts";
 import * as computerControl from "./computer-control.ts";
 // multibot: the browser half of the computer — CDP tools and the teach recorder,
@@ -3688,27 +3689,74 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // Ścieżka jest drogą główną: bot pisze plik swoim narzędziem i podaje
         // gdzie leży, zamiast przepychać jego bajty base64-em przez własne
         // wyjście — tam ucinały się już przy trzydziestu kilobajtach.
-        const buf = body.path
-          ? readFileSync(resolveBotFile(String(body.path)))
-          : Buffer.from(String(body.content ?? ""), "base64");
+        //
+        // Plik może leżeć w DWÓCH światach: na hoście (CLI dostawcy chodzi obok
+        // harnessu) albo w kontenerze komputera bota (bot zrobił go narzędziami
+        // `computer_exec`). Najpierw host — a gdy tam go nie ma, czytamy z
+        // kontenera. Fallback jest wyłącznie kontenerowy (sandbox bota), więc
+        // nie otwiera odczytu dowolnych plików hosta.
+        const declaredMime = String(body.mime ?? "application/octet-stream");
+        const byteLimit = declaredMime.toLowerCase().startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+        let buf: Buffer;
+        if (body.path) {
+          try {
+            buf = readFileSync(resolveBotFile(String(body.path)));
+          } catch (err) {
+            if ((err as { status?: number }).status !== 404) throw err;
+            buf = await readComputerFile(String(body.path), byteLimit);
+          }
+        } else {
+          buf = Buffer.from(String(body.content ?? ""), "base64");
+        }
         // Przy wysyłce po ścieżce nazwa pliku jest już znana — bot nie musi jej
         // powtarzać, a powtórzona bywała inna niż prawdziwa.
         const fallbackName = body.path ? basename(String(body.path)) : "file";
-        const meta = attachments.add(botId, String(body.name ?? fallbackName), String(body.mime ?? "application/octet-stream"), buf);
+        const meta = attachments.add(botId, String(body.name ?? fallbackName), declaredMime, buf);
         // Utrwalamy wiadomość z załącznikiem OD RAZU, w chwili sukcesu narzędzia.
         // Wcześniej plik czekał na najbliższy `assistant_text` — a dostawca potrafi
         // skończyć turę bez ani jednego kawałka tekstu (codex 10.09.2026) i plik
         // znikał bez śladu, mimo że bot dostał "File sent to the chat".
-        const message = store.appendMessage(bot.threadId, {
+        //
+        // DOKĄD trafia wiadomość — tam, gdzie toczy się bieżąca tura bota,
+        // dokładnie tak, jak tekst tej tury (bd63f22 pisał bezwarunkowo do
+        // prywatnego czatu i plik z tury grupowej lądował poza grupą):
+        //  - tura izolowana (delegacja) → jej wątek, nie prywatny czat;
+        //  - tura grupowa → wpis w prywatnym wątku jest ukryty (jak tekst
+        //    grupowy), a grupa dostaje link do pliku w swoim ledgerze;
+        //  - zwykła tura → prywatny czat, widocznie.
+        const isolatedThreadId = [...isolatedTurnBots.entries()].find(([, id]) => id === bot.id)?.[0];
+        const groupEntry = groupTurn.get(bot.id);
+        const groupOnly = !isolatedThreadId && isGroupOnlyTurn(bot.id, bot.threadId);
+        const targetThreadId = isolatedThreadId ?? bot.threadId;
+        const message = store.appendMessage(targetThreadId, {
           role: "bot",
           kind: "text",
           text: "",
           attachments: [meta],
+          ...(groupOnly ? { hidden: true } : {}),
         });
-        // Kropka „nieprzeczytane" na koniec tury liczy się z tego zbioru —
-        // plik w czacie to coś nowego dla użytkownika, tak samo jak tekst.
-        turnPushedVisible.add(bot.threadId);
-        broadcast({ kind: "message", threadId: bot.threadId, message });
+        if (groupOnly && groupEntry) {
+          // Grupowy ledger zna tylko tekst (GroupMessage bez załączników — nie
+          // zmieniamy kształtu zapisanych danych), więc plik jedzie jako link
+          // do istniejącego endpointu pobierania; bajty i tak leżą w store.
+          const link = `📎 [${meta.name}](/api/bots/${bot.id}/attachments/${meta.id})`;
+          rooms.append(groupEntry.roomId, bot.id, link);
+          broadcast({ kind: "room", room: rooms.get(groupEntry.roomId) });
+          groupStore.append(groupEntry.group.id, { from: bot.id, text: link });
+          const currentGroup = groupStore.get(groupEntry.group.id);
+          if (currentGroup) broadcast({ kind: "group", group: currentGroup });
+        } else if (isolatedThreadId) {
+          broadcast({ kind: "message", threadId: targetThreadId, message });
+        } else {
+          // Kropka „nieprzeczytane" na koniec tury liczy się z tego zbioru —
+          // plik w czacie to coś nowego dla użytkownika, tak samo jak tekst.
+          turnPushedVisible.add(bot.threadId);
+          // Tura, która dostarczyła plik, odezwała się do człowieka: bez tego
+          // tura „tylko plik, zero tekstu" kończyła się fałszywą notką
+          // „model nic nie napisał" (silentNote w turn.completed).
+          turnToldUser.add(bot.id);
+          broadcast({ kind: "message", threadId: bot.threadId, message });
+        }
         return json(res, 201, meta);
       }
       if (method === "POST" && path === "/api/internal/agent-action") {

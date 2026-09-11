@@ -76,5 +76,35 @@ describe("bot file delivery through real MCP, HTTP and transcript", () => {
     const response = await fetch(`${base}/api/bots/${bot.id}/attachments/${message.attachments[0].id}`, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("report bytes");
+    // A turn that delivered a file DID answer — the "model wrote nothing"
+    // note is false and must not appear after a file-only turn.
+    const silent = messages.filter((m: any) => typeof m.text === "string"
+      && (m.text.includes("turn ended without an answer") || m.text.includes("tura skończona bez odpowiedzi")));
+    expect(silent, "file-only turn must not get the silent-turn note").toEqual([]);
   }, 120_000);
+
+  it("routes a file sent during a group turn to the group ledger, not the private chat", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "files", model: "fake" } });
+    const group = (await api("POST", "/api/groups", { name: "Files", bot_ids: [bot.id] })).body;
+    const path = join(home, "group-report.txt");
+    writeFileSync(path, "group bytes");
+    rmSync(join(home, "results.json"), { force: true });
+    writeFileSync(join(home, "calls.json"), JSON.stringify([{ path, mime: "text/plain" }]));
+    const chat = await api("POST", `/api/groups/${group.id}/chat`, { message: "send the report to the group" });
+    expect(chat.status).toBe(200);
+    // The private chat must NOT show the file: the group turn's output belongs
+    // to the group (regression: bd63f22 wrote it to the private thread).
+    const messages = (await api("GET", `/api/bots/${bot.id}`)).body.bot.messages;
+    const leaked = messages.filter((m: any) => m.attachments?.length && !m.hidden);
+    expect(leaked, "group-turn file must not surface in the private chat").toEqual([]);
+    // The group sees the file as a download link in its ledger.
+    const stored = (await api("GET", `/api/groups/${group.id}`)).body;
+    const link = stored.messages.find((m: any) => typeof m.text === "string" && m.text.includes(`/api/bots/${bot.id}/attachments/`));
+    expect(link, "group ledger must carry the file link").toBeDefined();
+    const id = link.text.match(/attachments\/([0-9a-f-]{36})/)?.[1];
+    const response = await fetch(`${base}/api/bots/${bot.id}/attachments/${id}`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("group bytes");
+  }, 180_000);
 });

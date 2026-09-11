@@ -350,6 +350,67 @@ export async function exec(command: string, timeoutMs = 60_000): Promise<string>
   return docker(["exec", CONTAINER_NAME, "bash", "-lc", command], timeoutMs);
 }
 
+/** How a command reaches the computer for `readComputerFile` — injectable so
+ *  tests can fake the container without a docker daemon. */
+export type ComputerCommandRunner = (argv: string[], timeoutMs: number, maxBuffer: number) => Promise<string>;
+
+const defaultRunner: ComputerCommandRunner = async (argv, timeoutMs, maxBuffer) => {
+  if (computersDisabled()) throw new Error("the bot computer is disabled in this process");
+  const { file, args } = dockerCommand(argv);
+  const { stdout } = await run(file, args, { timeout: timeoutMs, maxBuffer });
+  return stdout;
+};
+
+/**
+ * Read one file from INSIDE the computer container, size-capped.
+ *
+ * Fallback for bot→user file delivery: the agent writes its file with the
+ * computer tools, so the path it hands to `send_file` lives in the container's
+ * filesystem, not the host's — `resolveBotFile` cannot see it. Deliberately
+ * container-only: on the `native` backend the computer IS the host, so the
+ * direct host lookup already covered it, and re-running the read here would
+ * just be a second way to read arbitrary host files.
+ *
+ * Base64 over `docker exec` stdout is fine (unlike the box REST run-command
+ * channel, which corrupts binary output — see computer-proxy.ts).
+ */
+export async function readComputerFile(
+  path: string,
+  maxBytes: number,
+  runner: ComputerCommandRunner = defaultRunner,
+  backend: Backend = BACKEND,
+): Promise<Buffer> {
+  const raw = String(path ?? "").trim();
+  // Newlines/NUL would break the quoted shell command; a real path has neither.
+  if (!raw || /[\r\n\0]/.test(raw)) throw Object.assign(new Error("path required"), { status: 422 });
+  if (backend !== "docker") {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host; the computer fallback is container-only)`), { status: 404 });
+  }
+  const quoted = `'${raw.replace(/'/g, "'\\''")}'`;
+  let sizeOut = "";
+  try {
+    sizeOut = await runner(["exec", CONTAINER_NAME, "bash", "-lc", `stat -c %s -- ${quoted}`], 30_000, 1 << 20);
+  } catch {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host and not on the bot computer)`), { status: 404 });
+  }
+  const size = Number(sizeOut.trim());
+  if (!Number.isFinite(size) || size <= 0) {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host and not on the bot computer)`), { status: 404 });
+  }
+  if (size > maxBytes) {
+    throw Object.assign(new Error(`file exceeds ${Math.floor(maxBytes / 1024 / 1024)} MB limit`), { status: 413 });
+  }
+  // base64 inflates 4/3 — budget for that plus slack, never less than the cap.
+  const stdout = await runner(
+    ["exec", CONTAINER_NAME, "bash", "-lc", `base64 -w0 -- ${quoted}`],
+    120_000,
+    Math.ceil(maxBytes * 1.5) + (1 << 20),
+  );
+  const buf = Buffer.from(stdout.trim(), "base64");
+  if (!buf.length) throw Object.assign(new Error(`no such file: ${raw} (unreadable on the bot computer)`), { status: 404 });
+  return buf;
+}
+
 /**
  * Destroy the computer and everything on it — logins, files, browser profile.
  *
