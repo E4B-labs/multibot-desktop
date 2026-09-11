@@ -14,6 +14,64 @@ export function deliveryLabel(card: OptionCardData, botName: string, polish: boo
   return polish ? `wysłano do: ${botName}` : `sent to ${botName}`;
 }
 
+/** Karta zgody: podtytuł niesie streszczenie akcji, a gdy autoweryfikacja
+ * prośbę przepuściła — także notę z regułą, doklejoną po nowej linii
+ * (`server/index.ts`, `request.opened`). Rozdzielamy je, bo w jednym wierszu
+ * drobnym drukiem nota zlewała się z poleceniem. */
+export function splitApprovalSubtitle(subtitle: string): { action: string; note: string } {
+  const nl = subtitle.indexOf("\n");
+  if (nl === -1) return { action: subtitle.trim(), note: "" };
+  return { action: subtitle.slice(0, nl).trim(), note: subtitle.slice(nl + 1).trim() };
+}
+
+export interface ApprovalValue {
+  /** Nazwa pola (klucz wejścia narzędzia) albo "" dla jednej gołej wartości. */
+  label: string;
+  value: string;
+}
+
+/** Konkretne wartości, na które człowiek się zgadza. Sterowniki wkładają w
+ * streszczenie albo polecenie/adres, albo `JSON.stringify(input)` narzędzia —
+ * ten drugi kształt rozkładamy na wiersze klucz → wartość, żeby przed
+ * kliknięciem było widać, którego pliku czy adresu to dotyczy. */
+export function approvalValues(action: string): ApprovalValue[] {
+  const text = action.trim();
+  if (!text) return [];
+  if (text.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const rows = Object.entries(parsed as Record<string, unknown>)
+          .map(([label, raw]) => ({
+            label,
+            value: (typeof raw === "string" ? raw : (JSON.stringify(raw) ?? "")).trim(),
+          }))
+          .filter((row) => row.value !== "");
+        if (rows.length) return rows;
+      }
+    } catch {
+      // Streszczenie bywa ucięte na 200 znakach — wtedy to już nie jest JSON
+      // i pokazujemy je tak, jak przyszło.
+    }
+  }
+  return [{ label: "", value: text }];
+}
+
+/** Stałe zdanie z baseline: zgoda dotyczy tego, co bot PROPONUJE. */
+export function approvalScopeNote(polish: boolean): string {
+  return polish
+    ? "Zgoda dotyczy proponowanej akcji — nie cofa pracy już wykonanej."
+    : "Approval covers the proposed action only; it does not undo work already done.";
+}
+
+/** Zakres pojedynczego przycisku: czym różni się „raz" od „zawsze". */
+export function optionScopeHint(option: string, polish: boolean): string {
+  if (option === "Allow") return polish ? "tylko ta jedna akcja" : "this action only";
+  if (option === "Allow for all") return polish ? "zapamiętuje regułę na przyszłość" : "remembers a rule for next time";
+  if (option === "Deny") return polish ? "bot tego nie zrobi" : "the bot will not do this";
+  return "";
+}
+
 export function OptionCard({
   botId,
   message,
@@ -38,6 +96,10 @@ export function OptionCard({
   };
 
   const approval = isApprovalCard(card);
+  // Karta zgody mówi, o co chodzi, ZANIM człowiek kliknie: co bot chce zrobić,
+  // z jakimi wartościami, co oznacza każdy przycisk i czego zgoda nie cofa.
+  const { action, note } = splitApprovalSubtitle(approval ? card.subtitle ?? "" : "");
+  const values = approval ? approvalValues(action) : [];
 
   // multibot: po odpowiedzi karta PYTANIA nie znika — zostaje w transkrypcie
   // jako pokwitowanie: o co pytał bot, co człowiek wybrał i czy to do bota
@@ -73,7 +135,7 @@ export function OptionCard({
             podał) jedzie pod spodem drobnym drukiem — miejsca jest mało. */}
         <div className="min-w-0">
           <div id={titleId} className="text-[16px] font-semibold text-ink">{card.title}</div>
-          {card.subtitle ? (
+          {card.subtitle && !approval ? (
             <div className="mt-0.5 text-[12px] leading-snug text-ink-secondary">
               {card.subtitle}
             </div>
@@ -89,6 +151,30 @@ export function OptionCard({
           <X size={16} />
         </button>
       </div>
+
+      {approval && values.length ? (
+        <div className="mt-3 rounded-lg border border-hairline/40 bg-inset px-3 py-2.5">
+          <div className="text-[11px] uppercase tracking-wide text-ink-secondary">
+            {polish ? "Co bot chce zrobić" : "What the bot wants to do"}
+          </div>
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            {values.map((v) => (
+              <div key={v.label || v.value} className="min-w-0">
+                {v.label ? (
+                  <div className="text-[11px] text-ink-secondary">{v.label}</div>
+                ) : null}
+                <div className="whitespace-pre-wrap break-words font-mono text-[12px] leading-snug text-ink">
+                  {v.value}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {approval && note ? (
+        <div className="mt-2 text-[11px] leading-snug text-ink-secondary">{note}</div>
+      ) : null}
 
       {multiple ? (
         // Natywne checkboxy w `<form>`: `FormData.getAll` oddaje zaznaczone
@@ -138,7 +224,14 @@ export function OptionCard({
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-[12px] font-medium text-ink-secondary">
                   {LETTERS[i]}
                 </span>
-                {opt}
+                <span className="min-w-0">
+                  {opt}
+                  {approval && optionScopeHint(opt, polish) ? (
+                    <span className="block text-[11px] leading-snug text-ink-secondary">
+                      {optionScopeHint(opt, polish)}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             ))}
           </div>
@@ -154,6 +247,10 @@ export function OptionCard({
           )}
         </>
       )}
+
+      {approval ? (
+        <p className="mt-3 text-[11px] leading-snug text-ink-secondary">{approvalScopeNote(polish)}</p>
+      ) : null}
     </div>
   );
 }
