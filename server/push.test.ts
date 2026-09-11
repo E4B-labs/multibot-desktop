@@ -43,12 +43,13 @@ describe("push na telefon (fake ACP fleet)", () => {
   let pushPort = 0;
   let home: string;
   let stderr = "";
+  let memberToken = "";
   const pushes: Push[] = [];
 
-  const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
+  const api = async (method: string, path: string, body?: unknown, token = TOKEN): Promise<{ status: number; body: any }> => {
     const res = await fetch(`${base}${path}`, {
       method,
-      headers: { authorization: `Bearer ${TOKEN}`, ...(body ? { "content-type": "application/json" } : {}) },
+      headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     return { status: res.status, body: await res.json() };
@@ -198,7 +199,16 @@ describe("push na telefon (fake ACP fleet)", () => {
       if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderr}`);
       await new Promise((r) => setTimeout(r, 150));
     }
+    const setup = JSON.parse(readFileSync(join(home, ".multibot", "setup.json"), "utf8"));
+    const values = await fetch(`${base}/api/setup/values`, { headers: { "x-multibot-setup": setup.setupToken } });
+    const { serverName, serverPassword } = await values.json() as any;
     TOKEN = await bootstrapAccessToken(base, home);
+    const member = await api("POST", "/api/auth/register", {
+      username: "push-member", password: "push-member-password", displayName: "Member", serverName, serverPassword,
+    });
+    expect(member.status).toBe(201);
+    memberToken = member.body.accessToken;
+    await api("POST", "/api/devices/member-phone/push", { token: "ExponentPushToken[member]" }, memberToken);
     await api("POST", "/api/devices/test-phone/push", { token: "ExponentPushToken[test]" });
   }, 40_000);
 
@@ -229,6 +239,106 @@ describe("push na telefon (fake ACP fleet)", () => {
     await until(() => kinds(botId).includes("reminder"), 20_000);
     return pushes.find((p) => p.data?.botId === botId && p.data?.kind === "reminder")!;
   }
+
+  async function waitForReply(botId: string, count = 1): Promise<any> {
+    let bot: any;
+    await expect.poll(async () => {
+      bot = await botState(botId);
+      return !bot?.busy && bot?.messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.text).length >= count;
+    }, { timeout: 30_000 }).toBe(true);
+    return bot;
+  }
+
+  async function runOnce(botId: string): Promise<void> {
+    const created = await api("POST", `/api/bots/${botId}/routines`, {
+      name: "Scheduled report", prompt: "Check the report; request attention only if a decision cannot wait.",
+      schedule: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(created.status).toBe(201);
+    expect((await api("POST", `/api/bots/${botId}/routines/${created.body.id}/run`)).status).toBe(200);
+    await waitForReply(botId);
+  }
+
+  it("one-shot scheduled work starts and finishes without a reminder push", async () => {
+    const botId = await newBot("Scheduled worker", "happy");
+    await runOnce(botId);
+    expect(kinds(botId)).toEqual([]);
+  }, 45_000);
+
+  it("a routine can explicitly notify, with no automatic start/end push and dedupe across turns", async () => {
+    const botId = await newBot("Routine escalation", "grokNotify");
+    await api("PATCH", `/api/bots/${botId}`, { visibility: "private" });
+    await runOnce(botId);
+    await until(() => kinds(botId).includes("notify"));
+    expect(kinds(botId)).toEqual(["notify"]);
+    expect(pushes.filter((p) => p.data?.botId === botId).map((p) => p.to)).toEqual(["ExponentPushToken[test]"]);
+    await api("POST", `/api/bots/${botId}/messages`, { text: "Check again" });
+    const bot = await waitForReply(botId, 2);
+    expect(bot.messages.some((m: any) => m.text?.includes('"collapsed": true'))).toBe(true);
+    expect(kinds(botId)).toEqual(["notify"]);
+  }, 60_000);
+
+  it("a read-only bot can intentionally request attention", async () => {
+    const botId = await newBot("Read-only monitor", "grokNotify");
+    expect((await api("PATCH", `/api/bots/${botId}/access`, { access: "read-only" })).status).toBe(200);
+    await api("POST", `/api/bots/${botId}/messages`, { text: "Check for a blocker" });
+    await waitForReply(botId);
+    await until(() => kinds(botId).includes("notify"), 1_000);
+    expect(kinds(botId)).toContain("notify");
+  }, 45_000);
+
+  it("a member's reminder on a team bot notifies only that member over push, SSE and WebSocket", async () => {
+    const botId = await newBot("Shared reminder bot", "happy");
+    const streams: Array<{ frames: any[]; close: () => void }> = [];
+    for (const token of [TOKEN, memberToken]) {
+      const frames: any[] = [];
+      const socket = new WebSocket(`${base.replace("https", "wss")}/api/events`, ["multibot-v2", token]);
+      socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)));
+      streams.push({ frames, close: () => socket.close() });
+      await expect.poll(() => frames.some((f) => f.kind === "hello")).toBe(true);
+      const abort = new AbortController();
+      const response = await fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${token}` }, signal: abort.signal });
+      const sseFrames: any[] = [];
+      streams.push({ frames: sseFrames, close: () => abort.abort() });
+      void (async () => {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let end: number;
+            while ((end = buffer.indexOf("\n\n")) >= 0) {
+              const frame = buffer.slice(0, end);
+              buffer = buffer.slice(end + 2);
+              if (frame.startsWith("data: ")) sseFrames.push(JSON.parse(frame.slice(6)));
+            }
+          }
+        } catch { /* aborted in cleanup */ }
+      })();
+    }
+    try {
+      const created = await api("POST", "/api/reminders", {
+        botId, text: "Member appointment", at: new Date(Date.now() + 1_000).toISOString(),
+      }, memberToken);
+      expect(created.status).toBe(201);
+      await expect.poll(() => kinds(botId)).toEqual(["reminder"]);
+      expect(pushes.find((p) => p.data?.botId === botId)?.to).toBe("ExponentPushToken[member]");
+      for (const { frames } of streams) {
+        await expect.poll(() => frames.some((f) => f.kind === "workspace" && f.resource === "reminders" && f.botId === botId)).toBe(true);
+      }
+      for (const { frames } of streams.slice(2)) {
+        await expect.poll(() => frames.filter((f) => f.kind === "notify" && f.botId === botId).length).toBe(1);
+      }
+      for (const { frames } of streams.slice(0, 2)) {
+        expect(frames.filter((f) => f.kind === "notify" && f.botId === botId)).toEqual([]);
+      }
+    } finally {
+      for (const stream of streams) stream.close();
+    }
+  }, 45_000);
 
   it("pytanie do człowieka NIE brzęczy telefonu (ani start tury)", async () => {
     const botId = await newBot("Pytacz", "grokAsk");
