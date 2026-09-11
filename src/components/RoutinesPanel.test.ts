@@ -53,8 +53,12 @@ describe("wynik przebiegu rutyny", () => {
       { at, status: "ok" },
       { at, status: "unknown" },
     ];
-    expect(runsSummary(runs, true)).toBe("Historia przebiegów: 2 udanych, 1 nieudanych z 4");
-    expect(runsSummary(runs, false)).toBe("Run history: 2 successful, 1 failed out of 4");
+    // szare kropki też są policzone — inaczej suma nie zgadza się z obrazkiem
+    expect(runsSummary(runs, true)).toBe("Historia przebiegów: 2 udanych, 1 nieudanych, 1 bez wyniku z 4");
+    expect(runsSummary(runs, false)).toBe("Run history: 2 successful, 1 failed, 1 with no result out of 4");
+    expect(runsSummary([{ at, status: "queued" }], true)).toBe("Historia przebiegów: 0 udanych, 0 nieudanych, 1 w toku z 1");
+    // sam sukces i porażka: bez pustych ogonów w zdaniu
+    expect(runsSummary([{ at, status: "ok" }], false)).toBe("Run history: 1 successful, 0 failed out of 1");
     expect(runsSummary([], false)).toBe("Run history: 0 successful, 0 failed out of 0");
   });
 });

@@ -361,6 +361,14 @@ export class HarnessRoutines {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     // Harness gaśnie: tury, na które czekaliśmy, nie zameldują już wyniku.
+    this.abandonPendingRuns();
+  }
+
+  /** Tury przepadły bez zdarzenia końca — przeładowanie dostawców
+   * (`bus.detachAll()` + `disposeAll()`), zamknięcie procesu. Nikt ich już nie
+   * domknie, więc wiszące przebiegi dostają `unknown` teraz, a nie po
+   * restarcie. */
+  abandonPendingRuns(): void {
     if (this.forgetPendingRuns("harness-stopped")) this.persist();
   }
 
@@ -378,7 +386,11 @@ export class HarnessRoutines {
     // `webhookFor` oddaje KOPIĘ rekordu (bo niesie sekret), więc historię i
     // następny termin zapisujemy zawsze na ŻYWYM rekordzie — inaczej przebieg
     // z webhooka mutował klon i nie zostawiał po sobie ani śladu.
-    const job = this.jobs.find((item) => item.id === input.id) ?? input;
+    const job = this.jobs.find((item) => item.id === input.id);
+    // Rutyna zniknęła między wyszukaniem a odpaleniem (kasowanie w trakcie
+    // webhooka). Odpalenie na klonie zapisałoby wpis w nicość i zajęło slot
+    // wynikiem, którego nikt nie odbierze.
+    if (!job) return;
     if (this.running.has(job.id)) return;
     this.running.add(job.id);
     // Wpis i slot powstają PRZED dyspozycją: `dispatch` tylko kolejkuje turę,
@@ -386,6 +398,9 @@ export class HarnessRoutines {
     // po dyspozycji, wynik trafiał w próżnię i przebieg zostawał `queued`.
     const entry: RoutineRun = { at: new Date(this.now()).toISOString(), status: "queued" };
     job.last_runs.unshift(entry);
+    // FIFO działa, bo `startTurn` idzie od bramki `bot.busy` do `busy: true`
+    // BEZ `await`: dwie tury jednego bota nie mogą wystartować naprzemiennie,
+    // więc kolejność wejścia do tej kolejki to kolejność tur.
     this.pending.set(job.botId, [...(this.pending.get(job.botId) ?? []), { routineId: job.id, entry }]);
     try {
       // Advance before dispatch: crash/restart cannot replay a token-spending turn.

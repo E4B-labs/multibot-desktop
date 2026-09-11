@@ -156,12 +156,21 @@ export function runTitle(run: Routine["last_runs"][number], polish: boolean): st
 }
 
 /** Pasek kropek niesie znaczenie samym KOLOREM, więc czytnik ekranu dostaje
- * jedno zdanie z podsumowaniem zamiast dziesięciu bezimiennych punktów. */
+ * jedno zdanie z podsumowaniem zamiast dziesięciu bezimiennych punktów.
+ * Szare kropki (`queued`, `unknown`, brak statusu) też są policzone — inaczej
+ * suma nie zgadzałaby się z tym, co widać. */
 export function runsSummary(runs: Routine["last_runs"], polish: boolean): string {
-  const count = (status: string) => runs.filter((run) => run.status === status).length;
+  const ok = runs.filter((run) => run.status === "ok").length;
+  const failed = runs.filter((run) => run.status === "error").length;
+  const running = runs.filter((run) => run.status === "queued").length;
+  const unclear = runs.length - ok - failed - running;
+  const parts = polish
+    ? [`${ok} udanych`, `${failed} nieudanych`, running && `${running} w toku`, unclear && `${unclear} bez wyniku`]
+    : [`${ok} successful`, `${failed} failed`, running && `${running} running`, unclear && `${unclear} with no result`];
+  const body = parts.filter(Boolean).join(", ");
   return polish
-    ? `Historia przebiegów: ${count("ok")} udanych, ${count("error")} nieudanych z ${runs.length}`
-    : `Run history: ${count("ok")} successful, ${count("error")} failed out of ${runs.length}`;
+    ? `Historia przebiegów: ${body} z ${runs.length}`
+    : `Run history: ${body} out of ${runs.length}`;
 }
 
 function RoutineForm({

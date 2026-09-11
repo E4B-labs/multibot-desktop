@@ -158,6 +158,37 @@ describe("driver-neutral routines", () => {
     expect(routines.settleRun("bot-cli")).toBe(false);
   });
 
+  // Rutyna skasowana MIĘDZY `webhookFor` a `fire`: kopia rekordu wciąż istnieje,
+  // ale odpalenie jej zapisałoby wpis w nicość i zajęło slot na wynik, po który
+  // nikt nie przyjdzie.
+  it("refuses to run a routine that no longer exists", async () => {
+    const dispatch = vi.fn(async () => {});
+    const routines = new HarnessRoutines(file(), dispatch, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Notify", prompt: "react" });
+    routines.enableWebhookTrigger("bot-cli", job.id);
+    const hook = routines.webhookFor(job.id)!;
+    routines.delete("bot-cli", job.id);
+
+    await routines.fire(hook, '{"event":"completed"}');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(routines.settleRun("bot-cli")).toBe(false); // żaden slot nie został zajęty
+  });
+
+  // `reloadProviders` robi `bus.detachAll()` + `disposeAll()`: tury giną BEZ
+  // `turn.completed`, więc nikt nie domknie przebiegów, które na nie czekały.
+  it("abandons pending runs when the provider fleet is torn down", async () => {
+    const path = file();
+    const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
+    const job = routines.create("bot-cli", { name: "Digest", prompt: "go" });
+    await routines.runNow("bot-cli", job.id);
+
+    routines.abandonPendingRuns();
+    expect(routines.list("bot-cli")[0].last_runs[0]).toMatchObject({ status: "unknown", reason: "harness-stopped" });
+    expect(JSON.parse(readFileSync(path, "utf8"))[0].last_runs[0].status).toBe("unknown");
+    // slot zwolniony: spóźniony koniec tury nie ma czego nadpisać
+    expect(routines.settleRun("bot-cli")).toBe(false);
+  });
+
   it("records the failure text when the turn ends badly, and ignores bots with nothing pending", async () => {
     const path = file();
     const routines = new HarnessRoutines(path, async () => {}, () => 1_000, 0);
