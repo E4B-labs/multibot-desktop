@@ -65,7 +65,7 @@ describe("wiersz grupy w Sidebarze", () => {
     const row = sidebar.slice(start, end);
     expect(row).not.toContain("-space-x-");
     expect(row).not.toContain("groupAvatarStack");
-    // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) zwraca animated:false
-    expect(row).toContain("{...groupMemberAvatarProps(member)}");
+    // sidebarAvatarProps (pod aliasem groupMemberAvatarProps) z fazą tury: rusza się tylko pracujący bot
+    expect(row).toContain("{...groupMemberAvatarProps(member, liveTurn(state, member))}");
   });
 });

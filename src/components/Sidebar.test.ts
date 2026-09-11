@@ -21,28 +21,44 @@ describe("sidebar avatar", () => {
   const bot = (over: Partial<Bot>): Bot =>
     ({ id: "b1", name: "Bot", color: "#fff", messages: [], ...over }) as Bot;
 
-  // Jeden animowany bot na cala aplikacje stoi na pasku nad composerem, wiec
-  // pasek boczny nie rusza sie NIGDY — takze pod bota w trakcie tury.
-  it("freezes every bot, busy or not", () => {
-    const still = { state: "idle", motion: "none", animated: false, motionKey: 0 };
-    expect(sidebarAvatarProps(bot({ busy: false }))).toEqual(still);
-    expect(sidebarAvatarProps(bot({ busy: true }))).toEqual(still);
-  });
-
-  it("uses the same paused animation state for group members", () => {
-    const idle = groupMemberAvatarProps(bot({ busy: false }));
-    expect(idle.animated).toBe(false);
-    expect(idle.state).toBe("idle");
-    expect(idle.motion).toBe("none");
-
-    const busy = groupMemberAvatarProps(bot({ id: "b2", busy: true }));
-    expect(busy.animated).toBe(false);
+  // Roster pokazuje stan bota: bezczynny stoi na „idle", zajęty pracuje i się
+  // rusza — ta sama tabela co pasek nad composerem.
+  it("idle bot stands still, busy bot works and animates", () => {
+    expect(sidebarAvatarProps(bot({ busy: false }))).toEqual({ state: "idle", motion: "none", animated: false, motionKey: 0 });
+    const busy = sidebarAvatarProps(bot({ busy: true }));
+    expect(busy.state).toBe("working");
+    expect(busy.animated).toBe(true);
     expect(busy.motion).toBe("none");
   });
 
-  it("uses the same state and motion contract as a single bot avatar", () => {
-    const member = bot({ id: "b3", avatarUrl: "data:image/png;base64,a" });
-    expect(groupMemberAvatarProps(member)).toEqual(sidebarAvatarProps(member));
+  it("follows the live turn phase when given", () => {
+    const b = bot({ busy: true });
+    expect(sidebarAvatarProps(b, { runtime: { kind: "reasoning", at: 1 }, now: 2 }).state).toBe("thinking");
+    expect(sidebarAvatarProps(b, { runtime: { kind: "tool", at: 1 }, now: 2 }).state).toBe("working");
+  });
+
+  it("unread bot gets the face but no animation — the dot already says it", () => {
+    const unread = sidebarAvatarProps(bot({ unread: true }));
+    expect(unread.state).toBe("notifying");
+    expect(unread.animated).toBe(false);
+  });
+
+  it("group members follow the same rule as a single bot avatar", () => {
+    const idle = groupMemberAvatarProps(bot({ busy: false }));
+    expect(idle).toEqual(sidebarAvatarProps(bot({ busy: false })));
+    expect(idle.animated).toBe(false);
+    const busy = groupMemberAvatarProps(bot({ id: "b2", busy: true }));
+    expect(busy.state).toBe("working");
+    expect(busy.animated).toBe(true);
+  });
+
+  it("hover card carries the activity line and long-press opens it on touch", () => {
+    const card = sidebarSource.slice(sidebarSource.indexOf("function BotHoverCard"), sidebarSource.indexOf("function BotListItem"));
+    expect(card).toContain("activityPhrase(bot, live, lang)");
+    expect(card).toContain("data-mb-bot-activity");
+    const row = sidebarSource.slice(sidebarSource.indexOf("function BotListItem"), sidebarSource.indexOf("function GroupContextMenu"));
+    expect(row).toContain("onTouchStart={(e) => onHover?.(bot.id");
+    expect(row).toContain("onTouchEnd={() => onUnhover?.()}");
   });
 });
 
@@ -270,7 +286,8 @@ describe("bot hover card position", () => {
   });
 
   it("nie wychodzi poza dolną krawędź", () => {
-    expect(hoverCardPosition(row(800, 240), 1280, 900).top).toBe(900 - 120 - 8);
+    // 144 = kafelek z wierszem „co teraz robi" (HOVER_CARD_HEIGHT)
+    expect(hoverCardPosition(row(800, 240), 1280, 900).top).toBe(900 - 144 - 8);
     expect(hoverCardPosition(row(10, 240), 1280, 100).top).toBe(8);
   });
 });

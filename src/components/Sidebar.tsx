@@ -31,7 +31,7 @@ import { Skeleton, Spinner } from "./Loading";
 import { AvatarCropper } from "./AvatarCropper";
 import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { activityPhrase, CELEBRATE_MS, type LiveTurn, type RuntimePhase, sidebarAvatarProps } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
@@ -67,10 +67,31 @@ export { sidebarAvatarProps };
 
 /**
  * Awatar czlonka grupy w stosie na wierszu grupy — dokladnie ta sama zasada
- * co wiersz bota: stoi, dopoki bot nie pracuje.
+ * co wiersz bota: stoi, dopoki bot nie pracuje, a pracujacy sie rusza.
  */
-export function groupMemberAvatarProps(bot: Bot) {
-  return sidebarAvatarProps(bot);
+export function groupMemberAvatarProps(bot: Bot, live: LiveTurn = {}) {
+  return sidebarAvatarProps(bot, live);
+}
+
+/**
+ * Wiersze tabeli stanów zależne od czasu (loading po 10 s, celebrate gaśnie po
+ * 1 s) nie mają własnego eventu — przy żywej turze tykamy co pół sekundy, tak
+ * jak pasek nad composerem. Bez tury zegar stoi i nic się nie przelicza.
+ */
+function useMascotClock(active: boolean): number {
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [active]);
+  return clock;
+}
+
+/** Fazę tury i strumień tekstu trzyma store per wątek, nie per bot. */
+function liveTurn(state: { runtime: Record<string, RuntimePhase>; streaming: Record<string, string> }, bot: Bot, now?: number): LiveTurn {
+  return { runtime: state.runtime[bot.threadId] ?? null, streaming: state.streaming[bot.threadId] !== undefined, now };
 }
 
 function readSidebarWidth(key: string, fallback: number): number {
@@ -747,7 +768,8 @@ function SectionPicker({
  * opisu i odstęp od krawędzi okna. Kafelek jest `fixed`, więc żaden rodzic go nie
  * domyka — pozycję trzeba policzyć samemu. */
 const HOVER_CARD_WIDTH = 288;
-const HOVER_CARD_HEIGHT = 120;
+// 120 + 24 px wiersza „co teraz robi" (zmierzone: pojawia się tylko przy zajętym bocie)
+const HOVER_CARD_HEIGHT = 144;
 const HOVER_CARD_MARGIN = 8;
 
 /** Kafelek staje po prawej stronie wiersza, ale nigdy poza oknem — ani po prawej,
@@ -769,21 +791,30 @@ export function hoverCardPosition(
 
 // Kafelek hovera: te same klasy co menu kontekstowe, ale pointer-events-none —
 // musnięcie kafelka nie może go zgasić. Pozycję liczy Sidebar (clamp do viewportu).
-function BotHoverCard({ bot, top, left }: { bot: Bot; top: number; left: number }) {
+function BotHoverCard({ bot, live, top, left }: { bot: Bot; live: LiveTurn; top: number; left: number }) {
   const lang = useLanguage();
   const last = bot.messages[bot.messages.length - 1];
+  // „co teraz robi" — zdanie z tej samej tabeli co mina; przy bezczynnym bocie
+  // wiersza nie ma wcale, kafelek wygląda jak dotąd.
+  const doing = activityPhrase(bot, live, lang);
   return (
     <div
       style={{ top, left }}
       className="pointer-events-none fixed z-50 w-72 max-w-[calc(100vw-16px)] rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
     >
       <div className="flex items-center gap-2">
-        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={28} animated={false} />
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} size={28} {...sidebarAvatarProps(bot, live)} />
         {/* godzina na wysokości nazwy; flex-1 na nazwie trzyma ją przy prawej
             krawędzi kafelka (ta sama oś X co wcześniej) */}
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{botDisplayName(bot, lang)}</span>
         {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
       </div>
+      {doing && (
+        <div data-mb-bot-activity className="mt-1.5 flex items-center gap-1.5 text-[12px] text-ink">
+          <span className="size-1.5 shrink-0 rounded-full bg-accent" />
+          <span className="truncate">{doing}</span>
+        </div>
+      )}
       <div className="mt-1.5">
         {/* opis ma pierwszeństwo; bez opisu — ostatnie zadanie/wiadomość (preview) */}
         <span className="line-clamp-2 text-[12.5px] leading-snug text-ink-secondary">
@@ -811,7 +842,10 @@ function BotListItem({
   // U20: zaznaczenie ma być jedno — po otwarciu grupy bot przestaje być
   // podświetlony (inaczej świecą dwa: grupa i ostatni bot).
   const selected = state.selectedId === bot.id && !state.groupOpen;
-  const avatar = sidebarAvatarProps(bot);
+  // Zegar tyka tylko przy żywej turze albo w sekundzie świętowania po niej.
+  const runtime = state.runtime[bot.threadId];
+  const clock = useMascotClock(!!bot.busy || (runtime?.kind === "done" && Date.now() - runtime.at < CELEBRATE_MS));
+  const avatar = sidebarAvatarProps(bot, liveTurn(state, bot, clock));
   const lang = useLanguage();
   const last = bot.messages[bot.messages.length - 1];
   return (
@@ -821,6 +855,11 @@ function BotListItem({
         e.preventDefault();
         onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
       }}
+      // Dotyk: przytrzymanie wiersza pokazuje ten sam kafelek co hover (350 ms
+      // opóźnienia siedzi w `showHoverCard`, więc zwykłe tapnięcie go nie budzi).
+      onTouchStart={(e) => onHover?.(bot.id, e.currentTarget.getBoundingClientRect())}
+      onTouchEnd={() => onUnhover?.()}
+      onTouchCancel={() => onUnhover?.()}
       // multibot 0.1.46: bota można przeciągnąć na wiersz grupy (filtracja składu)
       draggable
       onDragStart={(e) => {
@@ -1170,7 +1209,7 @@ function GroupRow({
                 avatarUrl={member.avatarUrl}
                 shape={member.mascotShape}
                 size={layout === "solo" ? 48 : 24}
-                {...groupMemberAvatarProps(member)}
+                {...groupMemberAvatarProps(member, liveTurn(state, member))}
                 trackPointerWhenPaused
               />
             </span>
@@ -1381,6 +1420,8 @@ export function Sidebar() {
   // przejeżdżaniu myszką przez listę; wyjazd z wiersza kasuje go natychmiast.
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Jeden zegar dla szyny i kafelka hovera; wiersze listy mają własny.
+  const clock = useMascotClock(state.bots.some((b) => b.busy));
   const showHoverCard = (botId: string, rect: DOMRect) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     const { top, left } = hoverCardPosition(rect, window.innerWidth, window.innerHeight);
@@ -1691,7 +1732,7 @@ export function Sidebar() {
                       color={b.color} avatarUrl={b.avatarUrl}
                       shape={b.mascotShape}
                       size={avatarSize}
-                      {...sidebarAvatarProps(b)}
+                      {...sidebarAvatarProps(b, liveTurn(state, b, clock))}
                       trackPointerWhenPaused
                     />
                     <span className="w-full truncate text-center text-[12px] font-medium leading-tight text-ink">
@@ -1866,7 +1907,7 @@ export function Sidebar() {
       {scoutOpen && <ScoutTeamModal onClose={() => setScoutOpen(false)} />}
       {hover && (() => {
         const bot = state.bots.find((b) => b.id === hover.botId);
-        return bot ? <BotHoverCard bot={bot} top={hover.top} left={hover.left} /> : null;
+        return bot ? <BotHoverCard bot={bot} live={liveTurn(state, bot, clock)} top={hover.top} left={hover.left} /> : null;
       })()}
     </aside>
   );

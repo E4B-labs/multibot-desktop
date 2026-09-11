@@ -6,8 +6,11 @@ import {
   BOT_COLOR_NAMES,
   MODEL_LOAD_MS,
   WRITING_MS,
+  activityPhrase,
   pickerAvatarState,
+  sidebarAvatarProps,
   stripMascotState,
+  toolPhrase,
   type MascotBotProfile,
   type RuntimePhase,
 } from "./mascot";
@@ -263,5 +266,81 @@ describe("pickerAvatarState", () => {
     expect(pickerAvatarState({ mascotExpression: null })).toBe("happy");
     expect(pickerAvatarState({ mascotExpression: "not-a-state" })).toBe("happy");
     expect(pickerAvatarState({ mascotExpression: "thinking-dots" })).toBe("happy");
+  });
+});
+
+describe("sidebarAvatarProps — roster shows the live state", () => {
+  const b = (over: Partial<MascotBotProfile> = {}): MascotBotProfile => ({ name: "Atlas", messages: [], ...over });
+
+  it("idle bot is idle and still", () => {
+    expect(sidebarAvatarProps(b())).toEqual({ state: "idle", motion: "none", animated: false, motionKey: 0 });
+  });
+
+  it("busy bot is working and animated; tool in flight too", () => {
+    expect(sidebarAvatarProps(b({ busy: true }))).toMatchObject({ state: "working", animated: true });
+    expect(sidebarAvatarProps(b({ busy: true }), { runtime: { kind: "tool", at: NOW }, now: NOW })).toMatchObject({ state: "working", animated: true });
+    expect(sidebarAvatarProps(b({ busy: true }), { runtime: { kind: "reasoning", at: NOW }, now: NOW }).state).toBe("thinking");
+  });
+
+  it("finished turn returns to idle", () => {
+    expect(sidebarAvatarProps(b({ busy: false }), { runtime: { kind: "done", at: NOW - CELEBRATE_MS }, now: NOW }).state).toBe("idle");
+  });
+});
+
+describe("toolPhrase — never the raw tool name", () => {
+  it("maps the common tools to sentences, in both languages", () => {
+    expect(toolPhrase("Bash")).toBe("Runs a command");
+    expect(toolPhrase("Bash", "pl")).toBe("Uruchamia polecenie");
+    expect(toolPhrase("git status && npm test")).toBe("Runs a command");
+    expect(toolPhrase("Read")).toBe("Reads files");
+    expect(toolPhrase("Edit", "pl")).toBe("Edytuje pliki");
+    expect(toolPhrase("edit")).toBe("Edits files");
+    expect(toolPhrase("WebSearch")).toBe("Searches the web");
+    expect(toolPhrase("web_search", "pl")).toBe("Szuka w sieci");
+    expect(toolPhrase("WebFetch")).toBe("Reads a web page");
+    expect(toolPhrase("Agent")).toBe("Delegates a task");
+    expect(toolPhrase("Skill")).toBe("Uses a skill");
+    expect(toolPhrase("mcp__computer__navigate")).toBe("Browses the web");
+    expect(toolPhrase("mcp__computer__navigate", "pl")).toBe("Przegląda internet");
+    expect(toolPhrase("mcp__computer__screenshot")).toBe("Looks at the screen");
+    expect(toolPhrase("mcp__computer__read_page", "pl")).toBe("Patrzy na ekran");
+    expect(toolPhrase("mcp__computer__click")).toBe("Uses the computer");
+    expect(toolPhrase("mcp__agents__ask_bot")).toBe("Asks a colleague");
+    expect(toolPhrase("mcp__github__create_issue")).toBe("Uses github");
+    expect(toolPhrase("error: boom")).toBe("Hit an error");
+  });
+
+  it("unknown names fall back to a generic sentence, never the name", () => {
+    for (const name of ["frobnicate_widgets", "XyzThing", "mystery"]) {
+      expect(toolPhrase(name)).toBe("Uses a tool");
+      expect(toolPhrase(name, "pl")).toBe("Używa narzędzia");
+      expect(toolPhrase(name)).not.toContain(name);
+    }
+  });
+});
+
+describe("activityPhrase — what the bot does now", () => {
+  const b = (over: Partial<MascotBotProfile> = {}): MascotBotProfile => ({ name: "Atlas", messages: [], ...over });
+
+  it("idle bot has no phrase", () => {
+    expect(activityPhrase(b())).toBeNull();
+  });
+
+  it("tool in flight → the tool sentence; finished tool → generic work", () => {
+    expect(activityPhrase(b({ busy: true, messages: [activity(NOW)] }))).toBe("Runs a command");
+    expect(activityPhrase(b({ busy: true, messages: [{ kind: "activity", at: NOW, tool: { name: "Screen frame" } } as any] }), {}, "pl")).toBe("Patrzy na ekran");
+    expect(activityPhrase(b({ busy: true, messages: [activity(NOW, true)] }))).toBe("Works on it");
+    expect(activityPhrase(b({ busy: true, messages: [{ kind: "screen", at: NOW }] }))).toBe("Looks at the screen");
+  });
+
+  it("follows the turn phase and the waiting states", () => {
+    expect(activityPhrase(b({ busy: true }), { runtime: { kind: "reasoning", at: NOW }, now: NOW })).toBe("Thinks");
+    expect(activityPhrase(b({ busy: true }), { runtime: { kind: "reasoning", at: NOW }, now: NOW }, "pl")).toBe("Myśli");
+    expect(activityPhrase(b({ busy: true }), { runtime: { kind: "text", at: NOW }, streaming: true, now: NOW })).toBe("Writes a reply");
+    expect(activityPhrase(b({ busy: true }), { runtime: { kind: "start", at: NOW - MODEL_LOAD_MS }, now: NOW })).toBe("Warms up the model");
+    expect(activityPhrase(b({ messages: [{ kind: "secret" }] }))).toBe("Waits for your answer");
+    expect(activityPhrase(b({ needsAttention: "disk full" }), {}, "pl")).toBe("Potrzebuje Twojej uwagi");
+    expect(activityPhrase(b(), { runtime: { kind: "done", at: NOW }, now: NOW })).toBe("Just finished");
+    expect(activityPhrase(b(), { engaged: true })).toBe("Listens to a colleague");
   });
 });

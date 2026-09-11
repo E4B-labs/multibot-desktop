@@ -4,16 +4,17 @@ import { describe, expect, it } from "vitest";
 
 import { MOTION, bodyTransform, type BlobState } from "./BlobAvatar";
 
-// multibot: „max 1 animowany bot, wszedzie". `BotAvatar` domyslnie ma
-// `animated=true` (Avatar.tsx), wiec KAZDE nowe uzycie zaczyna mrugac i
-// oddychac samo z siebie — tak wrocily animacje w karcie hovera sidebaru,
-// w panelu ustawien bota i w onboardingu. Jedyne animowane wystapienie ma byc
-// to na pasku nad composerem.
+// multibot: animuje sie tylko bot, z ktorym cos sie dzieje. `BotAvatar`
+// domyslnie ma `animated=true` (Avatar.tsx), wiec KAZDE nowe uzycie zaczyna
+// mrugac i oddychac samo z siebie — tak wrocily animacje w panelu ustawien
+// bota i w onboardingu. Pasek nad composerem animuje zawsze; roster, wiersz
+// grupy i kafelek hovera biora `animated` z `sidebarAvatarProps`, ktore
+// wlacza je WYLACZNIE przy zywym stanie (pracuje, mysli, czeka na czlowieka)
+// i wylacza dla bezczynnego bota (pilnuje tego Sidebar.test.ts).
 //
 // Vitest chodzi w node bez jsdom, wiec czytamy zrodla: kazdy tag <BotAvatar
 // poza Composerem musi jawnie wylaczyc animacje — wprost `animated={false}`
-// albo przez propsy z `sidebarAvatarProps`, ktore zwraca `animated: false`
-// dla kazdego bota (pilnuje tego Sidebar.test.ts).
+// albo przez propsy z `sidebarAvatarProps` / `groupMemberAvatarProps`.
 const dir = fileURLToPath(new URL(".", import.meta.url));
 
 /** Wylaczona animacja: wprost, przez propsy helpera albo przez jego spread. */
