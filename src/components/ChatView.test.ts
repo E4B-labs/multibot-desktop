@@ -395,3 +395,22 @@ describe("pobranie pliku przez powłokę telefonu", () => {
     expect(chat).toContain("if (url) window.open(url, \"_blank\", \"noopener,noreferrer\");");
   });
 });
+
+// multibot K2: wzmianka nie może zniknąć w chwili wysłania. Composer koloruje
+// `@Imię` w trakcie pisania; dymek użytkownika leci czystym tekstem, więc bez
+// MentionText wracał tam surowy zapis i chip „gasł" po Enterze.
+describe("wzmianka w wysłanej wiadomości użytkownika", () => {
+  const peerBadge = readFileSync(new URL("./PeerBadge.tsx", import.meta.url), "utf8");
+
+  it("dymek użytkownika renderuje treść przez MentionText, nie gołe {body}", () => {
+    expect(chat).toContain("<MentionText text={body} />");
+    expect(chat).toContain('import { MentionText, PeerBadge } from "./PeerBadge";');
+  });
+
+  it("MentionText używa tego samego tokenizera i tej samej pigułki co reszta", () => {
+    expect(peerBadge).toContain('import { splitMentions } from "@/lib/mentions";');
+    expect(peerBadge).toContain("<BotChip key={index} bot={bot} />");
+    // bez wzmianki zwraca sam tekst — żadnego nowego opakowania w dymku
+    expect(peerBadge).toContain("if (!parts.some((part) => part.name)) return <>{text}</>;");
+  });
+});

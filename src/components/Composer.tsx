@@ -1,12 +1,13 @@
 import { track } from "@/lib/analytics";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Spinner } from "./Loading";
 import { ArrowUp, Brain, CalendarClock, File as FileIcon, Loader2, Mic, Plus, Puzzle, Shield, SlidersHorizontal, Wand2, Wrench, X, Zap } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { BotAvatar } from "./Avatar";
-import { CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
+import { BOT_COLORS, CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
+import { splitMentions } from "@/lib/mentions";
 import { isEngagedInPeerChat } from "@/lib/botChatAnimation";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
@@ -132,6 +133,78 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   const query = upto.slice(at + 1);
   if (query.length > 24 || query.includes("@") || query.includes("\n")) return null;
   return { start: at, query };
+}
+
+/** multibot K2: typografia pola pisania. Warstwa podświetlenia musi ją mieć co
+ *  do piksela taką samą, więc stoi w jednym miejscu zamiast w dwóch klasach,
+ *  które rozjadą się przy pierwszej zmianie rozmiaru czcionki. */
+const COMPOSER_TYPO = "py-1 text-[15px] leading-5";
+
+/**
+ * multibot K2: `@Imię` koloruje się już w PISANEJ wiadomości, nie dopiero po
+ * wysłaniu. Warstwa maluje tekst pod przezroczystą textareą — pole zostaje
+ * zwykłą textareą (cofanie, IME, wklejanie, klawiatura telefonu, dyktowanie),
+ * a jedynym źródłem prawdy wysyłanym na serwer dalej jest jej surowy tekst.
+ *
+ * Warunek poprawności to identyczne metryki: te same klasy typografii, ta sama
+ * szerokość, to samo zawijanie i zsynchronizowane przewijanie. Dlatego pigułka
+ * wnosi ZERO szerokości (`px-[1px]` cofnięte `-mx-[1px]` — tło wystaje poza
+ * znaki, znaki stoją tam, gdzie stały) i dlatego NIE MA tu awatara: każdy
+ * dodatkowy piksel w toku tekstu odsuwa kursor od litery, na której stoi.
+ * Awatar pokazuje picker „@" nad polem i pigułka w wysłanej wiadomości.
+ * Z tego samego powodu nie ma obwódki: spacja w Interze 15 px ma ~4 px, więc
+ * ramka wystająca po 2 px z każdej strony stykała się z sąsiednią literą
+ * (zmierzone na zrzucie) — zostaje samo wypełnienie i kolor liter.
+ *
+ * Kolory jak w plakietce bota z #170: surowy hex tonie i na jasnych skórkach,
+ * i na ciemnych, więc atrament to `--bot-ink` (kolor bota w połowie drogi do
+ * atramentu skórki), a wypełnienie miesza się z tłem aplikacji. Wypełnienie
+ * 26% zamiast 18% z plakietki, bo tutaj nie ma obwódki i bez tego pigułka
+ * ginęła w polu (zmierzone dla 14 kolorów × 4 skórki: najgorsza para to
+ * white/lagoon 3,33:1, żadna poniżej 3,0 — plakietka #170 ma tam 3,31:1).
+ */
+function MentionHighlight({
+  text,
+  bots,
+  layerRef,
+}: {
+  text: string;
+  bots: Bot[];
+  layerRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const segments = splitMentions(text, bots);
+  return (
+    <div
+      ref={layerRef}
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-ink",
+        COMPOSER_TYPO,
+      )}
+    >
+      {segments.map((segment, index) => {
+        const bot = segment.name
+          ? bots.find((candidate) => candidate.name.toLowerCase() === segment.name!.toLowerCase())
+          : undefined;
+        if (!bot) return <span key={index}>{segment.text}</span>;
+        return (
+          <span
+            key={index}
+            style={{
+              "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green,
+              "--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))",
+            } as CSSProperties}
+            className="-mx-[1px] rounded-[3px] px-[1px] text-[var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_26%,var(--color-app))]"
+          >
+            {segment.text}
+          </span>
+        );
+      })}
+      {/* Textarea rezerwuje linię po końcowym Enterze, blok HTML by ją zjadł —
+          bez tego ostatni wiersz warstwy rozjeżdża się z polem przy przewijaniu. */}
+      {"\n"}
+    </div>
+  );
 }
 
 // multibot: F8 — /slash autocomplete. Skill wysyła się jako ZWYKŁA wiadomość:
@@ -366,6 +439,14 @@ export function Composer({
   const lastStrip = useRef<NonNullable<typeof strip>>("idle");
   if (strip) lastStrip.current = strip;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // multibot K2: warstwa podświetlenia wzmianek pod tekstem pola. Włącza się
+  // dopiero, gdy w treści JEST wzmianka znanego bota — bez niej pole zachowuje
+  // się co do piksela jak dotąd, więc zwykłe pisanie nic nie ryzykuje.
+  const mentionLayerRef = useRef<HTMLDivElement>(null);
+  const liveMentions = useMemo(
+    () => splitMentions(text, state.bots).some((segment) => segment.name),
+    [text, state.bots],
+  );
   const filesRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef(new Set<string>());
   // what was typed before the mic went on — partials append after it
@@ -1044,8 +1125,18 @@ export function Composer({
           <Plus size={20} />
         </button>
         )}
+        {/* multibot K2: pole i warstwa podświetlenia w jednym pudełku — warstwa
+            leży `inset-0`, więc ma dokładnie tę samą ramkę co textarea.
+            `data-composer-field` musi zostać: to po nim reguła telefonu
+            (styles.css) daje polu własny wiersz. Zanim ten znacznik powstał,
+            regułą był `[data-composer-row] > [data-composer-input]`, a pudełko
+            zabrało polu status dziecka rzędu i na 360 px wracał błąd z 07.09
+            (pole ściśnięte do zera przez pigułki). */}
+        <div data-composer-field className="relative min-w-0 flex-1">
+        {liveMentions && <MentionHighlight text={text} bots={state.bots} layerRef={mentionLayerRef} />}
         <textarea
           data-composer-input
+          data-mentions={liveMentions ? "" : undefined}
           ref={inputRef}
           rows={1}
           value={text}
@@ -1104,6 +1195,11 @@ export function Composer({
             if (e.key === "Escape" && recording) setRecording(false);
           }}
           onPaste={handlePaste}
+          onScroll={(e) => {
+            // warstwa nie ma własnego paska (pole też nie, patrz styles.css),
+            // więc jedzie za polem — inaczej długi szkic rozjeżdża się o wiersze
+            if (mentionLayerRef.current) mentionLayerRef.current.scrollTop = e.currentTarget.scrollTop;
+          }}
           placeholder={
             recording ? polish ? "Słucham…" : "Listening…" : bot.busy ? polish ? `${botDisplayName(bot, polish ? "pl" : "en")} pracuje…` : `${botDisplayName(bot, polish ? "pl" : "en")} is working…` : polish ? `Wiadomość do ${botDisplayName(bot, polish ? "pl" : "en")}` : `Message ${botDisplayName(bot, polish ? "pl" : "en")}`
           }
@@ -1113,8 +1209,16 @@ export function Composer({
           // `max-h-64` przycina wzrost, `overflow-y-auto` daje pasek. Bez
           // liczenia sufitu w JS: styl wpisany na sztywno i tak jest zacięty
           // przez `max-height`.
-          className="max-h-64 w-full resize-none overflow-y-auto bg-transparent py-1 text-[15px] leading-5 text-ink placeholder:text-ink-secondary focus:outline-none"
+          className={cn(
+            "relative max-h-64 w-full resize-none overflow-y-auto bg-transparent placeholder:text-ink-secondary focus:outline-none",
+            COMPOSER_TYPO,
+            // litery maluje warstwa pod spodem; zostaje sam kursor, a pas
+            // zaznaczenia wraca przez `[data-mentions]::selection` w styles.css
+            // (przy przezroczystym tekście Chrome nie rysuje go sam)
+            liveMentions ? "text-transparent caret-ink" : "text-ink",
+          )}
         />
+        </div>
         <div className="relative shrink-0">
           <button
             onClick={() => setReasoningOpen((open) => !open)}

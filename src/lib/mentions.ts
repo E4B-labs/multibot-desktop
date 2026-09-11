@@ -12,6 +12,57 @@ export type MentionBot = { name: string };
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * JEDNA definicja tego, czym jest wzmianka — używa jej i markdown wysłanej
+ * wiadomości, i podświetlenie w composerze (K2). Dłuższe imiona idą pierwsze,
+ * więc „@New Bot" wygrywa z „@New".
+ *
+ * Bez lookbehind (`(?<!…)`): starsze WebView Androida (przed Chrome 62)
+ * rzucają na nim SyntaxError przy wczytaniu paczki, co kończy się czarnym
+ * ekranem. Grupa 1 to znak przed „@" — wraca do tekstu, więc adresy pocztowe
+ * (`ktos@example.com`) zostają w całości.
+ */
+export function mentionRegex(bots: MentionBot[]): RegExp {
+  // Pusta nazwa dałaby pustą alternatywę, czyli wzmiankę z samego „@" —
+  // w composerze widać to od razu: gołe „@" robiło się pigułką w trakcie
+  // pisania, jeszcze przed jakąkolwiek nazwą.
+  const names = bots
+    .map((b) => b.name)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRe);
+  return new RegExp(`(^|[^\\w.@-])@(${names.join("|")})(?![\\w-])`, "gi");
+}
+
+/** Segment tekstu: `name` ustawione = to wzmianka, `text` to zawsze surowe
+ *  znaki z wejścia (`@Imię`), nigdy nazwa wyświetlana. */
+export interface MentionSegment {
+  text: string;
+  name?: string;
+}
+
+/**
+ * Rozbija surowy tekst na segmenty zwykłe i wzmianki. Suma `text` wszystkich
+ * segmentów to dokładnie wejście — na tym stoi podświetlanie w composerze,
+ * gdzie warstwa pod textareą musi mieć co do znaku tę samą treść.
+ */
+export function splitMentions(value: string, bots: MentionBot[]): MentionSegment[] {
+  if (!value || !bots.some((bot) => bot.name)) return [{ text: value }];
+  const re = mentionRegex(bots);
+  const out: MentionSegment[] = [];
+  let last = 0;
+  for (let m = re.exec(value); m; m = re.exec(value)) {
+    const at = m.index + m[1].length;
+    const label = `@${m[2]}`;
+    if (at > last) out.push({ text: value.slice(last, at) });
+    out.push({ text: label, name: m[2] });
+    last = at + label.length;
+  }
+  if (!out.length) return [{ text: value }];
+  if (last < value.length) out.push({ text: value.slice(last) });
+  return out;
+}
+
+/**
  * unified woła atacher SAM — `use(fn, opcje)` albo krotka `[fn, opcje]` na
  * liście wtyczek. Wywołanie `remarkMentions({ bots })` bezpośrednio W LIŚCIE
  * oddawało unifiedowi gotowy transformer, który unified brał za atacher i
@@ -21,31 +72,19 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * niżej oddaje krotkę i stąd test, który tę pomyłkę odtwarza.
  */
 export function remarkMentions({ bots }: { bots: MentionBot[] }) {
-  const names = bots.map((b) => b.name).sort((a, b) => b.length - a.length).map(escapeRe);
-  // Bez lookbehind (`(?<!…)`): starsze WebView Androida (przed Chrome 62)
-  // rzucają na nim SyntaxError przy wczytaniu paczki, co też kończy się
-  // czarnym ekranem. Grupa 1 to znak przed „@" — wraca do tekstu, więc
-  // adresy pocztowe (`ktos@example.com`) zostają w całości.
-  const re = new RegExp(`(^|[^\\w.@-])@(${names.join("|")})(?![\\w-])`, "gi");
   return (tree: any) => {
     const split = (node: any): any[] => {
-      const out: any[] = [];
-      let last = 0;
-      re.lastIndex = 0;
-      for (let m = re.exec(node.value); m; m = re.exec(node.value)) {
-        const at = m.index + m[1].length;
-        const label = `@${m[2]}`;
-        if (at > last) out.push({ type: "text", value: node.value.slice(last, at) });
-        out.push({
-          type: "mention",
-          data: { hName: "span", hProperties: { dataMention: m[2] } },
-          children: [{ type: "text", value: label }],
-        });
-        last = at + label.length;
-      }
-      if (!out.length) return [node];
-      if (last < node.value.length) out.push({ type: "text", value: node.value.slice(last) });
-      return out;
+      const parts = splitMentions(node.value, bots);
+      if (!parts.some((part) => part.name)) return [node];
+      return parts.map((part) =>
+        part.name
+          ? {
+              type: "mention",
+              data: { hName: "span", hProperties: { dataMention: part.name } },
+              children: [{ type: "text", value: part.text }],
+            }
+          : { type: "text", value: part.text },
+      );
     };
     const walk = (node: any) => {
       if (!node || !Array.isArray(node.children)) return;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import remarkGfm from "remark-gfm";
-import { mentionPlugins, remarkMentions } from "./mentions";
+import { mentionPlugins, mentionRegex, remarkMentions, splitMentions } from "./mentions";
 
 const bots = [{ name: "Content Agent" }, { name: "New Bot" }];
 
@@ -47,7 +47,61 @@ describe("wzmianki @bot", () => {
   });
 
   it("nie używa lookbehind — starsze WebView Androida rzucają na nim SyntaxError", () => {
-    const source = String(remarkMentions({ bots }));
-    expect(source.includes("(?<")).toBe(false);
+    // Wzorzec żyje od K2 w `mentionRegex`, więc sprawdzamy jego źródło —
+    // `String(remarkMentions(...))` przestałoby cokolwiek znaczyć.
+    expect(String(mentionRegex(bots)).includes("(?<")).toBe(false);
+    expect(String(mentionRegex).includes("(?<")).toBe(false);
+  });
+});
+
+// multibot K2: ten sam tokenizer karmi warstwę podświetlenia w composerze.
+// Warunek, na którym stoi cała warstwa: sklejone `text` = dokładnie wejście.
+describe("splitMentions", () => {
+  const parts = (value: string) => splitMentions(value, bots);
+  const joined = (value: string) => parts(value).map((p) => p.text).join("");
+
+  it("zwraca segmenty, których suma to wejście co do znaku", () => {
+    for (const value of ["", "@New Bot", "hej @New Bot!", "a@b", "@New Bot @Content Agent", "  @New\n@New Bot "]) {
+      expect(joined(value)).toBe(value);
+    }
+  });
+
+  it("znaczy wzmiankę surowym tekstem i nazwą bota", () => {
+    expect(parts("hej @New Bot!")).toEqual([
+      { text: "hej " },
+      { text: "@New Bot", name: "New Bot" },
+      { text: "!" },
+    ]);
+  });
+
+  it("dłuższe imię wygrywa z krótszym prefiksem", () => {
+    const longer = [{ name: "New" }, { name: "New Bot" }];
+    expect(splitMentions("@New Bot", longer)).toEqual([{ text: "@New Bot", name: "New Bot" }]);
+  });
+
+  it("nie tyka nieznanego imienia ani niedokończonego pisania", () => {
+    expect(parts("@Nikt")).toEqual([{ text: "@Nikt" }]);
+    expect(parts("@New B")).toEqual([{ text: "@New B" }]);
+    expect(parts("@")).toEqual([{ text: "@" }]);
+  });
+
+  it("nie tyka adresu pocztowego", () => {
+    expect(parts("pisz na ktos@New Bot.pl")).toEqual([{ text: "pisz na ktos@New Bot.pl" }]);
+  });
+
+  it("pusta lista botów zwraca jeden segment", () => {
+    expect(splitMentions("@New Bot", [])).toEqual([{ text: "@New Bot" }]);
+  });
+});
+
+// Bot bez nazwy dawał pustą alternatywę w regexie, czyli wzmiankę z samego „@" —
+// w composerze gołe „@" robiło się pigułką, zanim cokolwiek napisano.
+describe("bot bez nazwy", () => {
+  it("nie zamienia gołego @ we wzmiankę", () => {
+    expect(splitMentions("napisz @ tutaj", [{ name: "" }])).toEqual([{ text: "napisz @ tutaj" }]);
+    expect(splitMentions("@ i @New Bot", [{ name: "" }, { name: "New Bot" }])).toEqual([
+      { text: "@ i " },
+      { text: "@New Bot", name: "New Bot" },
+    ]);
   });
 });

@@ -223,7 +223,50 @@ describe("composer na telefonie", () => {
     expect(composer).toContain('<div data-composer-row className="relative flex min-h-12');
     const phone = css.slice(css.indexOf("@media (max-width: 700px)"));
     expect(phone).toContain("[data-composer-row] { flex-wrap: wrap; }");
-    expect(phone).toContain("[data-composer-row] > [data-composer-input] { order: -1; flex-basis: 100%; }");
+    // K2: reguła celuje w PUDEŁKO pola — od warstwy podświetlenia wzmianek samo
+    // `[data-composer-input]` nie jest już dzieckiem rzędu i stara reguła
+    // przestawała cokolwiek robić (czyli wracał błąd z 07.09).
+    expect(phone).toContain("[data-composer-row] > [data-composer-field] { order: -1; flex-basis: 100%; }");
+    expect(composer).toContain('<div data-composer-field className="relative min-w-0 flex-1">');
     expect(phone).toContain("[data-composer-row] > div > button > span { display: none; }");
+  });
+});
+
+// multibot K2: `@Bot` koloruje się już w pisanej wiadomości. Warstwa pod
+// przezroczystym tekstem stoi i upada na metrykach — te trzy rzeczy trzymają je
+// równo i każda z nich po cichu psuje pozycję kursora, jeśli zniknie.
+describe("podświetlenie wzmianek w composerze", () => {
+  const layer = composer.slice(composer.indexOf("function MentionHighlight"), composer.indexOf("// multibot: F8"));
+
+  it("pigułka nie wnosi szerokości i nie ma obwódki", () => {
+    expect(layer).toContain("-mx-[1px]");
+    expect(layer).toContain("px-[1px]");
+    expect(layer, "obwódka stykała się z sąsiednią literą").not.toContain("box-shadow");
+  });
+
+  it("kolor bota liczy się z BOT_COLORS i miesza ze skórką jak plakietka #170", () => {
+    expect(layer).toContain("BOT_COLORS[bot.color] ?? BOT_COLORS.green");
+    expect(layer).toContain('"--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))"');
+    expect(layer).toContain("text-[var(--bot-ink)]");
+    expect(layer).toContain("bg-[color-mix(in_oklab,var(--bot)_26%,var(--color-app))]");
+  });
+
+  it("warstwa i pole mają tę samą typografię, zawijanie i przewijanie", () => {
+    expect(layer).toContain("COMPOSER_TYPO");
+    expect(layer).toContain("whitespace-pre-wrap break-words");
+    expect(composer).toContain("mentionLayerRef.current.scrollTop = e.currentTarget.scrollTop");
+    // przezroczysty tekst TYLKO przy wzmiance — bez niej pole zostaje jak było
+    expect(composer).toContain('liveMentions ? "text-transparent caret-ink" : "text-ink"');
+  });
+
+  it("zaznaczenie ma jawne tlo — przy przezroczystym tekscie Chrome nie rysuje pasa", () => {
+    const rule = css.slice(css.indexOf("[data-composer-input][data-mentions]::selection"));
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("background: Highlight;");
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("color: HighlightText;");
+  });
+
+  it("na serwer leci surowy tekst pola, nie treść warstwy", () => {
+    expect(composer).toContain("text: text.trim()");
+    expect(layer).not.toContain("setText");
   });
 });

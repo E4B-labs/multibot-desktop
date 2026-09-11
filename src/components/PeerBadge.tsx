@@ -9,9 +9,11 @@
 // plikach i rozjeżdżały się po kolei (kopia w webui telefonu zgubiła
 // `avatarUrl`, więc bot z własnym zdjęciem pokazywał tam maskotkę). Klasy
 // stoją tu raz — `BOT_CHIP_CLASS` jest jedynym miejscem, gdzie się je zmienia.
+import { Fragment } from "react";
 import { useStore } from "@/state/store";
 import { useLanguage } from "@/lib/language";
 import { normalizeState } from "@/lib/mascot";
+import { splitMentions } from "@/lib/mentions";
 import { botDisplayName } from "@/lib/botNames";
 import { cn } from "@/lib/cn";
 import { BotAvatar } from "./Avatar";
@@ -38,6 +40,31 @@ export function BotChip({ bot, className }: { bot: ChipBot; className?: string }
       />
       {botDisplayName(bot, polish ? "pl" : "en")}
     </span>
+  );
+}
+
+/**
+ * multibot K2: `@Imię` we WŁASNEJ wiadomości użytkownika. Trzecia droga do tej
+ * samej pigułki: dymek użytkownika leci czystym tekstem (ChatView renderuje
+ * markdown tylko dla bota), więc wtyczka wzmianek go nie widzi i nazwa
+ * zostawała surowa. Bez tego chip z composera znikał w tej samej chwili, w
+ * której użytkownik naciskał Enter.
+ *
+ * Ten sam tokenizer co w composerze i w markdownie bota — `splitMentions`.
+ */
+export function MentionText({ text }: { text: string }) {
+  const { state } = useStore();
+  const parts = splitMentions(text, state.bots);
+  if (!parts.some((part) => part.name)) return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, index) => {
+        const bot = part.name
+          ? state.bots.find((candidate) => candidate.name.toLowerCase() === part.name!.toLowerCase())
+          : undefined;
+        return bot ? <BotChip key={index} bot={bot} /> : <Fragment key={index}>{part.text}</Fragment>;
+      })}
+    </>
   );
 }
 
