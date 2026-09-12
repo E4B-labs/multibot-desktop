@@ -92,6 +92,7 @@ say "Battery: Android settings > Apps > Termux > Battery > Unrestricted, or Andr
 say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
 say "Samsung: disable Automatic restart; set Termux, Tailscale and MultiBot to Never sleeping"
 say "Android 12+: optional one-time adb: settings put global settings_enable_monitor_phantom_procs false"
+say "Full checklist: $ROOT/docs/termux-247.md"
 
 # The server mints its three values on its first boot; runit has just started
 # it, so wait for the file rather than guessing an address from `hostname`.

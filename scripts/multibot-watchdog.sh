@@ -4,11 +4,13 @@ set -u
 failures=0
 last_tailscale_wake=0
 log() { printf '[multibot-watchdog] %s\n' "$*"; }
+has_tailscale_ip() { (command -v ip >/dev/null 2>&1 && ip addr) || (command -v ifconfig >/dev/null 2>&1 && ifconfig); }
 
 while :; do
   now=$(date +%s)
-  if ! sv status multibot >/dev/null 2>&1; then
-    log 'multibot service missing or down; bringing it up'
+  service_status=$(sv status multibot 2>&1 || true)
+  if ! printf '%s\n' "$service_status" | grep -q '^run:'; then
+    log "multibot service is not running ($service_status); bringing it up"
     sv up multibot || true
   fi
 
@@ -24,7 +26,7 @@ while :; do
     fi
   fi
 
-  if ! (ip addr 2>/dev/null || ifconfig 2>/dev/null) | grep -Eq '100\.[0-9]{1,3}\.'; then
+  if ! has_tailscale_ip 2>/dev/null | grep -Eq '100\.[0-9]{1,3}\.'; then
     if [ $((now - last_tailscale_wake)) -ge 300 ]; then
       log 'Tailscale address missing; opening Tailscale'
       command -v termux-am >/dev/null 2>&1 && termux-am start -n com.tailscale.ipn/.MainActivity >/dev/null 2>&1 || true
