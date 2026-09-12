@@ -16,6 +16,12 @@ adb shell settings put global settings_enable_monitor_phantom_procs false
 
 The installer creates `multibot` and `multibot-watchdog` runit services. The watchdog checks `/api/health` every 60 seconds, restarts MultiBot after three failures, and wakes Tailscale at most once per five minutes when no `100.x` address exists.
 
+When deploying a tar archive created on Windows, restore shell executable bits before restarting the service:
+
+```sh
+chmod +x ~/multibot/scripts/start-multibot.sh ~/multibot/scripts/multibot-watchdog.sh ~/multibot/scripts/test-multibot-watchdog.sh
+```
+
 Verify on Termux:
 
 ```sh
