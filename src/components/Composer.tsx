@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { BotAvatar } from "./Avatar";
 import { botChipStyle } from "./PeerBadge";
-import { CELEBRATE_MS, normalizeState, stripMascotState } from "@/lib/mascot";
+import { CELEBRATE_MS, activityPhrase, normalizeState, stripMascotState } from "@/lib/mascot";
 import { splitMentions } from "@/lib/mentions";
 import { isEngagedInPeerChat } from "@/lib/botChatAnimation";
 import { useLanguage } from "@/lib/language";
@@ -451,6 +451,13 @@ export function Composer({
   // Gdyby dostał wtedy „idle", ciało przeskoczyłoby twardo do innej geometrii w
   // tej samej klatce, w której się zatrzymuje — dokładnie ten przeskok, którego
   // pozbywamy się przy wejściu. Gaśnie więc na ostatniej minie, jaką miał.
+  // Najechanie na maskotkę mówi, co bot robi TERAZ — to samo zdanie, które roster
+  // pokazuje w sidebarze (activityPhrase); bezczynny bot pokazuje tylko nazwę.
+  const doing = activityPhrase(
+    bot,
+    { runtime, streaming: state.streaming[bot.threadId] !== undefined, engaged, focused: typeof document === "undefined" || document.hasFocus(), now: clock },
+    polish ? "pl" : "en",
+  );
   const lastStrip = useRef<NonNullable<typeof strip>>("idle");
   if (strip) lastStrip.current = strip;
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1117,10 +1124,10 @@ export function Composer({
             // ani przy pracy, ani w rozmowie z botem. Pasek stoi na nakładce
             // nad polem pisania, nic nie przesuwa i mieści się na najwęższym
             // ekranie, więc nie ma czego chować.
-            "pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 flex size-[40px] items-center justify-center transition-opacity duration-200",
+            "absolute bottom-[calc(100%+8px)] left-0 z-20 flex size-[40px] items-center justify-center transition-opacity duration-200",
             strip ? "opacity-100" : "opacity-0",
           )}
-          title={botDisplayName(bot, polish ? "pl" : "en")}
+          title={doing ?? botDisplayName(bot, polish ? "pl" : "en")}
         >
           <BotAvatar
             color={bot.color}

@@ -198,6 +198,13 @@ describe("zwijanie pigułek composera", () => {
     expect(composer).not.toMatch(/className="flex h-8 (?:shrink-0 )?items-center gap-1 rounded-full px-2/);
   });
 
+  it("maskotka nad polem mówi po najechaniu, co bot robi teraz (jak roster)", () => {
+    expect(composer).toContain("const doing = activityPhrase(");
+    expect(composer).toContain('title={doing ?? botDisplayName(bot, polish ? "pl" : "en")}');
+    // pointer-events-none zjadałoby hover, więc go nie ma na pasku maskotki
+    expect(composer).not.toContain('"pointer-events-none absolute bottom-[calc(100%+8px)]');
+  });
+
   it("zwinięta pigułka rozumowania mówi czytnikowi POZIOM, nie samą nazwę pola", () => {
     // aria-label wygrywa nazwę dostępną i spycha `title` do opisu, którego
     // część czytników nie czyta — poziom musi być w obu.
