@@ -7,7 +7,7 @@ DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run|--plan) DRY_RUN=1; shift ;;
-    --self-test) bash -n "$0" && bash -n "$ROOT/scripts/start-multibot.sh" && bash -n "$ROOT/scripts/print-setup-values.sh" && echo "termux installer: OK"; exit 0 ;;
+    --self-test) bash -n "$0" && bash -n "$ROOT/scripts/start-multibot.sh" && bash -n "$ROOT/scripts/multibot-watchdog.sh" && bash -n "$ROOT/scripts/print-setup-values.sh" && echo "termux installer: OK"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -22,7 +22,7 @@ run pkg update -y
 # tor: the onion address (server/tor.ts) is the only rung that works behind a
 # phone carrier's NAT without a box of your own. Package, not a bundled binary —
 # Termux keeps it patched and the harness only ever spawns `tor` off PATH.
-run pkg install -y nodejs-lts python git termux-services tor
+run pkg install -y nodejs-lts python git curl termux-services tor
 if ! command -v pnpm >/dev/null; then
   if (( DRY_RUN )); then say "install pnpm@10.33.0 globally"; else npm install -g pnpm@10.33.0; fi
 fi
@@ -39,11 +39,12 @@ run pnpm --dir "$ROOT" build:server
 if (( ! DRY_RUN )); then chmod +x "$ROOT/scripts/start-multibot.sh"; fi
 
 SERVICE_DIR="$PREFIX/var/service/multibot"
+WATCHDOG_DIR="$PREFIX/var/service/multibot-watchdog"
 BOOT_DIR="$HOME/.termux/boot"
 if (( DRY_RUN )); then
-  say "write $SERVICE_DIR/run and $BOOT_DIR/multibot"
+  say "write $SERVICE_DIR/run, $WATCHDOG_DIR/run and $BOOT_DIR/multibot"
 else
-  mkdir -p "$SERVICE_DIR/log" "$BOOT_DIR"
+  mkdir -p "$SERVICE_DIR/log" "$WATCHDOG_DIR/log" "$BOOT_DIR"
   cat > "$SERVICE_DIR/run" <<EOF
 #!$PREFIX/bin/bash
 exec env HOME="$HOME" MULTIBOT_HOST=0.0.0.0 MULTIBOT_PORT=8799 \\
@@ -52,15 +53,22 @@ exec env HOME="$HOME" MULTIBOT_HOST=0.0.0.0 MULTIBOT_PORT=8799 \\
 EOF
   chmod +x "$SERVICE_DIR/run"
   ln -sf "$PREFIX/share/termux-services/svlogger" "$SERVICE_DIR/log/run"
+  cp "$ROOT/scripts/multibot-watchdog.sh" "$WATCHDOG_DIR/run"
+  chmod +x "$WATCHDOG_DIR/run"
+  ln -sf "$PREFIX/share/termux-services/svlogger" "$WATCHDOG_DIR/log/run"
   cat > "$BOOT_DIR/multibot" <<EOF
 #!$PREFIX/bin/bash
 termux-wake-lock
 source "$PREFIX/etc/profile.d/start-services.sh"
 sv-enable multibot
+sv-enable multibot-watchdog
+sv up multibot multibot-watchdog
 EOF
   chmod +x "$BOOT_DIR/multibot"
   source "$PREFIX/etc/profile.d/start-services.sh"
   sv-enable multibot
+  sv-enable multibot-watchdog
+  sv up multibot multibot-watchdog
 fi
 
 # Bez tego Termux odrzuca RUN_COMMAND z innej apki, a wtedy MultiBot na tym
@@ -82,6 +90,8 @@ say "Reverse proxy (optional): terminate TLS there and set MULTIBOT_TLS=off with
 say "Termux:Boot: install it from F-Droid and OPEN IT ONCE — that is what brings the server back after a reboot"
 say "Battery: Android settings > Apps > Termux > Battery > Unrestricted, or Android stops the server with the screen off"
 say "Keep phone awake: termux-wake-lock (the Boot script repeats this)"
+say "Samsung: disable Automatic restart; set Termux, Tailscale and MultiBot to Never sleeping"
+say "Android 12+: optional one-time adb: settings put global settings_enable_monitor_phantom_procs false"
 
 # The server mints its three values on its first boot; runit has just started
 # it, so wait for the file rather than guessing an address from `hostname`.
