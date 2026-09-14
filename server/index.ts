@@ -20,7 +20,7 @@ import {
   type FleetEnvironment,
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
-import { AttachmentStore, fileMime, INLINE_UNSAFE_MIME, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fetchRemoteFile, fileMime, INLINE_UNSAFE_MIME, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
@@ -3819,11 +3819,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // nie otwiera odczytu dowolnych plików hosta.
         // Przy wysyłce po ścieżce nazwa pliku jest już znana — bot nie musi jej
         // powtarzać, a powtórzona bywała inna niż prawdziwa.
-        const fileName = String(body.name ?? (body.path ? basename(String(body.path)) : "file"));
+        let fileName = String(body.name ?? "file");
+        if (!body.name && body.path) fileName = basename(String(body.path));
+        if (!body.name && body.url) {
+          try {
+            fileName = basename(new URL(String(body.url)).pathname) || "file";
+          } catch {
+            // fetchRemoteFile returns the user-facing validation error below.
+          }
+        }
         // MIME z nazwy, gdy model go nie podał — patrz `fileMime`. Limit liczymy
         // z TEGO, nie z deklaracji: obrazek zadeklarowany jako octet-stream
         // przechodził przez limit dokumentu (25 MB) zamiast obrazka (8 MB).
-        const declaredMime = fileMime(fileName, body.mime as string | undefined);
+        let declaredMime = fileMime(fileName, body.mime as string | undefined);
         const byteLimit = declaredMime.startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
         let buf: Buffer;
         if (body.path) {
@@ -3832,6 +3840,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           } catch (err) {
             if ((err as { status?: number }).status !== 404) throw err;
             buf = await readComputerFile(String(body.path), byteLimit);
+          }
+        } else if (body.url) {
+          const remote = await fetchRemoteFile(String(body.url), MAX_FILE_BYTES);
+          buf = remote.bytes;
+          if (!body.mime || String(body.mime).toLowerCase() === "application/octet-stream") {
+            declaredMime = fileMime(fileName, remote.mime);
           }
         } else {
           buf = Buffer.from(String(body.content ?? ""), "base64");

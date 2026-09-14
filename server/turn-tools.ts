@@ -42,7 +42,7 @@ export const COMPUTER_MCP_TOOLS = [
  *
  * Cena: bot traci pamięć po stronie dostawcy. Transkrypt harnessu zostaje.
  */
-export const AGENTS_TOOLS_VERSION = 12;
+export const AGENTS_TOOLS_VERSION = 13;
 
 /** Narzędzia serwera agents — mirror `server/drivers/agents-proxy.ts` TOOLS. */
 export const AGENTS_MCP_TOOLS = [
@@ -158,6 +158,7 @@ export function turnToolsText(integrations: TurnIntegrationsLike | undefined): s
     lines.push(
       "When you produce a file for the user — a report, an export, an image, a document, any generated artifact — deliver it with `send_file`. A path on disk, a filename or a link is NOT delivery: the user cannot open it from the chat. Content you are WRITING YOURSELF goes straight into `send_file` as `content_base64` — do not save it to disk first, that only costs you an approval you do not need. Use `path` only for a file that already exists. Always set `mime` (`image/png`, `text/csv`, `text/html`…) or the chat cannot preview it, and always set `name` with its extension (`chart.png`) — that is the only label the user sees, and inline content has no path to take it from. Never say a file is sent unless `send_file` returned success in this turn; if it failed, say so.",
     );
+    lines.push("If an image or file tool returns a public http(s) URL, pass that URL to `send_file`; do not claim delivery until the tool returns success.");
   }
   if (integrations.composio) {
     lines.push("Composio integration tools this turn: your connected apps (dynamic toolset).");
