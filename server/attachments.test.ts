@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AttachmentStore, fileMime, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fetchRemoteFile, fileMime, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 
 const roots: string[] = [];
 const make = () => {
@@ -75,6 +75,22 @@ describe("fileMime", () => {
   it("nieznane rozszerzenie zostaje workiem, jak dotad", () => {
     expect(fileMime("dump.qqq")).toBe("application/octet-stream");
     expect(fileMime("bez-rozszerzenia")).toBe("application/octet-stream");
+  });
+});
+
+describe("fetchRemoteFile", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("downloads a remote image and keeps its response MIME", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("image bytes", {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    })));
+
+    await expect(fetchRemoteFile("https://cdn.example/image.png")).resolves.toMatchObject({
+      mime: "image/png",
+      bytes: Buffer.from("image bytes"),
+    });
   });
 });
 

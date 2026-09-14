@@ -167,6 +167,18 @@ const TOOLS = [
   { name: "send_file", description: "Send a file to the chat so the user can download or open it — an HTML report, an export, an image, any artifact you produced. This is the ONLY way a file reaches the user; a path, a filename or a link is not delivery. Two ways, pick by where the bytes are: content you are writing yourself → pass it as `content_base64` and skip the disk entirely (no file write, no approval to wait for); a file that ALREADY exists → pass its `path` and let the server read it. Do NOT base64 a file through your shell output: that output is capped and silently truncates, which corrupts anything past a few dozen kilobytes. Set `mime` — without it the chat cannot preview the file — and set `name`, because that is the only label the user sees on the file.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to a file that already exists, as YOU see it, e.g. /root/report.html." }, name: { type: "string", description: "File name WITH its extension, e.g. red_square.png — this is the label the user sees in the chat. Required whenever you pass content_base64: there is no path to take it from, and the file would be shown as \"file\" with no extension." }, mime: { type: "string", description: "MIME type, e.g. image/png, text/csv, text/html" }, content_base64: { type: "string", description: "File bytes as base64. Use this for anything you are generating now." } }, required: ["mime", "name"] } },
 ];
 
+// A provider may return a generated artifact as a public URL instead of a
+// local file. Keep the existing tool definition and add the third source here.
+const sendFileTool = TOOLS.find((tool) => tool.name === "send_file");
+if (sendFileTool) {
+  const properties = sendFileTool.inputSchema.properties as Record<string, unknown>;
+  properties.url = { type: "string", description: "Public http(s) URL returned by an image/file provider." };
+  sendFileTool.description = sendFileTool.description.replace(
+    "a path, a filename or a link is not delivery. Two ways, pick by where the bytes are:",
+    "a filename or a link in prose is not delivery. Pick `path` for an existing file, `url` for a public http(s) artifact, or `content_base64` for bytes you write:",
+  );
+}
+
 type Json = Record<string, unknown>;
 const send = (msg: Json) => process.stdout.write(JSON.stringify(msg) + "\n");
 const ok = (id: unknown, result: unknown) => send({ jsonrpc: "2.0", id, result });
@@ -285,6 +297,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       body: JSON.stringify({
         botId: BOT_ID,
         ...(args.path ? { path: String(args.path) } : {}),
+        ...(args.url ? { url: String(args.url) } : {}),
         ...(args.name ? { name: String(args.name) } : {}),
         mime: String(args.mime ?? "application/octet-stream"),
         content: String(args.content_base64 ?? ""),

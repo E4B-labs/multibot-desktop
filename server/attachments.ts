@@ -7,6 +7,7 @@ import { newId, type AttachmentMeta } from "./contracts.ts";
 export const MAX_ATTACHMENTS = 10;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const REMOTE_FILE_TIMEOUT_MS = 30_000;
 
 interface StoredAttachment extends AttachmentMeta {
   botId: string;
@@ -83,6 +84,35 @@ export function resolveBotFile(path: string, roots?: string): string {
     );
   }
   return found;
+}
+
+/** Download a provider-generated artifact that exists at a public URL. */
+export async function fetchRemoteFile(rawUrl: string, maxBytes = MAX_FILE_BYTES): Promise<{ bytes: Buffer; mime: string }> {
+  let url: URL;
+  try {
+    url = new URL(String(rawUrl ?? "").trim());
+  } catch {
+    throw Object.assign(new Error("invalid file URL"), { status: 422 });
+  }
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password) {
+    throw Object.assign(new Error("file URL must be http(s) without credentials"), { status: 422 });
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(REMOTE_FILE_TIMEOUT_MS) });
+  } catch (error) {
+    throw Object.assign(new Error(`could not download file: ${error instanceof Error ? error.message : String(error)}`), { status: 502 });
+  }
+  if (!response.ok) throw Object.assign(new Error(`could not download file: HTTP ${response.status}`), { status: 502 });
+  const declaredSize = Number(response.headers.get("content-length") ?? 0);
+  if (declaredSize > maxBytes) throw Object.assign(new Error(`file exceeds ${maxBytes / 1024 / 1024} MB limit`), { status: 413 });
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw Object.assign(new Error("empty file"), { status: 422 });
+  if (bytes.length > maxBytes) throw Object.assign(new Error(`file exceeds ${maxBytes / 1024 / 1024} MB limit`), { status: 413 });
+  return {
+    bytes,
+    mime: String(response.headers.get("content-type") ?? "").split(";", 1)[0].trim(),
+  };
 }
 
 /**

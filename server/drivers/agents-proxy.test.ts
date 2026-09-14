@@ -358,4 +358,13 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAttachmentBody).toMatchObject({ botId: "bot-asker", name: "report.html", mime: "text/html" });
     expect(Buffer.from(lastAttachmentBody.content, "base64").toString()).toBe(html);
   });
+
+  it("send_file forwards a provider URL to the chat attachment endpoint", async () => {
+    await callTool("send_file", { url: "https://cdn.example/image.png", name: "image.png", mime: "application/octet-stream" });
+    expect(lastAttachmentBody).toMatchObject({
+      botId: "bot-asker",
+      url: "https://cdn.example/image.png",
+      name: "image.png",
+    });
+  });
 });
