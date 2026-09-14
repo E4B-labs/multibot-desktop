@@ -3720,8 +3720,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
   const adminMutation = method !== "GET" && (
     path.startsWith("/api/models/custom/") ||
     path.startsWith("/api/cli-tools/") ||
-    path.startsWith("/api/progress/") ||
-    path.startsWith("/api/connectors/")
+    path.startsWith("/api/progress/")
   );
   if (adminMutation && actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
   const langParam = url.searchParams.get("lang");
