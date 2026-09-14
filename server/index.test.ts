@@ -782,6 +782,36 @@ describe("harness HTTP API", () => {
   // multibot (F7): własne serwery MCP użytkownika — osobna trasa `/custom/`,
   // wspólny katalog z Composio (karta niesie `source`).
   it("registers a custom MCP connector and tags it in the integrations catalog", async () => {
+    const joined = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "index-plugin-member",
+        password: "index-plugin-member-pass",
+        displayName: "Plugin Member",
+        serverName,
+        serverPassword,
+        deviceName: "vitest-plugin-member",
+      }),
+    });
+    expect(joined.status).toBe(201);
+    const memberToken = (await joined.json() as { accessToken: string }).accessToken;
+    const memberConnector = await fetch(`${BASE}/api/connectors/custom/member-echo`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2", "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Member Echo",
+        transport: { type: "stdio", command: "node", args: ["echo.mjs"] },
+      }),
+    });
+    expect(memberConnector.status).toBe(200);
+    expect((await memberConnector.json() as { connector: { name: string } }).connector.name).toBe("Member Echo");
+    const memberRemoved = await fetch(`${BASE}/api/connectors/custom/member-echo`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2" },
+    });
+    expect(memberRemoved.status).toBe(200);
+
     const bad = await api("PUT", "/api/connectors/custom/echo", { transport: { type: "stdio" } });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toContain("command required");
