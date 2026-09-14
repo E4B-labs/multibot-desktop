@@ -47,6 +47,8 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("coworker on a messenger");
     expect(text).toContain("As an AI");
     expect(text).toContain("On it:");
+    expect(text).toContain("Never expose internal run IDs, audit logs, delegation counters, or harness event names");
+    expect(text).toContain("Say what you did, what you are doing now, or what is blocked in natural coworker language");
     expect(text).toContain("ask_user(question, choices, multiple, detail)` is the ONLY way");
     // multibot: format pytania musi opisywać wielokrotny wybór, inaczej model
     // nigdy z niego nie skorzysta
