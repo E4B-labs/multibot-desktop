@@ -9,7 +9,7 @@
 // This drives a real server over HTTP with a fake CLI that talks steadily for
 // well past the ceiling, then finishes. `busy` must survive the whole thing.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,6 +35,7 @@ let TOKEN = "";
 let child: ChildProcess;
 let home = "";
 let stderr = "";
+let promptDump = "";
 
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
   const res = await fetch(`${base}${path}`, {
@@ -63,6 +64,7 @@ beforeAll(async () => {
   });
   base = `https://127.0.0.1:${port}`;
   home = mkdtempSync(join(tmpdir(), "omb-watchdog-test-"));
+  promptDump = join(home, "prompts.ndjson");
   mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
     join(home, ".multibot", "config.json"),
@@ -78,6 +80,15 @@ beforeAll(async () => {
             FAKE_ACP_MODE: "slow",
             FAKE_ACP_SLOW_BEATS: String(BEATS),
             FAKE_ACP_SLOW_EVERY_MS: String(EVERY_MS),
+          },
+          config: { cli: FAKE_CLI, fullAuto: true },
+        },
+        hung: {
+          driver: "grokAgent",
+          displayName: "Hung",
+          environment: {
+            FAKE_ACP_MODE: "hang",
+            FAKE_ACP_PROMPT_DUMP: promptDump,
           },
           config: { cli: FAKE_CLI, fullAuto: true },
         },
@@ -220,6 +231,42 @@ describe("busy watchdog", () => {
       // started, which the driver refused with this exact pill.
       expect(done.messages.some((m: any) => m.kind === "activity" && /already running/.test(m.tool?.name ?? ""))).toBe(false);
     },
-    60_000,
+      60_000,
+    );
+
+  it(
+    "interrupts a silent provider before draining its queued turn",
+    async () => {
+      const created = await api("POST", "/api/bots");
+      expect(created.status).toBe(201);
+      const id = created.body.bot.id;
+      expect((await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "hung", model: "fake-model" } })).status).toBe(200);
+
+      expect((await api("POST", `/api/bots/${id}/messages`, { text: "first" })).status).toBe(202);
+      let running = await getBot(id);
+      for (let i = 0; i < 60 && !running.busy; i++) {
+        await wait(50);
+        running = await getBot(id);
+      }
+      expect(running.busy).toBe(true);
+
+      // This is accepted into the queue while the first hung provider turn is active.
+      expect((await api("POST", `/api/bots/${id}/messages`, { text: "second" })).status).toBe(202);
+
+      const deadline = Date.now() + 10_000;
+      let prompts = 0;
+      let current = running;
+      while (Date.now() < deadline) {
+        current = await getBot(id);
+        prompts = existsSync(promptDump) ? readFileSync(promptDump, "utf8").trim().split("\n").filter(Boolean).length : 0;
+        if (prompts >= 2 || current.messages.some((m: any) => /already running/.test(m.tool?.name ?? ""))) break;
+        await wait(100);
+      }
+
+      expect(current.messages.some((m: any) => /already running/.test(m.tool?.name ?? ""))).toBe(false);
+      expect(prompts).toBeGreaterThanOrEqual(2);
+      await api("POST", `/api/bots/${id}/interrupt`);
+    },
+    30_000,
   );
 });

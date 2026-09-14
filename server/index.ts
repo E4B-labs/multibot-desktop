@@ -339,7 +339,7 @@ function releaseTurnSlot(botId: string): void {
 // multibot (U1): prywatny Store nie zna izolowanych wątków grupy, ale ich
 // zużycie nadal należy do konkretnego bota.
 const isolatedTurnBots = new Map<string, string>();
-// watchdog: busy stuck >70s -> auto clear (provider zawiesił się, brak turn.completed)
+// watchdog: busy stuck >70s -> interrupt the provider (provider went silent)
 const busyWatchdog = new Map<string, ReturnType<typeof setTimeout>>();
 /**
  * Zbrojenie (i przezbrajanie) watchdoga: brak `turn.completed` przez 70 s
@@ -360,13 +360,17 @@ function armBusyWatchdog(botId: string): void {
   const wd = setTimeout(() => {
     const b = store.bot(botId);
     if (b?.busy) {
-      console.warn(`[multibot] watchdog: ${botId} busy ${busyWatchdogMs()}ms no completed, force clear`);
+      console.warn(`[multibot] watchdog: ${botId} busy ${busyWatchdogMs()}ms no completed, interrupting provider`);
+      const instance = registry.get(b.modelSelection.instanceId);
+      void instance?.adapter.interruptTurn(b.threadId).catch((error) =>
+        console.warn(`[multibot] watchdog interrupt failed for ${botId}:`, error instanceof Error ? error.message : error),
+      );
       store.patchBot(botId, { busy: false });
-      activeCommsDepth.delete(botId);
       busyWatchdog.delete(botId);
-      // Ta sama rozbiórka co przy `runtime.error`: bez niej znacznik peer
-      // przeżywał turę i NASTĘPNA, niezwiązana tura odsyłała swój tekst
-      // wczorajszemu nadawcy, a kolejka stała bez drenażu.
+      // Posprzątaj metadane i historię od razu, ale zostaw `activeCommsDepth`
+      // oraz slot do `turn.completed`: driver nadal ma `active[threadId]`.
+      // Inaczej drain uruchomiłby następną turę za wcześnie i dostał dokładnie
+      // „a turn is already running on this thread”.
       peerTurn.delete(botId);
       groupTurn.get(botId)?.done(""); // wiszący dostawca nie trzyma czatu grupy
       forgetSettledGroupTurn(botId);
@@ -378,9 +382,7 @@ function armBusyWatchdog(botId: string): void {
       // nie ma zostawiać znacznika „bot nic nie napisał" ani pushować końca.
       harnessRoutines.settleRun(botId, { reason: "watchdog" });
       turnOrigin.delete(botId);
-      releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
       broadcast({ kind: "bot", bot: store.bot(botId) });
-      drainQueuedUserMessages(botId);
     }
   }, busyWatchdogMs());
   wd.unref?.();
