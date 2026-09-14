@@ -88,6 +88,7 @@ import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): w
 import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, withoutLegacyGroupLeak, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
+import { isContextCompactionNotice } from "./provider-notice.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { canUseIntegration, clearTurnPolicy, rememberApprovalRule, setTurnPolicy, toolsetAllowed, turnPolicy } from "./turn-policy.ts";
 import { webMcpIntegration } from "./drivers/web-proxy.ts";
@@ -1728,7 +1729,11 @@ const turnModelByThread = new Map<string, string>();
 
 bus.subscribe((event: RuntimeEvent) => {
   recordInspectorEvent(event);
-  broadcast({ kind: "runtime", event });
+  const hiddenProviderNotice =
+    (event.type === "content.delta" && event.streamKind === "assistant_text" && isContextCompactionNotice(event.delta))
+    || (event.type === "item.started" && event.itemType === "tool" && isContextCompactionNotice(event.title ?? ""))
+    || (event.type === "item.completed" && event.itemType === "assistant_text" && isContextCompactionNotice(event.text));
+  if (!hiddenProviderNotice) broadcast({ kind: "runtime", event });
   if (event.type === "turn.completed" || event.type === "runtime.error") {
     const gatedBotId = store.botByThread(event.threadId)?.id;
     if (gatedBotId) releaseTurnSlot(gatedBotId);
@@ -1762,6 +1767,8 @@ bus.subscribe((event: RuntimeEvent) => {
   } else if (bot.busy && busyWatchdog.has(bot.id) && event.type !== "turn.completed" && event.type !== "runtime.error") {
     armBusyWatchdog(bot.id);
   }
+
+  if (hiddenProviderNotice) return;
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
