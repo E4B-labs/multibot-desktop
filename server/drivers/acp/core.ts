@@ -14,6 +14,7 @@
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
 import { spawn, execFile } from "node:child_process";
+import { memoryGuard } from "../../mem.ts";
 import { homedir } from "node:os";
 
 import type {
@@ -33,6 +34,8 @@ import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed
 // multibot (F7): własne serwery MCP użytkownika, wspólne dla wszystkich driverów.
 import { connectors as customConnectors } from "../../mcp-connectors.ts";
 import { appendNative } from "../native.ts";
+
+const ACP_ESTIMATE_BYTES = 500 * 1024 * 1024;
 
 export interface AcpConfig {
   cli: string;
@@ -225,10 +228,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           : config;
 
         const cli = resolveCliSpawn(config.cli, support.spawnArgs(effectiveConfig, turn)); // multibot
-        // TODO(multibot): server/mem.ts does not exist on origin/main yet —
-        // once it lands, call its memoryGuard() here before spawn to refuse
-        // a new ACP child when memory is already tight (same problem this PR
-        // fixes from the other side: orphaned children eating RAM).
+        // multibot: brake, not a queue — waits a few seconds for RAM to free
+        // up before adding a ~500 MB opencode/ACP child on the phone.
+        await memoryGuard(ACP_ESTIMATE_BYTES);
         const child = spawn(cli.command, cli.args, {
           cwd,
           env,
