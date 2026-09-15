@@ -1,4 +1,5 @@
 import { track } from "@/lib/analytics";
+import { markStartup } from "@/lib/startupTiming";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -1425,6 +1426,10 @@ function UpdateBadge() {
 
 export function Sidebar() {
   const { state, dispatch } = useStore();
+  // multibot: lista botów właśnie się narysowała (efekt leci po commicie).
+  useEffect(() => {
+    if (state.hydrated) markStartup("bots-rendered");
+  }, [state.hydrated]);
   const polish = useLanguage() === "pl";
   const lang = useLanguage();
   const [menu, setMenu] = useState<MenuState | null>(null);
