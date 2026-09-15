@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 
 import { botSystemPrompt } from "./bot-prompt.ts";
 // multibot: autoweryfikacja — filtr na prośbach o zgodę, patrz server/auto-verify.ts.
@@ -47,8 +48,10 @@ import {
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
 import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool, openLoginCard, openLoginCards } from "./auth-failure.ts";
-import { claudeAuthState } from "./drivers/claude.ts";
+import { claudeAuthState, claudeWorkerCount } from "./drivers/claude.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
+import { availableMemoryBytes, totalMemoryBytes } from "./mem.ts";
+import { turnGate } from "./turn-gate.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -2601,13 +2604,11 @@ async function warmBot(botId: string): Promise<boolean> {
  * biją się na telefonie o RAM i CPU, więc szeregowo wychodzi szybciej niż
  * równolegle.
  *
- * MULTIBOT_WARM_WORKERS=0 znaczy „każdy bot to ciepły worker": rozgrzewamy
- * WSZYSTKIE boty, a driver nikogo nie eksmituje ani nie ubija z bezczynności.
- * Parsowanie musi się zgadzać z maxWarmWorkers() w drivers/claude.ts — inaczej
- * jedna strona zrozumiałaby 0 jako „dwa".
+ * Domyślnie WYŁĄCZONE (MULTIBOT_WARM_WORKERS niezadane lub 0): bezczynny bot
+ * to zero procesów, a rozgrzany worker i tak schodzi po WORKER_IDLE_MS.
+ * Wartość > 0 rozgrzewa tyle ostatnio używanych botów przy starcie.
  */
-const warmWorkerLimit = () =>
-  process.env.MULTIBOT_WARM_WORKERS ? Number(process.env.MULTIBOT_WARM_WORKERS) || 0 : 2;
+const warmWorkerLimit = () => Number(process.env.MULTIBOT_WARM_WORKERS) || 0;
 const warmColdStreak = new Map<string, number>();
 async function warmBots(): Promise<void> {
   const limit = warmWorkerLimit();
@@ -2615,7 +2616,8 @@ async function warmBots(): Promise<void> {
   const recent = store.bots
     .filter((b) => !b.hidden && !b.temporary)
     .sort((a, b) => lastAt(b) - lastAt(a));
-  for (const bot of limit > 0 ? recent.slice(0, limit) : recent) {
+  if (limit <= 0) return;
+  for (const bot of recent.slice(0, limit)) {
     // Bot, który pięć zamiatań z rzędu nie utrzymał procesu, jest odpuszczany:
     // to znaczy, że CLI jest u niego trwale zepsute, a nie że zabrakło pamięci
     // na chwilę — mielenie telefonu w kółko nic tu nie naprawi.
@@ -5447,11 +5449,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
+      const mb = (n: number) => Math.round(n / 1024 / 1024);
       return json(res, 200, {
         app: "multibot",
         pid: process.pid,
         static: Boolean(STATIC_DIR),
         service: process.env.MULTIBOT_SERVER_SERVICE === "1",
+        mem: { availableMb: mb(availableMemoryBytes()), totalMb: mb(totalMemoryBytes()) },
+        load: os.loadavg()[0],
+        workers: claudeWorkerCount(),
+        activeTurns: turnGate.state().active.length,
       });
     }
 
@@ -6193,14 +6200,6 @@ server.listen(PORT, HOST, () => {
   // never started. Anything still inside its budget and its clock is picked up
   // where it stopped; only the genuinely spent ones are written off.
   resumeRecoveredRooms();
-  // multibot: w trybie „każdy bot zawsze active" worker potrafi zniknąć bez
-  // naszego udziału — Android przy braku pamięci ubija bezczynne procesy (LMK),
-  // a wtedy bot cicho wraca do zimnego startu. Co minutę sprawdzamy więc, kto
-  // stracił proces, i stawiamy go z powrotem; warmBot jest idempotentny, więc
-  // ciepłe boty zamiatanie nic nie kosztuje. Przy limicie > 0 nie zamiatamy
-  // wcale — tam bezczynny worker MA prawo zejść i wskrzeszanie go co minutę
-  // wywróciłoby WORKER_IDLE_MS na każdej domyślnej instalacji.
-  if (warmWorkerLimit() <= 0) setInterval(() => void warmBots().catch(() => {}), 60_000).unref?.();
   // Never before `listen`: SSDP waits on a router that may never answer, and
   // nothing about the boot may depend on whether one does.
   void refreshAddress(PORT).catch(() => {});

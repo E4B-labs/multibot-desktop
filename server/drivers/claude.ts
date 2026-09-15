@@ -21,6 +21,7 @@ import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
 import { approvalRule } from "../approval-rules.ts";
 import { staleCliNotice } from "../cli-update.ts";
+import { memoryGuard } from "../mem.ts";
 import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed, turnPolicy } from "../turn-policy.ts";
 
 import type {
@@ -131,29 +132,21 @@ const cliModel = (model: string | undefined) => {
   return canonicalModel(model);
 };
 
-// multibot: ciepła sesja odpowiada w ~1.7 s, zimny start CLI na telefonie pod
-// obciążeniem kosztował 83 s — o szybkości bota decyduje więc to, czy proces
-// jeszcze żyje, a nie jaki model i ile myśli. Stąd godzina bezczynności zamiast
-// dziesięciu minut. Telefon nie ma RAM-u na proces per wątek, więc liczbę
-// żywych workerów ogranicza LRU (reapWarmWorkers) — ciepły zostaje ten, z kim
-// użytkownik faktycznie rozmawia.
-// Godzina to dokładnie ten przypadek, na który skarżył się użytkownik („także po
-// godzinie ciszy"), więc okno idzie na pół doby. Nie kosztuje to niczego, bo
-// pamięć ogranicza już LRU niżej, a nie zegar: żywych procesów jest tyle samo,
-// tylko czekają na rozmowę dłużej. Zmierzone na s10e: tura po ciszy 70–72 s do
-// pierwszego tokena (dwa boty), ta sama tura na ciepłym workerze 4 s.
-const WORKER_IDLE_MS = Number(process.env.MULTIBOT_WORKER_IDLE_MS) || 12 * 60 * 60_000;
-// multibot: MULTIBOT_WARM_WORKERS=0 włącza tryb „każdy bot to ciepły worker" —
-// nie eksmitujemy nikogo i nie ubijamy nikogo z bezczynności, bo każdy bot ma
-// odpowiadać w kilka sekund także po dobie ciszy. Gdy zmiennej nie ma, zostaje
-// dawne 2: instalacje, które o nic nie prosiły, nie mają nagle trzymać
-// dziesięciu procesów CLI naraz. Czytane przy każdej turze, nie przy imporcie —
-// test podkręca wartość bez przeładowywania modułu.
-// UWAGA: server/index.ts parsuje tę samą zmienną tak samo (warmBots) — obie
-// strony muszą rozumieć 0 identycznie, inaczej rozgrzewamy dwa boty, a limitu
-// nie ma.
-const maxWarmWorkers = () =>
-  process.env.MULTIBOT_WARM_WORKERS ? Number(process.env.MULTIBOT_WARM_WORKERS) || 0 : 2;
+// multibot: bezczynny bot = zero procesów. Zmierzone na telefonie (Termux,
+// 5,4 GB): 19 botów trzymanych ciepło przez 12 h to 7+ procesów claude po
+// 50–225 MB i ~7% CPU każdy, a Android ubija wtedy cały Termux (LOW_MEMORY).
+// Po turze proces żyje jeszcze chwilę (kolejna wiadomość w tej samej rozmowie
+// zastaje ciepły CLI), potem schodzi. Sesja NIE ginie: worker zapisał
+// `session.started` → store.resumeCursors, a następna tura wstaje z
+// `--resume <sessionId>` (spawnWorker niżej).
+// Czytane przy każdej turze, nie przy imporcie — test podkręca wartość bez
+// przeładowywania modułu.
+const workerIdleMs = () => Number(process.env.MULTIBOT_WORKER_IDLE_MS) || 60_000;
+/** Żywe procesy claude w tym serwerze — /api/health. */
+let liveWorkers = 0;
+export const claudeWorkerCount = (): number => liveWorkers;
+/** Szacunek RSS jednego procesu claude (zmierzone 50–225 MB na telefonie). */
+const WORKER_ESTIMATE_BYTES = 250 * 1024 * 1024;
 
 // multibot (B): budżet na PIERWSZY znak życia procesu po wysłaniu tury — nie na
 // całą turę (długie tury są legalne i nie wolno ich ucinać). Ciepły worker
@@ -395,9 +388,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       stderr: string;
       /** prompt systemowy, z którym ten proces wstał (--append-system-prompt) */
       system: string;
-      /** do LRU: monotoniczny licznik użycia. NIE zegar — dwie tury w tej samej
-       *  milisekundzie dałyby remis i eksmisję świeżo powołanego procesu. */
-      lastUsed: number;
       idleTimer?: ReturnType<typeof setTimeout>;
       onLine?: (line: string) => void;
       /** multibot (B): pierwszy znak życia z procesu — rozbraja watchdoga tury */
@@ -409,26 +399,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     // worker restart.
     const active = new Map<string, { stop: () => void; turnId: string; broker?: Broker }>();
     const workers = new Map<string, Worker>();
-    let useSeq = 0;
-    // multibot: ubijamy najdawniej używane BEZCZYNNE procesy, nigdy takiego z turą
-    // w locie. Bez limitu każdy wątek trzymałby własny CLI przez godzinę.
-    // `protect` to wątek, dla którego właśnie stawiamy proces — jego `current`
-    // jeszcze nie istnieje, więc bez tego wyjątku mógłby paść własną ofiarą.
-    const reapWarmWorkers = (protect: string) => {
-      const limit = maxWarmWorkers();
-      if (limit <= 0 || workers.size <= limit) return;
-      const idle = [...workers.entries()]
-        .filter(([key, w]) => !w.current && key !== protect)
-        .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-      for (const [key, victim] of idle) {
-        if (workers.size <= limit) break;
-        workers.delete(key);
-        if (victim.idleTimer) clearTimeout(victim.idleTimer);
-        victim.broker?.close();
-        killTree(victim.child);
-      }
-    };
-
     const emit = (event: RuntimeEvent) => {
       for (const l of [...listeners]) l(event);
     };
@@ -558,7 +528,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // ponownie użyty zamiast paść od razu na niezgodność podpisu.
       const warmOnly = (turn as SendTurnInput & { warmOnly?: boolean }).warmOnly === true;
 
-      const spawnWorker = (resume: string | null): Worker => {
+      const spawnWorker = async (resume: string | null): Promise<Worker> => {
+        await memoryGuard(WORKER_ESTIMATE_BYTES);
         // multibot (A1): Claude Code NIE ma wyścigu codexa — czeka na łączące się
         // serwery MCP (tool search / WaitForMcpServers), a awarię serwera zgłasza
         // Claude'owi zamiast cicho pominąć narzędzia. `MCP_TIMEOUT` to startup
@@ -579,7 +550,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           cwd: turn.cwd ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
           windowsVerbatimArguments: cli.windowsVerbatimArguments, detached: true,
         });
-        const fresh: Worker = { child, signature, sessionId, needsReplay: resume === null, buffer: "", stderr: "", system: turn.system ?? "", lastUsed: ++useSeq };
+        const fresh: Worker = { child, signature, sessionId, needsReplay: resume === null, buffer: "", stderr: "", system: turn.system ?? "" };
+        liveWorkers++;
+        child.once("exit", () => { liveWorkers--; });
         workers.set(threadId, fresh);
         return fresh;
       };
@@ -593,12 +566,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       let spawnedWorker = false;
       if (!worker || worker.child.stdin?.destroyed) {
-        worker = spawnWorker(typeof turn.resumeCursor === "string" ? turn.resumeCursor : null);
+        worker = await spawnWorker(typeof turn.resumeCursor === "string" ? turn.resumeCursor : null);
         spawnedWorker = true;
-        reapWarmWorkers(threadId);
       }
       if (worker.idleTimer) clearTimeout(worker.idleTimer);
-      worker.lastUsed = ++useSeq;
       // multibot: prompt systemowy trafia do CLI raz, przy spawnie. Gdy zmienił
       // się między turami (bot coś zapamiętał, doszedł skill, zmieniła się
       // autonomia), dowozimy go tą turą zamiast stawiać proces od nowa.
@@ -615,11 +586,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // multibot: zegar bezczynności zbrojony w jednym miejscu — po turze i po
       // rozgrzewce, żeby proces postawiony „na zapas" też kiedyś zszedł.
       const armIdle = () => {
-        // W trybie bez limitu bezczynność nie ubija procesu: cały sens „każdy
-        // bot zawsze active" polega na tym, że bot po tygodniu ciszy odpowiada
-        // tak samo szybko jak w środku rozmowy. Pamięci pilnuje wtedy liczba
-        // botów, a nie zegar.
-        if (maxWarmWorkers() <= 0) return;
         const w = worker!;
         if (w.idleTimer) clearTimeout(w.idleTimer);
         w.idleTimer = setTimeout(() => {
@@ -628,7 +594,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             w.broker?.close();
             killTree(w.child);
           }
-        }, WORKER_IDLE_MS);
+        }, workerIdleMs());
         w.idleTimer.unref?.();
       };
 
@@ -891,7 +857,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         firstEventTimer = setTimeout(onSilence, firstEventMs(freshSpawn));
         firstEventTimer.unref?.();
       };
-      function onSilence() {
+      async function onSilence() {
         firstEventTimer = undefined;
         if (current.settled) return;
         const dead = worker!;
@@ -916,7 +882,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         retried = true;
         // Sesja mogła już istnieć (worker odpowiadał wcześniej) — wznawiamy ją,
         // żeby powtórzona tura nie zgubiła kontekstu rozmowy.
-        worker = spawnWorker(dead.sessionId);
+        worker = await spawnWorker(dead.sessionId);
         worker.broker = inherited;
         worker.current = current;
         worker.onLine = handleLine;
