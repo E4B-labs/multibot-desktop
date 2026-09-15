@@ -70,7 +70,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.CLAUDE_CONFIG_DIR;
     delete process.env.MULTIBOT_FIRST_EVENT_MS;
     delete process.env.MULTIBOT_FIRST_EVENT_COLD_MS;
-    delete process.env.MULTIBOT_WARM_WORKERS;
+    delete process.env.MULTIBOT_WORKER_IDLE_MS;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -356,38 +356,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.prompt.message.content).toContain("two");
   });
 
-  // multibot: godzina ciepłego procesu razy liczba wątków zjadłaby telefon,
-  // więc żywych workerów jest najwyżej MAX_WARM_WORKERS (domyślnie 2).
-  it("keeps only the most recent warm workers", async () => {
+  // multibot: bezczynny bot = zero procesów. Po grace worker schodzi, a
+  // następna tura wstaje z `--resume <sessionId>` — rozmowa nie ginie.
+  it("kills an idle worker after the grace and resumes the session next turn", async () => {
+    process.env.MULTIBOT_WORKER_IDLE_MS = "200";
     await create("persistent");
-    for (const [i, threadId] of ["t-lru-1", "t-lru-2", "t-lru-3"].entries()) {
-      await instance.adapter.sendTurn({ threadId, text: `msg ${i}` });
-      await recorder.until(
-        (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === i + 1,
-      );
-    }
+    await instance.adapter.sendTurn({ threadId: "t-idle", text: "one" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(instance.adapter.hasSession("t-idle")).toBe(true);
+    const started = recorder.events.find((e) => e.type === "session.started") as { sessionId: string };
 
-    expect(instance.adapter.hasSession("t-lru-1")).toBe(false);
-    expect(instance.adapter.hasSession("t-lru-2")).toBe(true);
-    expect(instance.adapter.hasSession("t-lru-3")).toBe(true);
-  });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(instance.adapter.hasSession("t-idle")).toBe(false);
 
-  // multibot: „każdy bot to ciepły worker" — przy MULTIBOT_WARM_WORKERS=0 nikt
-  // nie wylatuje z LRU, bo każdy bot ma odpowiadać w kilka sekund, a nie tylko
-  // ten, z którym rozmawiało się ostatnio.
-  it("keeps every worker warm when the limit is 0", async () => {
-    process.env.MULTIBOT_WARM_WORKERS = "0";
-    await create("persistent");
-    for (const [i, threadId] of ["t-all-1", "t-all-2", "t-all-3"].entries()) {
-      await instance.adapter.sendTurn({ threadId, text: `msg ${i}` });
-      await recorder.until(
-        (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === i + 1,
-      );
-    }
-
-    expect(instance.adapter.hasSession("t-all-1")).toBe(true);
-    expect(instance.adapter.hasSession("t-all-2")).toBe(true);
-    expect(instance.adapter.hasSession("t-all-3")).toBe(true);
+    const dump = join(scratch, "resume.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-idle", text: "two", resumeCursor: started.sessionId });
+    const done = await recorder.until(
+      (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === 2,
+    );
+    expect(done).toMatchObject({ ok: true });
+    const argv: string[] = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(argv[argv.indexOf("--resume") + 1]).toBe(started.sessionId);
   });
 
   it("interrupt cancels the turn without a runtime error", async () => {
@@ -651,7 +641,6 @@ describe("ClaudeDriver worker liveness (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_DEAF_FLAG;
     delete process.env.MULTIBOT_FIRST_EVENT_MS;
     delete process.env.MULTIBOT_FIRST_EVENT_COLD_MS;
-    delete process.env.MULTIBOT_WARM_WORKERS;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
