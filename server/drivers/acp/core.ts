@@ -225,6 +225,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           : config;
 
         const cli = resolveCliSpawn(config.cli, support.spawnArgs(effectiveConfig, turn)); // multibot
+        // TODO(multibot): server/mem.ts does not exist on origin/main yet —
+        // once it lands, call its memoryGuard() here before spawn to refuse
+        // a new ACP child when memory is already tight (same problem this PR
+        // fixes from the other side: orphaned children eating RAM).
         const child = spawn(cli.command, cli.args, {
           cwd,
           env,
