@@ -64,6 +64,9 @@ import {
   resumeComputer,
   exec as computerExec,
   readComputerFile,
+  holdComputer,
+  releaseComputerHold,
+  computerIdleStatus,
 } from "./hosted-computer.ts";
 import * as computerControl from "./computer-control.ts";
 // multibot: the browser half of the computer — CDP tools and the teach recorder,
@@ -338,6 +341,8 @@ function releaseTurnSlot(botId: string): void {
   const wasActing = !nested && computerControl.setAgentActing(botId, false);
   const hadSlot = gatedTurnBots.delete(botId);
   if (hadSlot) computerControl.releaseAgent(botId);
+  // The idle clock of the computer starts ticking only once the turn is over.
+  if (!nested) releaseComputerHold(botId);
   if (wasActing || hadSlot) broadcast({ kind: "computer-queue", ...computerControl.control() });
 }
 // multibot (U1): prywatny Store nie zna izolowanych wątków grupy, ale ich
@@ -2812,6 +2817,7 @@ opts?: {
         // reszta dostałaby w prompcie ofertę, której nie umie zamontować.
         if (computer && computer.state !== "error" && instance.adapter.capabilities.agentsMcp === true) {
           integrations.localComputer = localComputerIntegration(bot.id);
+          holdComputer(bot.id);
         }
       } catch (e) {
         console.warn(`[multibot] computer unavailable for ${bot.id}:`, e instanceof Error ? e.message : e);
@@ -5973,7 +5979,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           detail: "Docker is not reachable — the bot's computer needs it to run.",
         });
       }
-      return json(res, 200, { state: status.state, detail: status.detail, ...computerControl.control() });
+      return json(res, 200, { state: status.state, detail: status.detail, computer: computerIdleStatus(), ...computerControl.control() });
     }
 
     // The screen. HTTP here, WebSocket via mountVncUpgrade.
