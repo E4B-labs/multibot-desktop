@@ -28,8 +28,23 @@ function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
+  } catch (err) {
+    // EPERM = alive but not ours (proot child under another uid); only
+    // ESRCH means gone.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Kernel start time of `pid` (jiffies since boot, /proc/<pid>/stat field
+ * 22), or null when unreadable. Same pid + same start time = same process,
+ * which is what guards the SIGKILL pass against PID reuse. */
+function startTime(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return rest[19] ?? null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -95,6 +110,10 @@ export function killTree(child: ChildProcess): void {
     return;
   }
   const tree = descendantPids(pid);
+  // Snapshot identity BEFORE signalling: once proot dies its traced child is
+  // reparented to init and no longer shows up under `pid`, so the re-walk
+  // alone would miss exactly the orphan this file exists for.
+  const identity = new Map(tree.map((p) => [p, startTime(p)] as const));
   try {
     process.kill(-pid, "SIGTERM"); // process group, when the sandbox kept it
   } catch {
@@ -105,14 +124,20 @@ export function killTree(child: ChildProcess): void {
   signalAll(tree, "SIGTERM"); // + every PID by proc walk, group or not
 
   const escalate = setTimeout(() => {
-    // Re-walk: a grandchild spawned between the first scan and now (e.g.
-    // opencode's own MCP proxies) is still in scope for the kill.
-    const survivors = descendantPids(pid).filter(isAlive);
-    if (survivors.length === 0) return;
+    // Survivors = snapshot pids still alive with the same start time (PID
+    // reuse guard) + their current descendants (grandchildren spawned since
+    // the first scan, e.g. opencode's own MCP proxies).
+    const survivors = new Set<number>();
+    for (const [p, start] of identity) {
+      if (!isAlive(p)) continue;
+      if (start !== null && startTime(p) !== start) continue; // reused pid
+      for (const d of descendantPids(p)) survivors.add(d);
+    }
+    if (survivors.size === 0) return;
     try {
       process.kill(-pid, "SIGKILL");
     } catch {}
-    signalAll(survivors, "SIGKILL");
+    signalAll([...survivors], "SIGKILL");
   }, ESCALATE_MS);
   escalate.unref?.();
 }
