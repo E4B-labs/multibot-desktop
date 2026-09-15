@@ -439,7 +439,7 @@ export const IDLE_MS = Math.max(0, Number(process.env.MULTIBOT_COMPUTER_IDLE_MS 
 const idle = {
   lastUse: 0,
   running: false,
-  holds: new Set<string>(),
+  holds: new Map<string, number>(), // key -> refcount (two turns of one bot may overlap)
   timer: null as ReturnType<typeof setTimeout> | null,
   /** Test seam: what "stop" does. */
   stop: stopComputer as () => Promise<void>,
@@ -478,12 +478,16 @@ export function touchComputer(): void {
 
 /** A turn with the computer tools mounted keeps it awake until `releaseComputerHold`. */
 export function holdComputer(key: string): void {
-  idle.holds.add(key);
+  idle.holds.set(key, (idle.holds.get(key) ?? 0) + 1);
   touchComputer();
 }
 
 export function releaseComputerHold(key: string): void {
-  if (idle.holds.delete(key)) touchComputer();
+  const n = idle.holds.get(key);
+  if (n === undefined) return;
+  if (n > 1) idle.holds.set(key, n - 1);
+  else idle.holds.delete(key);
+  touchComputer();
 }
 
 /** What the panel shows: `running: false` reads as "komputer uśpiony". */
