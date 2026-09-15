@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 
 import { botSystemPrompt } from "./bot-prompt.ts";
+import { appendClientTiming, parseClientTiming, readClientTiming } from "./client-timing.ts";
 // multibot: autoweryfikacja — filtr na prośbach o zgodę, patrz server/auto-verify.ts.
 import { decideAction, normalizeAutoVerify, type AutoVerifyState } from "./auto-verify.ts";
 import { fleetStatusBlock } from "./fleet-status.ts";
@@ -5391,6 +5392,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const run = routine.last_runs[0];
       if (run?.status === "error") return json(res, 409, { error: run.error, routine: routineView(m[1], routine) });
       return json(res, 200, routineView(m[1], routine));
+    }
+
+    // ── multibot: pomiar startu interfejsu ─────────────────────────────
+    // Jedna linia JSON na start, z każdego urządzenia — żeby dało się
+    // porównać "wolno się otwiera" na telefonie i z drugiego miasta bez
+    // zgadywania. Ten sam plik dla wszystkich aktorów, bo to diagnostyka
+    // instalacji, nie prywatna dana użytkownika.
+    if (path === "/api/client-timing" && method === "POST") {
+      const entry = parseClientTiming(await readBody(req));
+      if (!entry) return json(res, 400, { error: "bad client-timing payload" });
+      appendClientTiming(join(DATA_DIR, "client-timing.jsonl"), entry);
+      return json(res, 200, { ok: true });
+    }
+    if (path === "/api/client-timing" && method === "GET") {
+      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+      return json(res, 200, { entries: readClientTiming(join(DATA_DIR, "client-timing.jsonl"), limit) });
     }
 
     // ── multibot: przypomnienia (jednorazowe) ──────────────────────────

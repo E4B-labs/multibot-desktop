@@ -15,6 +15,7 @@ import type { MascotShape } from "@/lib/mascotShapes";
 import type { BotColor, BotMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
 import { BOT_COLORS } from "@/lib/mascot";
 import { authFetch, authenticatedEventSource } from "@/lib/auth";
+import { markStartup, onStartupReady } from "@/lib/startupTiming";
 import { getLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import {
@@ -1173,6 +1174,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
     };
     loadAll();
+    // multibot: raport startu leci na serwer raz — ląduje w client-timing.jsonl,
+    // żeby dało się porównać starty z telefonu i z drugiego miasta.
+    onStartupReady((report) => {
+      api("/api/client-timing", { method: "POST", body: JSON.stringify(report) }).catch(() => {});
+    });
     const catalogTimer = window.setInterval(() => {
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
@@ -1182,6 +1188,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let lastSequence = 0;
     const es = authenticatedEventSource(`/api/events?lang=${getLanguage()}`);
     es.onopen = () => {
+      markStartup("events-open");
       rawDispatch({ type: "connected", value: true });
       loadAll(); // resync anything missed while disconnected
     };

@@ -26,6 +26,9 @@ import { BotSettingsCard } from "./BotSettingsCard";
 import { Skeleton, Spinner } from "./Loading";
 import { applyMotionMode, readMotionMode, type MotionMode } from "@/lib/motion";
 import { readDesktopNotifications, requestBrowserNotifications, setDesktopNotifications } from "@/lib/notifications";
+import { formatStartupReport, getStartupReport, onStartupReady, type StartupReport } from "@/lib/startupTiming";
+
+type ClientTimingEntry = StartupReport;
 
 const slug = (value: string) =>
   value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
@@ -107,6 +110,58 @@ function DiagnosticsRow() {
       <FileDown size={18} className="shrink-0 text-ink-secondary" />
       <div className="min-w-0 flex-1"><div className="text-[15px] font-medium text-ink">{polish ? "Diagnostyka" : "Diagnostics"}</div><div className="mt-0.5 text-[12px] text-ink-secondary">{polish ? "Raport bez kluczy i tokenów." : "Report with keys and tokens redacted."}</div>{result && <div className="mt-1 text-[12px] text-success">{result}</div>}</div>
       <button type="button" disabled={busy || !window.ogb?.exportDiagnostics} onClick={() => void exportReport()} className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-40">{busy ? <Loader2 size={14} className="animate-spin" /> : polish ? "Eksportuj" : "Export"}</button>
+    </div>
+  );
+}
+
+// multibot: "opens very slowly" na telefonie i z drugiego miasta — bez
+// liczb to zgadywanie. Sekcja pokazuje własny start (z performance.timing)
+// i starty innych urządzeń zebrane na serwerze w client-timing.jsonl.
+function StartupTimingSection() {
+  const polish = useLanguage() === "pl";
+  const [report, setReport] = useState(getStartupReport());
+  const [others, setOthers] = useState<ClientTimingEntry[]>([]);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => onStartupReady(setReport), []);
+  useEffect(() => {
+    let alive = true;
+    api("/api/client-timing?limit=20").then((body) => alive && setOthers(body.entries ?? [])).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const copy = () => {
+    if (!report) return;
+    void copyText(formatStartupReport(report)).then((ok) => ok && (setCopied(true), setTimeout(() => setCopied(false), 1500)));
+  };
+  return (
+    <div className="mt-4 rounded-xl bg-card p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[15px] font-medium text-ink">{polish ? "Start aplikacji" : "App startup"}</div>
+        {report && (
+          <button type="button" onClick={copy} className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover">
+            {copied ? (polish ? "Skopiowano" : "Copied") : polish ? "Kopiuj" : "Copy"}
+          </button>
+        )}
+      </div>
+      {!report && <div className="mt-3 flex items-center gap-2 text-[12.5px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{polish ? "Trwa pomiar…" : "Measuring…"}</div>}
+      {report && (
+        <div className="mt-3 font-mono text-[11.5px] leading-relaxed text-ink-secondary">
+          <div className="text-ink">{report.totalMs} ms <span className="text-ink-secondary">({report.fromCache ? (polish ? "z cache" : "cached") : (polish ? "z sieci" : "network")})</span></div>
+          <div className="truncate">{report.origin}</div>
+          {report.steps.map((step) => (
+            <div key={step.name} className="flex gap-2"><span className="w-14 shrink-0 text-right">{step.ms}</span><span className="truncate">{step.name}{step.durMs !== undefined ? ` (+${step.durMs})` : ""}</span></div>
+          ))}
+        </div>
+      )}
+      {others.length > 0 && (
+        <div className="mt-4 border-t border-hairline/30 pt-3">
+          <div className="text-[12px] font-medium text-ink-secondary">{polish ? "Ostatnie starty" : "Recent startups"}</div>
+          <div className="mt-2 flex flex-col gap-1 font-mono text-[11.5px] text-ink-secondary">
+            {others.map((entry, i) => (
+              <div key={i} className="flex gap-2 truncate"><span className="w-14 shrink-0 text-right">{entry.totalMs} ms</span><span className="truncate">{entry.origin || "?"}</span><span className="shrink-0 opacity-60">{entry.fromCache ? (polish ? "cache" : "cache") : ""}</span></div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1291,6 +1346,7 @@ export function AppSettingsPanel() {
 
               <MachineResources />
               <DiagnosticsRow />
+              <StartupTimingSection />
             </>
           )}
             </ErrorBoundary>
