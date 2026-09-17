@@ -91,7 +91,7 @@ gdy wkleisz wyjście bramki z liczbami. „Powinno działać" się nie liczy.
 2. **Nie `git add -A`.** W drzewie bywają cudze niezacommitowane zmiany. Pliki
    dodajesz po nazwie. Nigdy `--force`, nigdy `push --force` na `main`.
 3. **Sekrety nigdzie**: ani w repo, ani w logu, ani w raporcie, ani w pamięci
-   Brain (tam idą wyłącznie nazwy sekretów). To repo jest publiczne.
+   zespołu (`G:RAG-Second Brain`, tam idą wyłącznie nazwy sekretów). To repo jest publiczne.
 4. **Nie zmieniasz `server/contracts.ts`** ani kształtu zapisanych danych bez
    decyzji właściciela.
 5. **Nie dokładasz zależności npm** dla czegoś, co robi kilka linii.
@@ -105,7 +105,7 @@ gdy wkleisz wyjście bramki z liczbami. „Powinno działać" się nie liczy.
 | [`ARCHITECTURE.md`](docs/engineering/ARCHITECTURE.md) | procesy, porty, dane, auth, drivery, punkty kolizji |
 | [`WORKFLOW.md`](docs/engineering/WORKFLOW.md) | pełny cykl zadania od fetch do merge'a |
 | [`BRANCHING.md`](docs/engineering/BRANCHING.md) | nazewnictwo, baza, rebase, gałęzie do sprzątnięcia |
-| [`AI_AGENT_PROTOCOL.md`](docs/engineering/AI_AGENT_PROTOCOL.md) | agenty równoległe, adaptery narzędzi, pamięć Brain |
+| [`AI_AGENT_PROTOCOL.md`](docs/engineering/AI_AGENT_PROTOCOL.md) | agenty równoległe, adaptery narzędzi, pamięć zespołu |
 | [`PR_POLICY.md`](docs/engineering/PR_POLICY.md) | co musi być w PR, role recenzenta i bramki |
 | [`CODE_OWNERSHIP.md`](docs/engineering/CODE_OWNERSHIP.md) | kto trzyma który obszar |
 | [`RELEASE.md`](docs/engineering/RELEASE.md) | kanały, numeracja wersji, wydanie desktopu |
