@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import { newId, type AttachmentMeta, type ModelSelection, type ThreadId } from "./contracts.ts";
 
-export type MausColor =
+export type BotColor =
   | "green"
   | "blue"
   | "red"
@@ -19,6 +19,9 @@ export type MausColor =
   | "yellow"
   | "teal"
   | "coral"
+  | "lime"
+  | "indigo"
+  | "white"
   | "black";
 
 /**
@@ -26,7 +29,7 @@ export type MausColor =
  * string rather than a union: bots saved under the app's earlier ten-face
  * vocabulary still carry those names, and the client resolves both on read.
  */
-export type MausExpression = string;
+export type BotExpression = string;
 export type MascotShape = string;
 
 /** Konektory, o które bot może poprosić kartą — zamknięty zbiór, bo każdy
@@ -46,9 +49,15 @@ export interface OptionCardData {
    *  captcha) i czeka: przejmij / gotowe / pomiń.
    *  `connect` — bot potrzebuje konektora, którego nie ma: karta nie blokuje
    *  tury, człowiek podłącza go wtedy, kiedy chce. */
-  kind?: "computer-handoff" | "connect";
+  kind?: "computer-handoff" | "connect" | "approval";
   /** karty `connect`: który konektor otworzyć w panelu wtyczek. */
   connector?: ConnectorTarget;
+  /** multibot: pytanie wielokrotnego wyboru — karta rysuje checkboxy i przycisk
+   *  „Zatwierdź", a odpowiedź wraca jako wybrane etykiety rozdzielone przecinkiem. */
+  multiple?: boolean;
+  /** multibot: odpowiedź dojechała do bota (serwer potwierdził jej przyjęcie).
+   *  Karta potwierdzenia mówi „wysłano do X", póki tej flagi nie ma. */
+  delivered?: boolean;
 }
 
 export interface SecretRequestCardData {
@@ -65,14 +74,18 @@ export interface SecretRequestCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret";
+  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret" | "login";
   text?: string;
+  /** multibot: karta „logowanie wygasło" — harness CLI bota stracił sesję;
+   * `signedIn` zapala się, gdy logowanie znów działa (udany cli-login albo
+   * następna udana tura). Addytywne; stare zapisy czytają się bez migracji. */
+  login?: { tool: string; signedIn?: boolean };
   card?: OptionCardData;
   secret?: SecretRequestCardData;
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
   /** Small durable workspace event shown as a chat pill. */
-  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "goal-progress"; value: string };
+  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "reminder" | "goal-progress"; value: string };
   /** collaboration-room chip: a clickable "X texted Y" / "X replied" pill
    * leading to the room. `event` names what just happened; without it the pill
    * describes the room as a whole. */
@@ -107,8 +120,8 @@ export interface BotRecord {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
-  mascotExpression?: MausExpression | null;
+  color: BotColor;
+  mascotExpression?: BotExpression | null;
   /** Optional silhouette from the built-in mascot icon set. */
   mascotShape?: MascotShape;
   /** Custom avatar photo (data URL or /api/bots/:id/avatar URL). Circular crop. */
@@ -148,6 +161,10 @@ export interface BotRecord {
   /** Podagent tymczasowy znika po restarcie serwera. */
   temporary?: boolean;
   busy?: boolean;
+  /** multibot: TRWAJĄCA (albo ostatnia) tura ruszyła od innego bota, nie od
+   * człowieka — powłoka nie rysuje z niej banerki „skończył". Nie kasujemy po
+   * turze: następna tura nadpisuje wartość. */
+  botTurn?: boolean;
   /** multibot (D7): bot silnika czeka na człowieka (login, captcha, pytanie) —
    * treść powodu prosto z eventu `attention`, `null`/brak = nie czeka. Jedzie
    * w bots.json, więc powód przeżywa restart tak samo jak po stronie silnika. */
@@ -194,9 +211,49 @@ export function sortMessages<T extends { id: string; at: number; order?: number 
   return [...messages].sort((a, b) => a.at - b.at || (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
 }
 
+/** A group turn from 0.5.27 and earlier was stored on the member's own thread
+ * VISIBLE: the envelope as a user bubble, the reply as a bot bubble, plus a
+ * group room chip. Those records carry no marker to filter on, so reading
+ * reconstructs the turn from its shape — the envelope opens it, and everything
+ * the bot wrote after it belonged to that turn until the next human message.
+ * New group turns are stored `hidden` and post no chip, so this only ever
+ * matches data written by an older server. */
+/** Both halves of the header `groupEnvelope` builds, so a human who happens to
+ * open a message with `[Group chat "` does not erase their own turn. */
+const isLegacyGroupEnvelope = (m: Message) =>
+  m.role === "user" && m.kind === "text" && !!m.text
+  && m.text.startsWith('[Group chat "') && m.text.includes("The user writes to the whole group.");
+const isGroupChip = (m: Message) => m.kind === "room" && !!m.room?.groupId;
+
+export function withoutLegacyGroupLeak(messages: readonly Message[]): Message[] {
+  // A current server writes the envelope `hidden` and posts no group chip, so
+  // a thread with nothing visible to match leaves here without a copy or a
+  // sort — which is every thread, on every `GET /api/bots`, once the old
+  // records are gone.
+  if (!messages.some((m) => !m.hidden && (isLegacyGroupEnvelope(m) || isGroupChip(m)))) return messages as Message[];
+  const drop = new Set<string>();
+  let inGroupTurn = false;
+  for (const m of sortMessages(messages)) {
+    // Hidden records are the CURRENT shape and are filtered by `hidden` alone;
+    // a hidden envelope must not open a window over the visible messages that
+    // follow it (an approval card, or the answer to a private message the same
+    // turn also carried).
+    if (m.hidden) continue;
+    if (m.role === "user") {
+      inGroupTurn = isLegacyGroupEnvelope(m);
+      if (inGroupTurn) drop.add(m.id);
+      continue;
+    }
+    // A group chip never belongs in a private chat, old or new: the group is a
+    // chat of its own and the user opens it from the sidebar.
+    if (inGroupTurn || isGroupChip(m)) drop.add(m.id);
+  }
+  return messages.filter((m) => !drop.has(m.id));
+}
+
 /** Rotacja kolorow dla nowych botow — czarnego celowo nie ma, dostaje go
  *  tylko bot, ktoremu ktos go ustawi. */
-const COLORS: MausColor[] = [
+const COLORS: BotColor[] = [
   "green",
   "blue",
   "red",
@@ -211,7 +268,7 @@ const COLORS: MausColor[] = [
 
 /** Kazdy kolor, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota) i dla PATCH /api/bots/:id (UI). */
-export const BOT_COLORS: MausColor[] = [...COLORS, "black"];
+export const BOT_COLORS: BotColor[] = [...COLORS, "lime", "indigo", "white", "black"];
 
 /** Kazdy ksztalt maskotki, na ktory wolno ustawic bota. Jedno zrodlo prawdy dla
  *  `managedBotPatch` (bot zmienia bota), PATCH /api/bots/:id (UI) i schematu
@@ -245,8 +302,8 @@ export function managedBotPatch(input: unknown, options: { temporary?: boolean }
     patch[key] = value[key];
   }
   if (value.color !== undefined) {
-    if (!BOT_COLORS.includes(value.color as MausColor)) throw new Error(`color must be one of: ${BOT_COLORS.join(", ")}`);
-    patch.color = value.color as MausColor;
+    if (!BOT_COLORS.includes(value.color as BotColor)) throw new Error(`color must be one of: ${BOT_COLORS.join(", ")}`);
+    patch.color = value.color as BotColor;
   }
   if (value.mascotShape !== undefined) {
     if (typeof value.mascotShape !== "string" || !BOT_SHAPES.includes(value.mascotShape)) {
@@ -291,7 +348,7 @@ export function managedBotPatch(input: unknown, options: { temporary?: boolean }
 
 // multibot (F9): głębokość łańcucha ask_bot. Wołający DEKLARUJE ją w ciele
 // żądania (proxy dostaje ją w env przy spawnie), ale deklaracja bywa nieaktualna:
-// bot silnika ma agents zamontowane na stałe w profilu, więc jego `OMB_TURN_DEPTH`
+// bot silnika ma agents zamontowane na stałe w profilu, więc jego `MULTIBOT_TURN_DEPTH`
 // zamarza na 0 i każdy hop resetowałby licznik — A→B→A→… bez dna. Harness zna
 // prawdziwą głębokość tury, która u wołającego TERAZ trwa, i to ona wygrywa.
 /** Głębokość łańcucha dla żądania ask_bot: większa z deklarowanej i faktycznej.

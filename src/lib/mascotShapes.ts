@@ -35,12 +35,24 @@ export type MascotShape = (typeof MASCOT_SHAPES)[number] | (typeof LEGACY_SHAPES
 
 const BOX = 114.2705;
 
-const simple = (name: MascotShape, body: string): BlobShape => ({
+/**
+ * Powiększenie sylwetki wokół środka pudełka, jako `fit`.
+ *
+ * `fit` idzie na ciało i na clipPath, ale NIE na twarz — twarz siedzi we
+ * własnym `anchor`. Dokładnie tego tu trzeba: pigułka, trójkąt i gwiazda mają
+ * mało miejsca na oczy w środku, więc sylwetka rośnie, a twarz maleje.
+ * Przeliczanie współrzędnych w ścieżkach dałoby to samo, tylko ręcznie.
+ */
+const grow = (scale: number) => `translate(${(BOX * (1 - scale)).toFixed(4)} ${(BOX * (1 - scale)).toFixed(4)}) scale(${scale})`;
+
+type SimpleOptions = { fit?: string; anchor?: BlobShape["anchor"] };
+
+const simple = (name: MascotShape, body: string, options: SimpleOptions = {}): BlobShape => ({
   name,
-  fit: "",
+  fit: options.fit ?? "",
   body,
   clip: body.replace(/ fill="\{\{GRADIENT\}\}"/g, ""),
-  anchor: { x: BOX, y: BOX, scale: 0.86 },
+  anchor: options.anchor ?? { x: BOX, y: BOX, scale: 0.86 },
 });
 
 // Zaokrąglenia siedzą w geometrii ścieżki, nie w obrysie. `clip` to clipPath,
@@ -68,16 +80,26 @@ const SHAPES: Record<MascotShape, BlobShape> = {
   leaf: simple("leaf", '<path d="M24 204A150 150 0 0 1 204 24A150 150 0 0 1 24 204Z" fill="{{GRADIENT}}"/>'),
   circle: simple("circle", '<circle cx="114.2705" cy="114.2705" r="96" fill="{{GRADIENT}}"/>'),
   square: simple("square", '<rect x="24" y="24" width="180" height="180" rx="38" fill="{{GRADIENT}}"/>'),
-  pill: simple("pill", '<rect x="12" y="64" width="204" height="100" rx="50" fill="{{GRADIENT}}"/>'),
+  // Pigułka, trójkąt i gwiazda: sylwetka o 7% większa (`grow`), twarz o ~6%
+  // mniejsza (`scale` w anchorze). Wszystkie trzy mają wąskie wnętrze — pigułka
+  // jest niska, trójkąt zwęża się w szpic, gwiazda gubi masę w ramionach — więc
+  // twarz w domyślnej skali 0.86 wychodziła im poza brzuch.
+  pill: simple("pill", '<rect x="12" y="64" width="204" height="100" rx="50" fill="{{GRADIENT}}"/>', {
+    fit: grow(1.07),
+    anchor: { x: BOX, y: BOX, scale: 0.81 },
+  }),
   // Trójkąt wskazujący w prawo. Każdy róg to krzywa kwadratowa, której punktem
-  // sterującym jest sam wierzchołek — stąd zaokrąglenie bez obrysu.
+  // sterującym jest sam wierzchołek — stąd zaokrąglenie bez obrysu. Twarz siedzi
+  // na lewo od środka pudełka, bo masa trójkąta jest przy podstawie, nie w szpicu.
   triangle: simple(
     "triangle",
     '<path d="M80 40.3 179.9 99.9Q204 114.3 179.9 128.6L80 188.2Q56 202.5 56 174.5L56 54Q56 26 80 40.3Z" fill="{{GRADIENT}}"/>',
+    { fit: grow(1.07), anchor: { x: 110, y: BOX, scale: 0.81 } },
   ),
   star: simple(
     "star",
     '<path d="M114.3 14.3 140.7 77.9 209.4 83.4 157.1 128.2 173.1 195.2 114.3 159.3 55.5 195.2 71.5 128.2 19.2 83.4 87.8 77.9Z" fill="{{GRADIENT}}"/>',
+    { fit: grow(1.07), anchor: { x: BOX, y: 108, scale: 0.81 } },
   ),
   // Romb to ten sam zaokrąglony kwadrat obrócony o 45 stopni. Osobna ścieżka
   // powtarzałaby te same łuki, tylko trudniej je było policzyć.
@@ -85,9 +107,13 @@ const SHAPES: Record<MascotShape, BlobShape> = {
     "diamond",
     '<rect x="41" y="41" width="146" height="146" rx="28" transform="rotate(45 114.2705 114.2705)" fill="{{GRADIENT}}"/>',
   ),
+  // Teczka nie jest symetryczna w pionie: zakładka siedzi nad korpusem, więc
+  // środek pudełka wypada na krawędzi, a twarz wjeżdżała w zgięcie. Anchor
+  // celuje w środek samego korpusu (y 74..198), czyli 136.
   folder: simple(
     "folder",
     '<path d="M26 76Q26 54 48 54L92 54Q102 54 108 62L118 74 180 74Q202 74 202 96L202 176Q202 198 180 198L48 198Q26 198 26 176Z" fill="{{GRADIENT}}"/>',
+    { anchor: { x: 114, y: 136, scale: 0.86 } },
   ),
 
   // Wycofane z wyboru, patrz LEGACY_SHAPES.

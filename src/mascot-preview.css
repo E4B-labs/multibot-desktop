@@ -532,3 +532,42 @@ h1 {
     max-height: none;
   }
 }
+
+/* Shapes: the big morph target plus every silhouette at the two sizes the app draws. */
+.shape-stage {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 0 4px;
+}
+
+.shape-stage code {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  padding-bottom: 12px;
+}
+
+.shape-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.shape-cell.on {
+  border-color: rgba(120, 170, 255, 0.6);
+  color: #fff;
+}

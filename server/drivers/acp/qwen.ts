@@ -7,6 +7,23 @@ import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 export const qwenAcpArgs = (model?: string) => ["--acp", ...(model ? ["--model", model] : [])];
 
+// `OPENAI_API_KEY` NIE jest dowodem zalogowania Qwena — tej nazwy używa driver
+// openaiCompatible (drivers/grok.ts) i połowa narzędzi na maszynie. Klucz OpenAI
+// w env meldował Qwena jako zalogowanego, więc picker świecił na zielono, a tura
+// i tak padała na CLI.
+export const qwenIsAuthenticated = (env: Record<string, string | undefined>, home = homedir()): boolean => {
+  if (env.QWEN_API_KEY || env.DASHSCOPE_API_KEY) return true;
+  if (existsSync(join(home, ".qwen", "oauth_creds.json"))) return true;
+  try {
+    const settings = JSON.parse(readFileSync(join(home, ".qwen", "settings.json"), "utf8")) as {
+      security?: { auth?: { selectedType?: unknown } };
+    };
+    return typeof settings.security?.auth?.selectedType === "string";
+  } catch {
+    return false;
+  }
+};
+
 // Qwen Code (qwen-code): realne modele z qwenlm.github.io/qwen-code-docs/
 // en/users/configuration/auth/ — Alibaba Cloud Coding Plan (qwen OAuth
 // wyłączony 2026-04-15; wymagany klucz sk-sp- lub API key). Zalecany default
@@ -31,18 +48,7 @@ const support: AcpSupport = {
   spawnArgs: (_config, turn) => qwenAcpArgs(turn.model),
   pickAuthMethod: (methods) => methods.find((method) => typeof method.id === "string")?.id ?? null,
   authFailure: "continue",
-  isAuthenticated: (env) => {
-    if (env.QWEN_API_KEY || env.DASHSCOPE_API_KEY || env.OPENAI_API_KEY) return true;
-    if (existsSync(join(homedir(), ".qwen", "oauth_creds.json"))) return true;
-    try {
-      const settings = JSON.parse(readFileSync(join(homedir(), ".qwen", "settings.json"), "utf8")) as {
-        security?: { auth?: { selectedType?: unknown } };
-      };
-      return typeof settings.security?.auth?.selectedType === "string";
-    } catch {
-      return false;
-    }
-  },
+  isAuthenticated: (env) => qwenIsAuthenticated(env, env.HOME ?? homedir()),
   buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
 };
 

@@ -4,15 +4,24 @@
 // HTML: no rehype-raw, so HTML in the text renders as text; Shiki's output is
 // generator-escaped. While a message is still streaming, code blocks render
 // as plain <pre> and nothing is cached — partial fences would poison it.
+//
+// multibot: matematyka. `remark-math` + `rehype-katex` w trybie MathML —
+// przeglądarka rysuje wzór własnym silnikiem, więc do paczki nie wchodzi ANI
+// arkusz KaTeX, ANI jego fonty. To nie jest oszczędność dla samej oszczędności:
+// webui jedzie na telefon jako jeden string HTML z `baseUrl` serwera i chodzi
+// przez Tora, więc każde odwołanie do zewnętrznego hosta z fontem byłoby
+// pustym kwadratem zamiast wzoru. `throwOnError: false` — zły LaTeX renderuje
+// się na czerwono jako źródło, nigdy nie wywraca całej wiadomości.
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import { asciiMathToLatex } from "@/lib/asciiMath";
 import { Check, Copy } from "lucide-react";
 import { useLanguage } from "@/lib/language";
 import { cn } from "@/lib/cn";
-import { normalizeState } from "@/lib/mascot";
-import { botDisplayName } from "@/lib/botNames";
-import { MausAvatar } from "./Avatar";
+import { BotChip } from "./PeerBadge";
 import { SkillRef } from "./SkillRef";
 import { useStore } from "@/state/store";
 // multibot (2.4): wzmianki jako chip — logika wtyczki w osobnym, testowanym pliku.
@@ -48,13 +57,8 @@ function CodeBlock({ code, lang, streaming, compact }: { code: string; lang: str
     const cached = highlightCache.get(key);
     if (cached) return setHtml(cached);
     let alive = true;
-    import("shiki")
-      .then((shiki) =>
-        shiki.codeToHtml(code, {
-          lang: lang || "text",
-          theme: "github-dark-default",
-        }),
-      )
+    import("@/lib/highlighter")
+      .then((shiki) => shiki.highlightCode(code, lang || "text"))
       .then((out) => {
         if (!alive) return;
         if (highlightCache.size >= CACHE_MAX) {
@@ -111,17 +115,30 @@ function CodeBlock({ code, lang, streaming, compact }: { code: string; lang: str
  * flagi, więc zostają w dotychczasowych rozmiarach. */
 function ChatMarkdownComponent({ text, streaming = false, compact = false }: { text: string; streaming?: boolean; compact?: boolean }) {
   const { state } = useStore();
-  const polish = useLanguage() === "pl";
   const bots = useMemo<MentionBot[]>(() => state.bots, [state.bots]);
   const skillNames = useMemo(() => state.skills.map((skill) => skill.name), [state.skills]);
   const remarkPlugins = useMemo<any[]>(
-    () => withSkillRefPlugins([...mentionPlugins(remarkGfm, bots), remarkBrackets], skillNames) as any[],
+    () => withSkillRefPlugins([...mentionPlugins(remarkGfm, bots), remarkBrackets, remarkMath], skillNames) as any[],
     [bots, skillNames],
   );
+  // ratunek dla botów piszących wzory ASCII-em zamiast LaTeX-em — no-op, gdy
+  // tekst już ma `$…$`. Reguła w prompcie systemowym to główna droga.
+  const source = useMemo(() => asciiMathToLatex(text), [text]);
   return (
-    <div className="chat-md min-w-0 [&>*+*]:mt-2">
+    <div
+      className={cn(
+        "chat-md min-w-0 [&>*+*]:mt-3",
+        // wzór blokowy: własny oddech i poziomy suwak, żeby długie równanie nie
+        // rozpychało dymka na telefonie. W trybie MathML KaTeX nie daje
+        // `.katex-display` — jedyny uchwyt to `display="block"` na <math>
+        // (pilnuje tego ChatMarkdown.math.test.ts).
+        "[&_math[display='block']]:my-3 [&_math[display='block']]:block [&_math[display='block']]:overflow-x-auto [&_math[display='block']]:overflow-y-hidden [&_math[display='block']]:text-center",
+        "[&_math]:font-normal [&_strong]:font-semibold [&_strong]:text-ink",
+      )}
+    >
       <Markdown
         remarkPlugins={remarkPlugins}
+        rehypePlugins={[[rehypeKatex, { output: "mathml", throwOnError: false, strict: false }]]}
         components={{
           span({ node, children }: { node?: any; children?: ReactNode }) {
             const mention = node?.properties?.dataMention ?? node?.properties?.["data-mention"];
@@ -138,17 +155,9 @@ function ChatMarkdownComponent({ text, streaming = false, compact = false }: { t
               }
               return <span>{children}</span>;
             }
-            return (
-              <span className="inline-flex translate-y-px items-center gap-1 rounded-full bg-raised px-2 py-0.5 align-middle text-[13px] font-medium text-ink">
-                <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={normalizeState(bot.mascotExpression) ?? "happy"} size={16} animated={false} />
-                {/* multibot: sama nazwa, bez małpki. Owal z awatarem już mówi,
-                    że to bot, a „@" zostawiało dwa różne zapisy tej samej
-                    rzeczy: plakietka nadawcy przy wiadomościach bot→bot
-                    (PeerBadge) pokazuje „Atlas", więc pigułka też ma tak
-                    pokazywać. Nazwa idzie z tego samego źródła co tam. */}
-                {botDisplayName(bot, polish ? "pl" : "en")}
-              </span>
-            );
+            // multibot: wzmianka rysuje się TĄ SAMĄ pigułką co plakietka
+            // nadawcy bot→bot — jeden komponent, patrz PeerBadge.tsx.
+            return <BotChip bot={bot} />;
           },
           pre({ children }: { children?: ReactNode }) {
             // fenced code arrives as <pre><code class="language-x">…</code></pre>
@@ -177,48 +186,54 @@ function ChatMarkdownComponent({ text, streaming = false, compact = false }: { t
           },
           table({ children }: { children?: ReactNode }) {
             return (
-              <div className="overflow-x-auto">
+              <div className="my-1 overflow-x-auto rounded-lg border border-hairline/40">
                 <table className={cn("w-full border-collapse", compact ? "text-[13px]" : "text-[13.5px]")}>{children}</table>
               </div>
             );
           },
           th({ children }: { children?: ReactNode }) {
             return (
-              <th className="border-b border-hairline/40 px-2 py-1.5 text-left font-semibold">{children}</th>
+              <th className="border-b border-hairline/40 bg-inset/50 px-2.5 py-2 text-left font-semibold">{children}</th>
             );
           },
           td({ children }: { children?: ReactNode }) {
-            return <td className="border-b border-hairline/20 px-2 py-1.5 align-top">{children}</td>;
+            return <td className="border-b border-hairline/20 px-2.5 py-2 align-top">{children}</td>;
           },
           ul({ children }: { children?: ReactNode }) {
-            return <ul className="list-disc space-y-1 pl-5">{children}</ul>;
+            return <ul className="list-disc space-y-1.5 pl-[1.35rem] marker:text-ink-secondary">{children}</ul>;
           },
           ol({ children }: { children?: ReactNode }) {
-            return <ol className="list-decimal space-y-1 pl-5">{children}</ol>;
+            return <ol className="list-decimal space-y-1.5 pl-[1.35rem] marker:text-ink-secondary">{children}</ol>;
+          },
+          li({ children }: { children?: ReactNode }) {
+            return <li className="[&>*+*]:mt-2 leading-relaxed">{children}</li>;
+          },
+          p({ children }: { children?: ReactNode }) {
+            return <p className="leading-relaxed">{children}</p>;
           },
           h1({ children }: { children?: ReactNode }) {
-            return <div className="mt-2 text-[16px] font-semibold">{children}</div>;
+            return <div className="mt-4 text-[16px] font-semibold">{children}</div>;
           },
           h2({ children }: { children?: ReactNode }) {
-            return <div className={cn("mt-2 font-semibold", compact ? "text-[15px]" : "text-[15.5px]")}>{children}</div>;
+            return <div className={cn("mt-4 font-semibold", compact ? "text-[15px]" : "text-[15.5px]")}>{children}</div>;
           },
           h3({ children }: { children?: ReactNode }) {
-            return <div className="mt-1.5 font-semibold">{children}</div>;
+            return <div className="mt-3 font-semibold">{children}</div>;
           },
           h4({ children }: { children?: ReactNode }) {
-            return <div className="mt-1.5 font-semibold">{children}</div>;
+            return <div className="mt-3 font-semibold">{children}</div>;
           },
           blockquote({ children }: { children?: ReactNode }) {
             return (
-              <blockquote className="border-l-2 border-hairline pl-3 text-ink-secondary">{children}</blockquote>
+              <blockquote className="border-l-2 border-accent/40 py-0.5 pl-3 text-ink-secondary [&>*+*]:mt-2">{children}</blockquote>
             );
           },
           hr() {
-            return <hr className="border-hairline/40" />;
+            return <hr className="my-4 border-hairline/40" />;
           },
         }}
       >
-        {text}
+        {source}
       </Markdown>
     </div>
   );

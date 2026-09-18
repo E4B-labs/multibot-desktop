@@ -28,11 +28,60 @@ GEOMETRY="${MULTIBOT_COMPUTER_GEOMETRY:-1920x1080}"
 
 ROOT="${MULTIBOT_COMPUTER_HOME:-$HOME/.multibot-computer}"
 LOG="$ROOT/logs"
+# Every process THIS script launched, one "<name> <pid>" per line. `stop` kills
+# exactly these and nothing else: other things run under the same Termux, so
+# killing by process name is out of the question.
+PIDS="$ROOT/computer.pids"
 mkdir -p "$LOG" "$ROOT/chrome"
 
 export DISPLAY=":$DISPLAY_NUM"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Each piece is started with `setsid`, so its pid is also its process-group id:
+# killing the group takes the children (chromium renderers, crashpad) with it.
+alive() { kill -0 "$1" 2>/dev/null; }
+launched() { echo "$1 $2" >>"$PIDS"; }
+stop_all() {
+  [ -f "$PIDS" ] || { echo "nothing recorded in $PIDS"; return 0; }
+  # A polite logout first: xfce's own session clients (xfsettingsd, the power
+  # manager, the panel) daemonise out of our process group, and only the
+  # session manager knows how to ask them to leave.
+  if grep -q '^session ' "$PIDS" && have xfce4-session-logout; then
+    xfce4-session-logout --logout --fast >/dev/null 2>&1 || true
+    sleep 2
+  fi
+  local name pid
+  while read -r name pid; do
+    [ -n "$pid" ] && alive "$pid" || continue
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  done <"$PIDS"
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    local left=0
+    while read -r name pid; do alive "$pid" && left=1; done <"$PIDS"
+    [ "$left" = 0 ] && break
+    sleep 0.5
+  done
+  while read -r name pid; do
+    [ -n "$pid" ] && alive "$pid" || continue
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  done <"$PIDS"
+  rm -f "$PIDS"
+}
+
+if [ "${1:-}" = "stop" ]; then
+  stop_all
+  exit 0
+fi
+
+# Forget pids of processes that already died (a crash, a reboot) so a stale
+# number is never sent a signal after the kernel reused it.
+if [ -f "$PIDS" ]; then
+  kept="$(while read -r name pid; do alive "$pid" && echo "$name $pid"; done <"$PIDS")"
+  if [ -n "$kept" ]; then printf '%s
+' "$kept" >"$PIDS"; else rm -f "$PIDS"; fi
+fi
 
 # Termux keeps chromium out of PATH under that name.
 CHROME=""
@@ -52,6 +101,7 @@ if ! running "Xvnc :$DISPLAY_NUM"; then
   setsid Xvnc ":$DISPLAY_NUM" -geometry "$GEOMETRY" -depth 24 \
     -SecurityTypes None -localhost -rfbport "$VNC_PORT" \
     >"$LOG/xvnc.log" 2>&1 </dev/null &
+  launched xvnc $!
   sleep 4
 fi
 
@@ -73,8 +123,10 @@ if ! running "xfce4-session|openbox"; then
     else
       setsid xfce4-session >"$LOG/wm.log" 2>&1 </dev/null &
     fi
+    launched session $!
   elif have openbox; then
     setsid openbox >"$LOG/openbox.log" 2>&1 </dev/null &
+    launched session $!
   fi
   sleep 5
 fi
@@ -91,6 +143,7 @@ if ! running "$ROOT/chrome"; then
     --user-data-dir="$ROOT/chrome" \
     --start-maximized \
     about:blank >"$LOG/chrome.log" 2>&1 </dev/null &
+  launched chrome $!
 fi
 
 # noVNC over websockify, on the same port the container publishes.
@@ -100,6 +153,7 @@ if ! running "websockify.*$NOVNC_PORT"; then
     setsid python3 -m websockify --web="$NOVNC_DIR" \
       "127.0.0.1:$NOVNC_PORT" "127.0.0.1:$VNC_PORT" \
       >"$LOG/websockify.log" 2>&1 </dev/null &
+    launched websockify $!
   else
     echo "noVNC missing at $NOVNC_DIR — the screen will not render" >&2
   fi

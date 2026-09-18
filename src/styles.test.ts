@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // multibot: styles.css niosło ~555 linii martwej animacji maskotki — pełny
-// silnik `maus-*` (bevel, orbity, wstążki, konfetti, dymki peer-chat) z czasów,
+// silnik maskotki (bevel, orbity, wstążki, konfetti, dymki peer-chat) z czasów,
 // gdy maskotka była rysowana CSS-em. Dziś rysuje ją inline SVG w BlobAvatar,
 // a peer-chat nie istnieje. Nikt tego nie zauważył, bo martwego CSS-a nic nie
 // pilnuje: nie ma go w typach, w testach, ani w buildzie.
@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 const src = fileURLToPath(new URL(".", import.meta.url));
 const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
-const DEAD_PREFIXES = ["maus-", "peer-chat"];
+const DEAD_PREFIXES = ["peer-chat"];
 
 /** Wszystkie pliki .ts/.tsx pod src/, płasko po katalogach. */
 function sources(dir: string): string[] {
@@ -44,6 +44,29 @@ describe("styles.css nie trzyma martwych klas maskotki", () => {
 
   it("czyta prawdziwy arkusz i prawdziwe źródła", () => {
     expect(css.length).toBeGreaterThan(1_000);
-    expect(code).toContain("MausAvatar");
+    expect(code).toContain("BotAvatar");
+  });
+});
+
+// multibot: regresja 0.5.33 — odstęp pod kontrolki okna wybierał panel przez
+// `main:last-child`, a nakładka na całą powłokę to `div` doklejony ZA panelami.
+// Otwarcie okna wtyczek sprawiało więc, że żaden panel nie był już ostatnim
+// dzieckiem i nagłówek pod spodem tracił swoje 114 px: ikony „Bot's computer",
+// „Bot routines" i „Bot skills" (1314-1420 px przy oknie 1440) wjeżdżały pod
+// kontrolki okna (1337-1440). Nakładka jest półprzezroczysta, więc było to
+// widać jako zlepek ikon w prawym górnym rogu.
+describe("odstęp pod kontrolki okna przeżywa otwartą nakładkę", () => {
+  // Białe znaki znormalizowane: przeformatowanie arkusza nie ma prawa
+  // zaczerwienić testu, który pilnuje logiki selektora.
+  const flat = css.replace(/\s+/g, " ");
+
+  it("wybiera ostatni panel, a nie ostatnie dziecko", () => {
+    expect(flat).not.toContain("> main:last-child > [data-shell-header]");
+    expect(flat).toContain(":is(main, aside):not(:has(~ :is(main, aside))) > [data-shell-header]");
+  });
+
+  it("i nadal rezerwuje te 114 px", () => {
+    // Bez tego sama asercja negatywna przechodzi także po skasowaniu reguły.
+    expect(flat).toMatch(/:not\(:has\(~ :is\(main, aside\)\)\) > \[data-shell-header\] { padding-right: 114px/);
   });
 });

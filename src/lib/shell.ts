@@ -43,8 +43,12 @@ export type ShellHost = Listeners & {
   __MB_BRIDGE_NONCE__?: string;
   ReactNativeWebView?: ReactNativeBridge;
   ogb?: {
-    joinHost?(url: string, serverName: string, serverPassword: string): Promise<{ ok: boolean; hasUsers?: boolean; error?: string }>;
+    joinHost?(url: string, serverName: string, serverPassword: string, remember?: boolean): Promise<{ ok: boolean; hasUsers?: boolean; error?: string }>;
     setupJoin?(serverName: string, serverPassword: string): Promise<{ ok: boolean; joinGrant?: string; error?: string }>;
+    rememberedLogin?(): Promise<RememberedEntry | null>;
+    signInRemembered?(): Promise<{ ok: boolean; error?: string }>;
+    rememberProfile?(username: string, password: string): Promise<boolean>;
+    forgetRemembered?(): Promise<boolean>;
   };
   document?: Listeners;
   location?: { origin?: string };
@@ -191,18 +195,21 @@ export async function resolveHost(
   serverName: string,
   serverPassword: string,
   host: ShellHost | undefined = currentHost(),
+  // "Remember me". Last on purpose: `host` is the existing seam the tests use.
+  // The flag only ever reaches the SHELL — this page never keeps a password.
+  remember = false,
 ): Promise<HostJoinOutcome> {
   const native = host?.ReactNativeWebView;
   if (native && host) {
     // Listen BEFORE asking: a shell that answers instantly must not answer into
     // a channel nobody is on yet.
     const answer = awaitNativeJoin(host);
-    shellPost({ type: "host.join", url, serverName, serverPassword }, host);
+    shellPost({ type: "host.join", url, serverName, serverPassword, remember }, host);
     return answer;
   }
   const joinHost = host?.ogb?.joinHost;
   if (joinHost) {
-    const result = await joinHost(url, serverName, serverPassword);
+    const result = await joinHost(url, serverName, serverPassword, remember);
     if (result.ok) return { ok: true, hasUsers: result.hasUsers, handedOff: true };
     // `forbidden` znaczy jedno: ta strona przyszła PROSTO z hosta, bo lokalny
     // origin nie wstał (electron/remote-ui.mjs → main.mjs degraduje do
@@ -338,4 +345,66 @@ async function postPushToken(id: string, body: Record<string, unknown>): Promise
   } catch {
     return false;
   }
+}
+
+// ── remembered sign-in ─────────────────────────────────────────────────────
+// The five values that make a one-tap sign-in live in the SHELL: Electron's
+// safeStorage-encrypted file, or the phone's SecureStore. This page only ever
+// learns the three harmless ones, and only long enough to write them on a
+// button. Nothing here touches localStorage, and nothing here logs a value.
+//
+//   webui → shell   {"type":"remember.get"}
+//   shell → webui   {"type":"remember.entry","entry":{…}|null}
+//   webui → shell   {"type":"remember.signin"}
+//   shell → webui   {"type":"remember.signin.result","ok":false,"error":"…"}
+//                   (success reloads the page, so it never answers)
+//   webui → shell   {"type":"remember.profile","username","password"}
+//   webui → shell   {"type":"remember.forget"}
+
+export type RememberedEntry = { url: string; serverName: string; username: string };
+
+/** Whether this shell can remember anything at all. A plain browser cannot, so
+ * it gets neither the checkbox nor the saved entry. */
+export function canRemember(host: ShellHost | undefined = currentHost()): boolean {
+  return typeof host?.ogb?.rememberedLogin === "function" || isReactNativeShell(host);
+}
+
+export async function rememberedEntry(host: ShellHost | undefined = currentHost()): Promise<RememberedEntry | null> {
+  const read = host?.ogb?.rememberedLogin;
+  if (read) return (await read().catch(() => null)) ?? null;
+  if (!host?.ReactNativeWebView) return null;
+  const answer = awaitShellMessage<{ entry?: RememberedEntry | null }>("remember.entry", host);
+  shellPost({ type: "remember.get" }, host);
+  return (await answer)?.entry ?? null;
+}
+
+/** One tap. The shell joins the server AND logs the profile in natively, then
+ * reloads this page with a ready session — so success looks exactly like
+ * `resolveHost`'s hand-off: the promise dies with the document. */
+export async function signInRemembered(host: ShellHost | undefined = currentHost()): Promise<HostJoinOutcome> {
+  const native = host?.ogb?.signInRemembered;
+  if (native) {
+    const result = await native().catch(() => ({ ok: false, error: "unreachable" }));
+    return result.ok ? { ok: true, handedOff: true } : { ok: false, error: result.error || "unreachable" };
+  }
+  if (!host?.ReactNativeWebView) return { ok: false, error: "forbidden" };
+  const answer = awaitShellMessage<{ ok?: boolean; error?: string }>("remember.signin.result", host);
+  shellPost({ type: "remember.signin" }, host);
+  const reply = await answer;
+  if (!reply) return { ok: false, error: "timeout" };
+  return reply.ok ? { ok: true, handedOff: true } : { ok: false, error: reply.error || "unreachable" };
+}
+
+/** The profile half, handed over once the login succeeded. A no-op when the
+ * shell has no server half waiting — "remember me" was off, or this is a
+ * browser. Deliberately fire-and-forget: a store that refuses (no keyring) must
+ * not turn a successful sign-in into an error. */
+export function rememberProfile(username: string, password: string, host: ShellHost | undefined = currentHost()): void {
+  void host?.ogb?.rememberProfile?.(username, password)?.catch?.(() => {});
+  shellPost({ type: "remember.profile", username, password }, host);
+}
+
+export function forgetRemembered(host: ShellHost | undefined = currentHost()): void {
+  void host?.ogb?.forgetRemembered?.()?.catch?.(() => {});
+  shellPost({ type: "remember.forget" }, host);
 }

@@ -95,9 +95,11 @@ uruchamialny test — test, który nie pada na starym kodzie, niczego nie pilnuj
 ## 7. Pamięć zespołu
 
 Wszystko, co będzie prawdziwe także jutro — decyzja wraz z powodem, pułapka,
-przepis na wydanie, aktualny stan kanałów — idzie do **TaskTree Brain** przez
-serwer MCP TaskTree (`brain_add`), w tej samej turze, w której to ustalisz.
-Przed pracą nad znanym tematem: `brain_entity("MultiBot")`. Pliki lokalne to
-podręczny cache, nie źródło prawdy.
+przepis na wydanie, aktualny stan kanałów — idzie do pamięci zespołu na dysku
+Kacpra: `G:RAG-Second BrainrainconceptMultiBot.md` (sekcje `zasady`,
+`decyzje`, `pulapki`, `stack`, `wdrozenie`, `stan`), w tej samej turze,
+w której to ustalisz. Przed pracą nad znanym tematem przeczytaj ten plik i
+`brain/INDEX.md`. Pliki lokalne to podręczny cache, nie źródło prawdy.
+Dawny TaskTree Brain (Supabase, narzędzia `brain_*`) nie istnieje od 17.09.2026.
 
-Do Brain **nigdy** nie trafiają wartości sekretów — wyłącznie ich nazwy.
+Do pamięci **nigdy** nie trafiają wartości sekretów — wyłącznie ich nazwy.

@@ -5,9 +5,10 @@
 // session/prompt, and streams session/update notifications for a scripted
 // turn. Failure modes mirror how real ACP agents misbehave:
 //
-//   FAKE_ACP_MODE   happy (default) | exit-early | crash-mid-turn | hang | no-auth | permission
-//                   | notify-user/request-connection (call the matching agents tool once
-//                     and finish the turn — neither of them waits for the human)
+//   FAKE_ACP_MODE   happy (default) | exit-early | crash-mid-turn | hang | slow | no-auth | permission
+//                   | notify-user/create-reminder/request-connection (call the
+//                     matching agents tool once and finish the turn — none of
+//                     them waits for the human)
 //                   | ask-peer/send-mail (spawn the injected "agents" MCP server from
 //                     session/new's mcpServers, call list_bots + ask_bot on a
 //                     peer, and reply with what the peer said — the comms e2e)
@@ -28,6 +29,9 @@
 //                   JSON line ({mode, at, prompt}) — lets tests pin what text
 //                   actually reached the CLI and when
 //   FAKE_ACP_TURN_MS  how long the `busy` mode's turn runs (default 5000)
+//   FAKE_ACP_CRASH_TEXT  what `crash-mid-turn` writes to stderr before dying
+//                   (default a generic provider failure) — lets a test hand the
+//                   server a message `authFailure()` reads as an expired login
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
@@ -60,7 +64,7 @@ function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: str
   return new Promise((resolve, reject) => {
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     for (const { name, value } of entry.env ?? []) env[name] = value;
-    const child = spawn(entry.command, entry.args ?? [], { env, stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn(entry.command, entry.args ?? [], { env, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
     child.on("error", reject);
     const timer = setTimeout(() => (child.kill(), reject(new Error("mcp timeout"))), 60_000);
     let step = -1; // -1 = initialize in flight
@@ -108,6 +112,10 @@ function playTurn() {
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "hello from fake acp" } } } });
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "run" } } });
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "completed" } } });
+  // two-blocks: a second narration after the tool, like a real multi-step turn
+  if (mode === "two-blocks") {
+    out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "second block" } } } });
+  }
 }
 
 let buf = "";
@@ -204,9 +212,43 @@ function handle(msg: any) {
         });
         return complete();
       }
+      // multibot: tura kończy się BEZ ANI JEDNEGO kawałka tekstu. Tak zachował
+      // się codex 10.09.2026 — po `ask_user` w komórce exec oddał puste
+      // `final_answer`, harness nie dostał `assistant_text` i w czacie nie
+      // pojawiło się nic; dla człowieka wyglądało to jak zgubiona wiadomość.
+      if (mode === "silent") return complete();
+      if (mode === "send-files" && agentsMcp) {
+        const calls = JSON.parse(readFileSync(process.env.FAKE_ATTACHMENT_CALLS!, "utf8"));
+        void (async () => {
+          const replies: string[] = [];
+          for (const args of calls) replies.push(await driveMcp(agentsMcp!, [{ name: "send_file", args: () => args }]));
+          writeFileSync(process.env.FAKE_ATTACHMENT_RESULTS!, JSON.stringify(replies));
+          complete(); // Deliberately no assistant_text after send_file.
+        })().catch((error) => out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(error) } }));
+        return;
+      }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);
+        return;
+      }
+      if (mode === "slow") {
+        // Prawdziwa tura agentowa: mieli DŁUŻEJ niż watchdog, ale cały czas
+        // gada. Watchdog ma mierzyć CISZĘ dostawcy, nie długość tury, więc taka
+        // tura musi dojść do końca z `busy` zapalonym przez cały czas.
+        const beats = Number(process.env.FAKE_ACP_SLOW_BEATS ?? 6);
+        const every = Number(process.env.FAKE_ACP_SLOW_EVERY_MS ?? 400);
+        let left = beats;
+        const timer = setInterval(() => {
+          out({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "tick " } } },
+          });
+          if (--left > 0) return;
+          clearInterval(timer);
+          complete();
+        }, every);
         return;
       }
       if (mode === "error-mid-turn") {
@@ -223,7 +265,10 @@ function handle(msg: any) {
         // klucza, ubity proces, wyjątek dostawcy. Harness zamienia to na
         // zdarzenie runtime.error — i to jest jedyny sygnał, że tura się
         // skończyła, bo turn.completed już nie przyjdzie.
-        process.stderr.write("fake-acp: simulated provider failure mid-turn\n");
+        // FAKE_ACP_CRASH_TEXT pozwala podstawić TREŚĆ awarii — testy
+        // wygasłego logowania potrzebują zdania, które rozpoznaje
+        // `authFailure()`, a nie naszego generycznego.
+        process.stderr.write(`${process.env.FAKE_ACP_CRASH_TEXT ?? "fake-acp: simulated provider failure mid-turn"}\n`);
         process.exit(4);
       }
       if (mode === "script") {
@@ -332,7 +377,7 @@ function handle(msg: any) {
       if (mode === "relay") {
         const chunk = (text: string) =>
           out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } } });
-        const self = (agentsMcp?.env ?? []).find((e) => e.name === "OMB_BOT_ID")?.value ?? "";
+        const self = (agentsMcp?.env ?? []).find((e) => e.name === "MULTIBOT_BOT_ID")?.value ?? "";
         const mapFile = process.env.FAKE_ACP_RELAY_MAP ?? "";
         let hops: string[] = [];
         let turn = 0;
@@ -414,7 +459,17 @@ function handle(msg: any) {
       // odpowiedź człowieka — droga, której drivery ACP wcześniej nie miały
       if (mode === "ask-user" && agentsMcp) {
         void driveMcp(agentsMcp, [
-          { name: "ask_user", args: () => ({ question: "Which database?", choices: ["Postgres", "SQLite"] }) },
+          {
+            name: "ask_user",
+            args: () => ({
+              question: "Which database?",
+              choices: process.env.FAKE_ACP_ASK_CHOICES?.split("|") ?? ["Postgres", "SQLite"],
+              // multibot: pytanie wielokrotnego wyboru i tło pod tytułem —
+              // domyślnie wyłączone, żeby stare testy widziały starą kartę
+              ...(process.env.FAKE_ACP_ASK_MULTIPLE ? { multiple: true } : {}),
+              ...(process.env.FAKE_ACP_ASK_DETAIL ? { detail: process.env.FAKE_ACP_ASK_DETAIL } : {}),
+            }),
+          },
         ])
           .then((answer) => {
             out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `owner says: ${answer}` } } } });
@@ -428,10 +483,20 @@ function handle(msg: any) {
       }
       // notify-user / request-connection: narzędzia, które NIE czekają na
       // człowieka — bot woła jedno z nich i od razu kończy turę
-      if ((mode === "notify-user" || mode === "request-connection") && agentsMcp) {
+      if ((mode === "notify-user" || mode === "create-reminder" || mode === "request-connection") && agentsMcp) {
         const call =
           mode === "notify-user"
-            ? { name: "notify_user", args: () => ({ title: "Raport gotowy", body: "Zebrałem dane z wczoraj." }) }
+            ? { name: "notify_user", args: () => ({ reason: "Zebrałem dane z wczoraj." }) }
+            : mode === "create-reminder"
+            // FAKE_ACP_REMINDER_IN_MS: za ile ma odpalić, liczone od CHWILI
+            // TURY — nie stała data w configu, bo ta zdąży się zestarzeć,
+            // zanim suita dojdzie do tego testu, i serwer odrzuci ją jako
+            // termin w przeszłości. Model w prawdziwym życiu liczy datę sam
+            // z bloku środowiska; atrapa robi to samo, tylko arytmetycznie.
+            ? { name: "create_reminder", args: () => ({
+                text: process.env.FAKE_ACP_REMINDER_TEXT ?? "kawa",
+                at: new Date(Date.now() + (Number(process.env.FAKE_ACP_REMINDER_IN_MS) || 120_000)).toISOString(),
+              }) }
             : {
               name: "request_connection",
               // FAKE_ACP_CONNECTOR: the model names the APP it needs

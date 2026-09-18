@@ -277,7 +277,7 @@ export const GrokDriver = makeChatCompletionsDriver({
   titleModel: "grok-3-mini",
   requiresKey: true,
   keyHint: (env) =>
-    `no xAI API key — add {"xai":{"key":"xai-…"}} to ~/.openmausbot/config.json or set ${env}`,
+    `no xAI API key — add {"xai":{"key":"xai-…"}} to ~/.multibot/config.json or set ${env}`,
 });
 
 /** multibot: a model endpoint the user configured by hand (/api/models/custom).

@@ -58,6 +58,38 @@ export function selectActivePeerChat(
 }
 
 /**
+ * Czy bot jest W TRAKCIE rozmowy z innym botem?
+ *
+ * Nie chodzi o „należy do jakiegoś pokoju" (pokój żyje aż go ktoś zamknie albo
+ * zmiecie zegar), tylko o wymianę, która NAPRAWDĘ trwa. Trwa, gdy w pokoju
+ * dzieje się jedno z dwojga:
+ *
+ * - `pendingTo` — komuś oddano turę, ale ta jeszcze nie ruszyła (serwer nadaje
+ *   pokój przy każdej zmianie tego pola, więc klient widzi też tę szczelinę),
+ * - któryś INNY uczestnik jest `busy` — właśnie pisze odpowiedź.
+ *
+ * Suma tych dwóch pokrywa całą wymianę bez dziur: kiedy jeden bot kończy turę,
+ * dług już jest zapisany, a kiedy drugi ją zaczyna, dług znika i zapala się
+ * `busy`. Kiedy rozmowa naprawdę cichnie, gaśnie jedno i drugie.
+ */
+export function isEngagedInPeerChat(
+  rooms: readonly Room[],
+  watchedBotId: string,
+  bots: BotLookup,
+): boolean {
+  return rooms.some(
+    (room) =>
+      room.status === "running" &&
+      // Pokój grupy to czat CZŁOWIEKA, nie rozmowa botów: bot odpowiadający w
+      // grupie nie jest powodem, żeby prywatny czat jego kolegi nasłuchiwał.
+      !room.groupId &&
+      room.bot_ids.includes(watchedBotId) &&
+      (Boolean(room.pendingTo) ||
+        room.bot_ids.some((id) => id !== watchedBotId && lookupBot(bots, id)?.busy === true)),
+  );
+}
+
+/**
  * Stabilne ziarno per pokój (FNV-1a). Świadomie bez Math.random: te same dane
  * muszą dać tę samą kombinację fal, inaczej test determinizmu nie ma sensu.
  */

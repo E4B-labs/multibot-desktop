@@ -7,7 +7,7 @@
 // script Windows cannot exec, and the broker is a unix socket. Both now
 // go through resolveCliSpawn / permissionSocketPath, so they run
 // everywhere.
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,7 +59,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-claude-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-claude-test-"));
   });
 
   afterEach(async () => {
@@ -67,9 +67,10 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_DUMP;
     delete process.env.FAKE_CLAUDE_DEAF_FLAG;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_CONFIG_DIR;
     delete process.env.MULTIBOT_FIRST_EVENT_MS;
     delete process.env.MULTIBOT_FIRST_EVENT_COLD_MS;
-    delete process.env.MULTIBOT_WARM_WORKERS;
+    delete process.env.MULTIBOT_WORKER_IDLE_MS;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -166,6 +167,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // odpowiedzi" — pytanie nigdy nie trafiało do czatu. Musi być odcięte,
     // żeby model sięgnął po `mcp__agents__ask_user`.
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1]).toContain("AskUserQuestion");
+    // the CLI's own skill catalogue must not shadow the workspace skills the
+    // harness puts in the prompt
+    expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("Skill");
     expect(seen.argv).toContain("--effort");
     expect(seen.argv[seen.argv.indexOf("--effort") + 1]).toBe("low");
     expect(seen.argv[seen.argv.indexOf("--model") + 1]).toBe("claude-sonnet-5");
@@ -186,7 +190,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
         agents: {
           command: process.execPath,
           args: ["/fake/agents-proxy.js"],
-          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" },
+          env: { MULTIBOT_HARNESS_URL: "http://127.0.0.1:1", MULTIBOT_BOT_ID: "b1", MULTIBOT_COMMS_TOKEN: "tok", MULTIBOT_TURN_DEPTH: "0" },
         },
       },
     });
@@ -196,13 +200,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const mcpConfig = JSON.parse(seen.argv[seen.argv.indexOf("--mcp-config") + 1]);
     expect(mcpConfig.mcpServers.agents).toMatchObject({
       args: ["/fake/agents-proxy.js"],
-      env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
+      env: { MULTIBOT_BOT_ID: "b1", MULTIBOT_COMMS_TOKEN: "tok" },
     });
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
     // multibot: bot dostaje tylko nasze serwery — nigdy globalnej konfiguracji
     // MCP właściciela maszyny (prywatne konektory claude.ai).
     expect(seen.argv).toContain("--strict-mcp-config");
+    // the operator's personal ~/.claude (CLAUDE.md, skills, hooks) must not
+    // reach a bot — its identity and skills come from the harness prompt
+    expect(seen.argv.slice(seen.argv.indexOf("--setting-sources"), seen.argv.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", ""]);
   });
 
   // multibot (F7): własne serwery MCP użytkownika jadą tą samą drogą co
@@ -349,38 +356,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.prompt.message.content).toContain("two");
   });
 
-  // multibot: godzina ciepłego procesu razy liczba wątków zjadłaby telefon,
-  // więc żywych workerów jest najwyżej MAX_WARM_WORKERS (domyślnie 2).
-  it("keeps only the most recent warm workers", async () => {
+  // multibot: bezczynny bot = zero procesów. Po grace worker schodzi, a
+  // następna tura wstaje z `--resume <sessionId>` — rozmowa nie ginie.
+  it("kills an idle worker after the grace and resumes the session next turn", async () => {
+    process.env.MULTIBOT_WORKER_IDLE_MS = "200";
     await create("persistent");
-    for (const [i, threadId] of ["t-lru-1", "t-lru-2", "t-lru-3"].entries()) {
-      await instance.adapter.sendTurn({ threadId, text: `msg ${i}` });
-      await recorder.until(
-        (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === i + 1,
-      );
-    }
+    await instance.adapter.sendTurn({ threadId: "t-idle", text: "one" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(instance.adapter.hasSession("t-idle")).toBe(true);
+    const started = recorder.events.find((e) => e.type === "session.started") as { sessionId: string };
 
-    expect(instance.adapter.hasSession("t-lru-1")).toBe(false);
-    expect(instance.adapter.hasSession("t-lru-2")).toBe(true);
-    expect(instance.adapter.hasSession("t-lru-3")).toBe(true);
-  });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(instance.adapter.hasSession("t-idle")).toBe(false);
 
-  // multibot: „każdy bot to ciepły worker" — przy MULTIBOT_WARM_WORKERS=0 nikt
-  // nie wylatuje z LRU, bo każdy bot ma odpowiadać w kilka sekund, a nie tylko
-  // ten, z którym rozmawiało się ostatnio.
-  it("keeps every worker warm when the limit is 0", async () => {
-    process.env.MULTIBOT_WARM_WORKERS = "0";
-    await create("persistent");
-    for (const [i, threadId] of ["t-all-1", "t-all-2", "t-all-3"].entries()) {
-      await instance.adapter.sendTurn({ threadId, text: `msg ${i}` });
-      await recorder.until(
-        (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === i + 1,
-      );
-    }
-
-    expect(instance.adapter.hasSession("t-all-1")).toBe(true);
-    expect(instance.adapter.hasSession("t-all-2")).toBe(true);
-    expect(instance.adapter.hasSession("t-all-3")).toBe(true);
+    const dump = join(scratch, "resume.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-idle", text: "two", resumeCursor: started.sessionId });
+    const done = await recorder.until(
+      (e) => e.type === "turn.completed" && recorder.events.filter((x) => x.type === "turn.completed").length === 2,
+    );
+    expect(done).toMatchObject({ ok: true });
+    const argv: string[] = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(argv[argv.indexOf("--resume") + 1]).toBe(started.sessionId);
   });
 
   it("interrupt cancels the turn without a runtime error", async () => {
@@ -402,6 +399,68 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
     const error = recorder.events.find((e) => e.type === "runtime.error")!;
     expect(error.message).toContain("simulated crash");
+  });
+
+  // multibot: CLI 2.1.268 przy wygasłym OAuth nie wychodzi z kodem 1 — pisze
+  // powód jako tekst asystenta i kończy result is_error. Ma z tego wyjść
+  // runtime.error (index.ts → needsAttention + karta), NIE dymek bota i NIE
+  // „model nic nie napisał".
+  it("an expired login in assistant text becomes runtime.error, not a bot bubble", async () => {
+    await create("auth-expired");
+    await instance.adapter.sendTurn({ threadId: "t-auth", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const errors = recorder.events.filter((e) => e.type === "runtime.error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ message: expect.stringContaining("OAuth session expired") });
+    expect(recorder.events.find((e) => e.type === "item.completed" && (e as { itemType?: string }).itemType === "assistant_text")).toBeUndefined();
+    expect(recorder.events.find((e) => e.type === "content.delta")).toBeUndefined();
+  });
+
+  // recenzja #182: luźne dopasowanie zjadało 6/8 normalnych odpowiedzi
+  it("a normal answer that talks about expired sessions stays a bubble", async () => {
+    await create("prose-auth");
+    await instance.adapter.sendTurn({ threadId: "t-prose", text: "why 401?" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toBeUndefined();
+    const bubble = recorder.events.find((e) => e.type === "item.completed" && (e as { itemType?: string }).itemType === "assistant_text") as { text?: string } | undefined;
+    expect(bubble?.text).toContain("OAuth session expired");
+  });
+
+  it("a result with is_error carries its reason as runtime.error", async () => {
+    await create("error-result");
+    await instance.adapter.sendTurn({ threadId: "t-errres", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const error = recorder.events.find((e) => e.type === "runtime.error")!;
+    expect(error.message).toContain("Reached max turns");
+  });
+
+  // multibot: wygasły OAuth znany z pliku — tura pada od razu, CLI nie startuje
+  it("an expired credentials file fails the turn before the CLI is spawned", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "mb-claude-expired-"));
+    writeFileSync(join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { expiresAt: 0 } }));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-expired", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "auth_expired" });
+    expect(recorder.events.map((e) => e.type)).toEqual(["turn.started", "runtime.error", "turn.completed"]);
+    expect(recorder.events[1]).toMatchObject({ message: expect.stringContaining("OAuth session expired") });
+    expect(existsSync(dump)).toBe(false); // fake CLI never ran
+    expect(instance.adapter.hasSession("t-expired")).toBe(false);
+  });
+
+  it("a warm-up request is not a turn: the expired-login gate stays silent", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "mb-claude-expired-warm-"));
+    writeFileSync(join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { expiresAt: 0 } }));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    await create("persistent");
+    await instance.adapter.sendTurn({ threadId: "t-warm-expired", text: "", warmOnly: true } as never);
+    expect(recorder.events).toEqual([]);
   });
 
   it("skips malformed protocol lines without losing the turn", async () => {
@@ -502,6 +561,40 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  // Regresja (K6, zmierzone 11.09.2026 na żywym haiku): bot obiecał „wysyłam
+  // trzy pliki", zawołał `Write`, watchdog zdjął turę, a kolejne prośby o
+  // zgodę (drugi `Write`, `PowerShell`) trafiały na `worker.current ===
+  // undefined` i były PORZUCANE bez odpowiedzi. CLI wisiało na nich 15 minut,
+  // a użytkownik nie zobaczył ani karty, ani plików, ani odmowy — stąd „boty
+  // twierdzą, że wysyłają". Broker zostaje ciepły po turze, więc ta droga
+  // zdarza się naprawdę.
+  it("denies a permission ask that arrives after the turn is gone instead of dropping it", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+    // Tura znika, worker (i jego broker) zostaje ciepły — jak po watchdogu.
+    await instance.adapter.interruptTurn("t-perm-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const conn = connect(permissionSocketPath("t-perm-late"));
+    const answered = new Promise<{ behavior: string; message?: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-late", tool: "Write", input: { file_path: "report.csv" } }) + "\n");
+
+    expect(await answered).toMatchObject({ behavior: "deny", message: expect.stringContaining("turn is already over") });
+    conn.end();
+  });
+
   it("rejects answers to unknown or already-resolved asks", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-perm-2", text: "go" });
@@ -538,7 +631,7 @@ describe("ClaudeDriver worker liveness (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-claude-live-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-claude-live-"));
     process.env.MULTIBOT_FIRST_EVENT_MS = "300";
     process.env.MULTIBOT_FIRST_EVENT_COLD_MS = "300";
   });
@@ -548,7 +641,6 @@ describe("ClaudeDriver worker liveness (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_DEAF_FLAG;
     delete process.env.MULTIBOT_FIRST_EVENT_MS;
     delete process.env.MULTIBOT_FIRST_EVENT_COLD_MS;
-    delete process.env.MULTIBOT_WARM_WORKERS;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });

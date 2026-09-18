@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   STALE_CLI_RE,
   lastToolUpdate,
+  msUntilDaily,
   resetCliUpdateForTests,
   scheduleHarnessUpdates,
   staleCliNotice,
@@ -90,7 +91,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  delete process.env.OMB_AUTO_UPDATE;
+  delete process.env.MULTIBOT_AUTO_UPDATE;
+  delete process.env.MULTIBOT_AUTO_UPDATE_AT;
   resetCliUpdateForTests();
 });
 
@@ -271,14 +273,24 @@ describe("staleCliNotice", () => {
 });
 
 describe("scheduleHarnessUpdates", () => {
-  it("arms a boot check and a daily one, and skips both on OMB_AUTO_UPDATE=0", () => {
+  // Never at boot: that is the moment the phone has the least memory to spare.
+  it("arms one timer for the daily slot and none on MULTIBOT_AUTO_UPDATE=0", () => {
     vi.useFakeTimers();
     scheduleHarnessUpdates(async () => []);
-    expect(vi.getTimerCount()).toBe(2);
+    expect(vi.getTimerCount()).toBe(1);
 
     vi.clearAllTimers();
-    process.env.OMB_AUTO_UPDATE = "0";
+    process.env.MULTIBOT_AUTO_UPDATE = "0";
     scheduleHarnessUpdates(async () => ["claude"]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("msUntilDaily targets the next local HH:MM, default 04:00", () => {
+    const at3 = new Date(2026, 8, 15, 3, 0, 0, 0);
+    expect(msUntilDaily(at3)).toBe(60 * 60_000);
+    const at5 = new Date(2026, 8, 15, 5, 0, 0, 0);
+    expect(msUntilDaily(at5)).toBe(23 * 60 * 60_000);
+    expect(msUntilDaily(at3, "03:30")).toBe(30 * 60_000);
+    expect(msUntilDaily(at3, "garbage")).toBe(60 * 60_000);
   });
 });

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
+import { Skeleton } from "./Loading";
 
 type Access = "approval" | "full";
 
@@ -52,7 +53,12 @@ export function EngineAutonomy({ bot }: { bot: Bot }) {
             </button>
           ))}
         </div>
-      ) : null}
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-inset p-1">
+          <Skeleton className="h-[34px]" />
+          <Skeleton className="h-[34px]" />
+        </div>
+      )}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );

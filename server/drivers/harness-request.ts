@@ -46,7 +46,7 @@ export function harnessRequest(
     // Harness od 0.4.0 ma certyfikat z WŁASNYM podpisem (server/tls-cert.ts), a
     // to wywołanie idzie po pętli zwrotnej z procesu, którego harness sam
     // uruchomił — łańcucha nie ma czym sprawdzić i nie ma po co. Poświadczeniem
-    // jest OMB_COMMS_TOKEN, nie certyfikat. Poza pętlą zwrotną łańcuch
+    // jest MULTIBOT_COMMS_TOKEN, nie certyfikat. Poza pętlą zwrotną łańcuch
     // sprawdzamy normalnie: tam „ufam każdemu" byłoby dziurą, nie wygodą.
     // ponytail: bez przypięcia na loopbacku; sufit = ktoś, kto już przejął
     // pętlę zwrotną tej maszyny — wtedy i tak jest po wszystkim.

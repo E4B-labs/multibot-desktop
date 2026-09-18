@@ -1,4 +1,4 @@
-// Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
+// Config + data dirs. One file, ~/.multibot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { chmodSync, readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
@@ -62,16 +62,18 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   "XAI_API_KEY",
   "BOX_TOKEN",
   "OPENCODE_API_KEY",
-  "OMB_TTS_KEY",
-  "OMB_OPENAI_IMAGE_KEY",
+  "MULTIBOT_TTS_KEY",
+  "MULTIBOT_OPENAI_IMAGE_KEY",
   "COMPOSIO_API_KEY",
-  "OMB_COMPOSIO_BROKER_TOKEN",
+  "MULTIBOT_COMPOSIO_BROKER_TOKEN",
 ] as const;
 
 // Tests, Termux and packaged hosts may provide an explicit writable data root.
 // Default stays compatible with existing desktop installations.
-export const DATA_DIR = process.env.OMB_DATA_DIR?.trim() || join(homedir(), ".openmausbot");
-const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
+export const DATA_DIR = process.env.MULTIBOT_DATA_DIR?.trim() || join(homedir(), ".multibot");
+// Data dirs from before the MultiBot rename, newest first. The only place the
+// old names may still appear — see migrateLegacyDataDir().
+const LEGACY_DATA_DIRS = [join(homedir(), ".openmausbot"), join(homedir(), ".opengrokbot")];
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 
@@ -79,16 +81,22 @@ function chmodPrivate(path: string, mode: number): void {
   if (process.platform !== "win32" && existsSync(path)) chmodSync(path, mode);
 }
 
-export function ensureDirs() {
-  // one-time migration from the pre-rename data dir — bots, transcripts,
-  // config and keys all carry over
-  if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
-    try {
-      renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    } catch {
-      /* cross-device or busy — fall through to a fresh dir */
-    }
+/** One-time move of a pre-rename data dir onto DATA_DIR — bots, transcripts,
+ * config and keys all carry over. Same filesystem, so a plain rename. */
+function migrateLegacyDataDir(): void {
+  if (existsSync(DATA_DIR)) return;
+  const legacy = LEGACY_DATA_DIRS.find((dir) => existsSync(dir));
+  if (!legacy) return;
+  try {
+    renameSync(legacy, DATA_DIR);
+    console.log(`[multibot] data dir moved: ${legacy} -> ${DATA_DIR}`);
+  } catch {
+    /* cross-device or busy — fall through to a fresh dir */
   }
+}
+
+export function ensureDirs() {
+  migrateLegacyDataDir();
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodPrivate(dir, 0o700);
@@ -121,12 +129,12 @@ export function loadConfig(): AppConfig {
   cfg.opencode = { key: process.env.OPENCODE_API_KEY, ...cfg.opencode };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-  cfg.voice = { key: process.env.OMB_TTS_KEY, ...cfg.voice };
+  cfg.voice = { key: process.env.MULTIBOT_TTS_KEY, ...cfg.voice };
   if (cfg.instances) cfg.instances = migrateLegacyDrivers(cfg.instances);
   return cfg;
 }
 
-/** Merge a partial config into ~/.openmausbot/config.json (secrets never
+/** Merge a partial config into ~/.multibot/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");

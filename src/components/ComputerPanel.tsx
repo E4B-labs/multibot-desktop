@@ -17,6 +17,7 @@ import { authFetch, getAuthToken } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { TeachCard } from "./SkillsPanel";
+import { SidePanel } from "./ResizablePanel";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await authFetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -408,7 +409,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
   return (
     <>
-      <aside className="animate-panel-in flex h-full w-[360px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+      <SidePanel
+        storageKey="multibot.panelWidth.computer"
+        defaultWidth={360}
+        label={polish ? "Zmień szerokość panelu komputera" : "Resize computer panel"}
+        className="border-l border-hairline/40"
+      >
         {/* Header */}
         <div data-shell-header className="flex items-center justify-between px-4 py-3">
           <button
@@ -485,12 +491,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             onStopControl={releaseControl}
           />
         </div>
-      </aside>
+      </SidePanel>
 
       {fullscreen && (
         // K6: duży panel na środku, nie cały ekran — MultiBot pod spodem zostaje
         // widoczny (lekko przyciemnione tło), róg zaokrąglony jak w kartach.
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/50 p-[5%] backdrop-blur-[1px]">
+        <div data-shell-overlay className="fixed inset-0 z-50 flex flex-col bg-black/50 p-[5%] backdrop-blur-[1px]">
           {/* multibot: same ikony, bez tytułu — na pełnym ekranie liczy się
               obraz, a nazwa panelu i tak stoi w nagłówku panelu obok. */}
           <div className="flex items-center justify-end px-1 py-2">

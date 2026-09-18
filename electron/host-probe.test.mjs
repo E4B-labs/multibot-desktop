@@ -5,7 +5,7 @@ import { connect as netConnect } from "node:net";
 
 import { describe, expect, it } from "vitest";
 
-import { classifyJoin, classifyProbe, failureCode, joinServer, probeServer } from "./host-probe.mjs";
+import { classifyJoin, classifyLogin, classifyProbe, failureCode, joinServer, probeServer } from "./host-probe.mjs";
 import { CERT_CHANGED } from "./tls-pin.mjs";
 
 describe("classifyProbe", () => {
@@ -65,6 +65,28 @@ describe("joinServer", () => {
       ok: false,
       error: "insecure_address",
     });
+  });
+});
+
+describe("classifyLogin", () => {
+  it("sesja to token dostępu I token sesji — bez tego drugiego powłoka nie ma czym odnawiać", () => {
+    expect(classifyLogin(200, { accessToken: "a1", sessionToken: "s1" })).toEqual({ ok: true, accessToken: "a1", sessionToken: "s1" });
+  });
+
+  it("serwer bez tokenu sesji nie unieważnia logowania — zostaje token dostępu", () => {
+    expect(classifyLogin(200, { accessToken: "a1" })).toEqual({ ok: true, accessToken: "a1", sessionToken: "" });
+  });
+
+  it("kody profilu przechodzą nietknięte — ekran umie je wytłumaczyć", () => {
+    expect(classifyLogin(401, { error: "wrong_profile_password" })).toEqual({ ok: false, error: "wrong_profile_password" });
+    expect(classifyLogin(404, { error: "no_such_profile" })).toEqual({ ok: false, error: "no_such_profile" });
+    expect(classifyLogin(429, { error: "too many attempts" })).toEqual({ ok: false, error: "rate_limited" });
+  });
+
+  it("200 bez tokenu, cudza treść i brak kodu to jedno: serwer odmówił", () => {
+    expect(classifyLogin(200, { accessToken: "" })).toEqual({ ok: false, error: "failed" });
+    expect(classifyLogin(500, null)).toEqual({ ok: false, error: "failed" });
+    expect(classifyLogin(401, { error: "Zadzwoń pod 0700-oszust" })).toEqual({ ok: false, error: "failed" });
   });
 });
 

@@ -145,14 +145,14 @@ beforeAll(async () => {
   await new Promise<void>((r) => stub.listen(0, "127.0.0.1", r));
   stubPort = (stub.address() as { port: number }).port;
 
-  child = spawn(process.execPath, [PROXY], {
+  child = spawn(process.execPath, [PROXY], { windowsHide: true,
     env: {
       MULTIBOT_COMPUTER: "off",
       ...process.env,
-      OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
-      OMB_BOT_ID: "bot-asker",
-      OMB_COMMS_TOKEN: TOKEN,
-      OMB_TURN_DEPTH: "0",
+      MULTIBOT_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
+      MULTIBOT_BOT_ID: "bot-asker",
+      MULTIBOT_COMMS_TOKEN: TOKEN,
+      MULTIBOT_TURN_DEPTH: "0",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -357,5 +357,14 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("File sent to the chat");
     expect(lastAttachmentBody).toMatchObject({ botId: "bot-asker", name: "report.html", mime: "text/html" });
     expect(Buffer.from(lastAttachmentBody.content, "base64").toString()).toBe(html);
+  });
+
+  it("send_file forwards a provider URL to the chat attachment endpoint", async () => {
+    await callTool("send_file", { url: "https://cdn.example/image.png", name: "image.png", mime: "application/octet-stream" });
+    expect(lastAttachmentBody).toMatchObject({
+      botId: "bot-asker",
+      url: "https://cdn.example/image.png",
+      name: "image.png",
+    });
   });
 });

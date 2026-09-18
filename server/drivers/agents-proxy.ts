@@ -16,22 +16,22 @@
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
-//   OMB_HARNESS_URL  base URL of the harness (https://127.0.0.1:8799)
-//   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
-//   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
+//   MULTIBOT_HARNESS_URL  base URL of the harness (https://127.0.0.1:8799)
+//   MULTIBOT_BOT_ID       the calling bot's id (excluded from list_bots; sender)
+//   MULTIBOT_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 import readline from "node:readline";
 
-// Jedna lista ksztaltow dla schematu narzedzi i dla walidacji na serwerze —
-// enum rozjechany z `managedBotPatch` znaczy, ze model prosi o ksztalt, ktory
-// serwer i tak odrzuci (albo, przed walidacja, ktorego klient nie umie narysowac).
-import { BOT_SHAPES } from "../store.ts";
+// Jedna lista ksztaltow i kolorow dla schematu narzedzi i dla walidacji na
+// serwerze — enum rozjechany z `managedBotPatch` znaczy, ze model prosi o
+// wartosc, ktora serwer i tak odrzuci (albo, przed walidacja, ktorej klient nie
+// umie narysowac).
+import { BOT_COLORS, BOT_SHAPES } from "../store.ts";
 import { harnessRequest } from "./harness-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "https://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const HARNESS = process.env.MULTIBOT_HARNESS_URL ?? "https://127.0.0.1:8799";
+const BOT_ID = process.env.MULTIBOT_BOT_ID ?? "";
+const TOKEN = process.env.MULTIBOT_COMMS_TOKEN ?? "";
 
-const BOT_COLORS = ["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral"];
 const BOT_PROFILE_PROPERTIES = {
   name: { type: "string", description: "Display name (1-120 characters)." },
   title: { type: "string", description: "Short role or specialty." },
@@ -112,8 +112,8 @@ const TOOLS = [
     },
   },
   { name: "get_my_profile", description: "Read your complete bot profile.", inputSchema: { type: "object", properties: {} } },
-  { name: "update_my_profile", description: "Update your name, role, description, icon, notifications, computer or model selection.", inputSchema: { type: "object", properties: { name: { type: "string" }, title: { type: "string" }, description: { type: "string" }, computer: { type: "string" }, color: { type: "string" }, mascotShape: { type: "string", enum: BOT_SHAPES }, notifications: { type: "boolean" }, modelSelection: { type: "object" } } } },
-  { name: "ask_user", description: "Ask the human who owns this bot a question and wait for their answer. Use whenever you need a decision, a preference, missing information, or sign-off before doing something consequential — do not guess on things the owner would want to decide. Returns their answer as text.", inputSchema: { type: "object", properties: { question: { type: "string", description: "The question, with enough context to answer at a glance" }, choices: { type: "array", items: { type: "string" }, description: "Optional 2-5 suggested answers, shown as one-tap buttons" } }, required: ["question"] } },
+  { name: "update_my_profile", description: "Update your name, role, description, icon, notifications, computer or model selection.", inputSchema: { type: "object", properties: { name: { type: "string" }, title: { type: "string" }, description: { type: "string" }, computer: { type: "string" }, color: { type: "string", enum: BOT_COLORS }, mascotShape: { type: "string", enum: BOT_SHAPES }, notifications: { type: "boolean" }, modelSelection: { type: "object" } } } },
+  { name: "ask_user", description: "Ask the human who owns this bot a question and wait for their answer. Use whenever you need a decision, a preference, missing information, or sign-off before doing something consequential — do not guess on things the owner would want to decide. Returns their answer as text.", inputSchema: { type: "object", properties: { question: { type: "string", description: "The question itself, short — it is the title of the card the human sees" }, choices: { type: "array", items: { type: "string" }, description: "Optional 2-5 suggested answers, shown as one-tap buttons" }, multiple: { type: "boolean", description: "Set `multiple: true` whenever more than one of the choices can be right at the same time (days, features, files); leave it out only when the answers are mutually exclusive. Choice labels must not contain a comma, because the answer comes back as the chosen labels joined by commas." }, detail: { type: "string", description: "Optional background for the question, shown small under it. Keep it out of `question`." } }, required: ["question"] } },
   { name: "hand_over_computer", description: "Hand your computer to the human and wait for them. Use it the moment the screen needs a person and not you: a login, a 2FA code, a captcha, a payment confirmation. The user gets a card with a live view of your screen and can take control, finish and hand it back, or skip. Returns \"user finished\" (with their optional note) or \"user skipped\" — after \"user skipped\" solve it another way or stop and say what blocked you. Do not ask for passwords or codes in chat; this is the way.", inputSchema: { type: "object", properties: { reason: { type: "string", description: "What the human has to do, in one line, e.g. \"Sign in to LinkedIn, then hand it back\"" } }, required: ["reason"] } },
   { name: "request_credential", description: "Ask the owner for an API key or token through a private in-chat card. Never ask for credentials in plain text.", inputSchema: { type: "object", properties: { target: { type: "string", enum: ["xaiApiKey", "boxToken", "opencodeGoApiKey", "ttsKey", "openaiImageApiKey"] } }, required: ["target"] } },
   { name: "remember", description: "Save a durable fact to your memory.", inputSchema: { type: "object", properties: { text: { type: "string" }, source: { type: "string" } }, required: ["text"] } },
@@ -124,13 +124,15 @@ const TOOLS = [
   { name: "read_team_memory", description: "Read shared team memory notes and facts.", inputSchema: { type: "object", properties: {} } },
   { name: "create_skill", description: "Create a reusable skill for yourself.", inputSchema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, instructions: { type: "string" } }, required: ["name", "instructions"] } },
   { name: "list_skills", description: "List your skills.", inputSchema: { type: "object", properties: {} } },
-  { name: "create_routine", description: "Create a durable scheduled routine, for yourself or for another visible bot (pass bot_id).", inputSchema: { type: "object", properties: { name: { type: "string" }, prompt: { type: "string" }, schedule: { type: "string" }, bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } }, required: ["name", "prompt"] } },
+  { name: "create_routine", description: "Create a durable scheduled routine, for yourself or for another visible bot (pass bot_id). The schedule is 'every 30m', a five-field cron expression, or — when YOU must DO something once at a future moment — a single ISO datetime such as 2026-09-11T09:00, which runs the routine once and then switches it off. (To merely REMIND the human at a moment, use create_reminder: that notifies them without giving you a turn.)", inputSchema: { type: "object", properties: { name: { type: "string" }, prompt: { type: "string" }, schedule: { type: "string" }, bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } }, required: ["name", "prompt"] } },
   { name: "list_routines", description: "List routines — yours, or another visible bot's when you pass bot_id. Each one comes back with its id, schedule and enabled flag; take the id from here before update_routine or delete_routine.", inputSchema: { type: "object", properties: { bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } } } },
   { name: "update_routine", description: "Change a routine (yours, or another visible bot's with bot_id): its schedule, its prompt, or switch it off. Use it instead of creating a second routine whenever the user changes their mind about a recurring task — set enabled false to stop an old routine, or pass a new schedule to move it. Get the id from list_routines.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Routine id from list_routines." }, schedule: { type: "string", description: "New schedule: 'every 30m' or a five-field cron expression such as '35 1 * * *'." }, prompt: { type: "string", description: "New task text the routine runs." }, enabled: { type: "boolean", description: "false switches the routine off without deleting it; true switches it back on." } , bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } }, required: ["id"] } },
   { name: "delete_routine", description: "Delete a routine for good (yours, or another visible bot's with bot_id). Prefer update_routine with enabled false when the user may want it back. Get the id from list_routines.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Routine id from list_routines." } , bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } }, required: ["id"] } },
   { name: "run_routine", description: "Run a routine now — yours, or another visible bot's with bot_id.", inputSchema: { type: "object", properties: { id: { type: "string" } , bot_id: { type: "string", description: "Another visible bot whose routines you are managing (from list_bots). Leave it out for your own." } }, required: ["id"] } },
-  { name: "create_reminder", description: "Set a one-off reminder for the human: at that moment they get a notification on their phone and desktop, and you get a turn to tell them. Use it for anything that happens ONCE (\"remind me about the dentist tomorrow at 9\") — a routine is only for something that repeats. You already know the current date, time and time zone from your environment block, so do the natural-language maths yourself and pass an exact ISO datetime; never pass words like \"tomorrow\" or a date in the past.", inputSchema: { type: "object", properties: { text: { type: "string", description: "What to remind about, in the user's own words (max 100 characters)." }, at: { type: "string", description: "Exact local datetime, ISO 8601: 2026-09-06T09:00 (add an offset such as +02:00 only when you mean another zone)." } }, required: ["text", "at"] } },
-  { name: "notify_user", description: "Tell the human something right now through a phone push and a desktop banner, without asking them anything. Use it when a long job finished, a watched thing changed, or a routine found something worth waking them for — anything where ask_user would be wrong because there is no question. Returns immediately; it does not wait for the human.", inputSchema: { type: "object", properties: { title: { type: "string", description: "One short line, max 120 characters." }, body: { type: "string", description: "The detail, max 400 characters." } }, required: ["title"] } },
+  { name: "create_reminder", description: "Set a one-off reminder for the human: at that moment their phone buzzes with a notification that opens this chat. Use it for anything that happens ONCE (\"remind me about the dentist tomorrow at 9\") — a routine is only for something that REPEATS. You already know the current date, time and time zone from your environment block, so do the natural-language maths yourself and pass an exact ISO datetime; never pass words like \"tomorrow\" or a date in the past.", inputSchema: { type: "object", properties: { text: { type: "string", description: "What to remind about, in the user's own words — this is the text they will read on the notification (max 200 characters)." }, at: { type: "string", description: "Exact local datetime, ISO 8601: 2026-09-06T09:00 (add an offset such as +02:00 only when you mean another zone)." } }, required: ["text", "at"] } },
+  { name: "list_reminders", description: "List the one-off reminders you have set for the human, upcoming first. Each comes back with its id, text, the moment it fires and whether it already fired — take the id from here before delete_reminder.", inputSchema: { type: "object", properties: {} } },
+  { name: "delete_reminder", description: "Delete one of your reminders before it fires. Get the id from list_reminders.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Reminder id from list_reminders." } }, required: ["id"] } },
+  { name: "notify_user", description: "Buzz the human's phone because something genuinely needs them NOW. Their phone is otherwise SILENT: finished turns, your replies and bot chatter never notify, and reminders they asked for are the only automatic push. This tool is the one exception, so spend it only on something that cannot wait until they next open the app — never on progress reports, never to say a job finished, never to be polite. It does not wait for an answer (use ask_user when you need one), and repeated calls inside ten minutes collapse into the first.", inputSchema: { type: "object", properties: { reason: { type: "string", description: "One short line saying what you need from them, in their language (max 300 characters). They see it as \"<your name> wants something from you: <reason>\"." } }, required: ["reason"] } },
   { name: "request_connection", description: "Ask the human to connect a service you are missing. It shows a card in the chat with a Connect button that opens the right panel. Call it instead of describing the steps in prose, and never pretend the action happened. It does not block: finish your turn, say what you will do once it is connected, and the next turn will see the new tools.", inputSchema: { type: "object", properties: { connector: { type: "string", description: "Either the name of the app you need - discord, slack, gmail, notion, hubspot, any Composio toolkit slug - or one of the four fixed targets: composio (the apps panel in general), google-workspace (the self-hosted Google preset), mcp (a custom MCP server), computer (a machine for you to work on)." }, why: { type: "string", description: "One line saying what you need it for." } }, required: ["connector"] } },
   {
     name: "create_agent",
@@ -162,8 +164,20 @@ const TOOLS = [
   { name: "write_file", description: "Write a UTF-8 file on the host.", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
   { name: "run_command", description: "Run a host command with arguments.", inputSchema: { type: "object", properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, cwd: { type: "string" } }, required: ["command"] } },
   { name: "get_device_info", description: "Read verified host device facts (platform, Android model, Termux, RAM and installed runtimes).", inputSchema: { type: "object", properties: {} } },
-  { name: "send_file", description: "Send a file to the chat so the user can download or open it — an HTML report, an export, any artifact you produced. Preferred way: write the file to disk first, then pass its `path` and let the server read it. Do NOT base64 a file through your shell output: that output is capped and silently truncates, which corrupts anything past a few dozen kilobytes. Use `content_base64` only for content you are generating inline and never wrote to disk.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to the file as YOU see it, e.g. /root/report.html. Preferred over content_base64." }, name: { type: "string", description: "File name shown in the chat. Defaults to the file name from path." }, mime: { type: "string", description: "MIME type, e.g. text/html" }, content_base64: { type: "string", description: "File bytes as base64. Only when there is no file on disk." } }, required: ["mime"] } },
+  { name: "send_file", description: "Send a file to the chat so the user can download or open it — an HTML report, an export, an image, any artifact you produced. This is the ONLY way a file reaches the user; a path, a filename or a link is not delivery. Two ways, pick by where the bytes are: content you are writing yourself → pass it as `content_base64` and skip the disk entirely (no file write, no approval to wait for); a file that ALREADY exists → pass its `path` and let the server read it. Do NOT base64 a file through your shell output: that output is capped and silently truncates, which corrupts anything past a few dozen kilobytes. Set `mime` — without it the chat cannot preview the file — and set `name`, because that is the only label the user sees on the file.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to a file that already exists, as YOU see it, e.g. /root/report.html." }, name: { type: "string", description: "File name WITH its extension, e.g. red_square.png — this is the label the user sees in the chat. Required whenever you pass content_base64: there is no path to take it from, and the file would be shown as \"file\" with no extension." }, mime: { type: "string", description: "MIME type, e.g. image/png, text/csv, text/html" }, content_base64: { type: "string", description: "File bytes as base64. Use this for anything you are generating now." } }, required: ["mime", "name"] } },
 ];
+
+// A provider may return a generated artifact as a public URL instead of a
+// local file. Keep the existing tool definition and add the third source here.
+const sendFileTool = TOOLS.find((tool) => tool.name === "send_file");
+if (sendFileTool) {
+  const properties = sendFileTool.inputSchema.properties as Record<string, unknown>;
+  properties.url = { type: "string", description: "Public http(s) URL returned by an image/file provider." };
+  sendFileTool.description = sendFileTool.description.replace(
+    "a path, a filename or a link is not delivery. Two ways, pick by where the bytes are:",
+    "a filename or a link in prose is not delivery. Pick `path` for an existing file, `url` for a public http(s) artifact, or `content_base64` for bytes you write:",
+  );
+}
 
 type Json = Record<string, unknown>;
 const send = (msg: Json) => process.stdout.write(JSON.stringify(msg) + "\n");
@@ -257,7 +271,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     // to jedno wywołanie potrafi trwać minuty — tak ma być.
     const r = await api("/api/internal/agent-action", {
       method: "POST",
-      body: JSON.stringify({ fromBotId: BOT_ID, action: "user.ask", question: String(args.question ?? ""), choices: args.choices }),
+      body: JSON.stringify({ fromBotId: BOT_ID, action: "user.ask", question: String(args.question ?? ""), choices: args.choices, multiple: args.multiple === true, detail: args.detail }),
     });
     return { text: String(r.answer ?? "") };
   }
@@ -283,6 +297,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       body: JSON.stringify({
         botId: BOT_ID,
         ...(args.path ? { path: String(args.path) } : {}),
+        ...(args.url ? { url: String(args.url) } : {}),
         ...(args.name ? { name: String(args.name) } : {}),
         mime: String(args.mime ?? "application/octet-stream"),
         content: String(args.content_base64 ?? ""),
@@ -296,7 +311,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     read_memory: "memory.graph", remember_for_team: "team.memory.add", recall_team: "team.memory.list", read_team_memory: "team.memory.graph",
     create_skill: "skills.create", list_skills: "skills.list", create_routine: "routines.create",
     list_routines: "routines.list", update_routine: "routines.update", delete_routine: "routines.delete",
-    run_routine: "routines.run", create_reminder: "reminders.create", notify_user: "user.notify", request_connection: "connection.request", create_agent: "agent.create", get_agent: "agent.get", update_agent: "agent.update", delete_agent: "agent.delete",
+    run_routine: "routines.run", create_reminder: "reminders.create", list_reminders: "reminders.list", delete_reminder: "reminders.delete", notify_user: "user.notify", request_connection: "connection.request", create_agent: "agent.create", get_agent: "agent.get", update_agent: "agent.update", delete_agent: "agent.delete",
     start_collab: "collab.start",
     list_groups: "groups.list", create_group: "groups.create", delete_group: "groups.delete", send_group_message: "groups.send", get_device_info: "device.info", read_file: "file.read",
     write_file: "file.write", run_command: "terminal.run",

@@ -62,7 +62,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => ttsServer.listen(0, "127.0.0.1", resolve));
   const ttsUrl = `http://127.0.0.1:${(ttsServer.address() as { port: number }).port}/v1/audio/speech`;
 
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = mkdtempSync(join(tmpdir(), "multibot-api-test-"));
   staticDir = join(home, "dist");
   mkdirSync(staticDir, { recursive: true });
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Multibot login</title>");
@@ -71,9 +71,9 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "sw.js"), "self.addEventListener('fetch', () => {})");
   mkdirSync(join(staticDir, "assets"));
   writeFileSync(join(staticDir, "assets", "app-abc123.js"), "console.log('fingerprinted')");
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({
       voice: { key: "tts-test-key" },
       instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } },
@@ -82,7 +82,7 @@ beforeAll(async () => {
   // Seed a terminal setup job so progress endpoint is covered without
   // launching real provisioning or package installation in this test.
   writeFileSync(
-    join(home, ".openmausbot", "setup-jobs.json"),
+    join(home, ".multibot", "setup-jobs.json"),
     JSON.stringify([
       {
         id: "done-job",
@@ -99,31 +99,31 @@ beforeAll(async () => {
     ]),
   );
   writeFileSync(
-    join(home, ".openmausbot", "groups.json"),
+    join(home, ".multibot", "groups.json"),
     JSON.stringify([{ id: "g-local", name: "1", bot_ids: [], createdAt: 1, messages: [] }]),
   );
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
+      MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
       // Same reason as MULTIBOT_COMPUTER below: VITEST does not reach the
       // spawned harness, so the boot updater would run a REAL `claude update`
       // on the developer's machine while the suite is still up.
-      OMB_AUTO_UPDATE: "0",
+      MULTIBOT_AUTO_UPDATE: "0",
       // multibot (H2): a spawned harness gets a minimal env, so VITEST does not
       // reach it — without this the server would provision REAL containers for
       // every throwaway test bot.
       MULTIBOT_COMPUTER: "off",
       // Loopback keeps tests valid in restricted CI sandboxes; public access
       // is provided by the HTTPS tunnel/reverse proxy in real deployments.
-      OMB_HOST: "127.0.0.1",
-      OMB_STATIC_DIR: staticDir,
+      MULTIBOT_HOST: "127.0.0.1",
+      MULTIBOT_STATIC_DIR: staticDir,
       MULTIBOT_TTS_URL: ttsUrl,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -153,7 +153,7 @@ beforeAll(async () => {
   // moment a profile exists, so no later `it` could observe this state.
   // The setup token lives in the server's own setup.json — reading that file is
   // the actual permission, because loopback is not per-app on a phone.
-  const setupToken = (JSON.parse(readFileSync(join(home, ".openmausbot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
+  const setupToken = (JSON.parse(readFileSync(join(home, ".multibot", "setup.json"), "utf8")) as { setupToken: string }).setupToken;
   const withToken = { "x-multibot-setup": setupToken };
   setupValuesBehindProxy = (await fetch(`${BASE}/api/setup/values`, { headers: { ...withToken, "x-forwarded-for": "1.2.3.4" } })).status;
   setupValuesWithoutToken = (await fetch(`${BASE}/api/setup/values`)).status;
@@ -331,6 +331,36 @@ describe("harness HTTP API", () => {
     expect(deleted.status).toBe(200);
     expect(deleted.body).toEqual({ ok: true });
     expect((await api("GET", "/api/groups")).body).toEqual([]);
+  });
+
+  it("rejects groups larger than twelve bots", async () => {
+    // Trzynaście RÓŻNYCH botów — na powtórzonym identyfikatorze test przechodziłby
+    // tylko dlatego, że limit liczy długość tablicy, a nie prawdziwy skład.
+    const ids: string[] = [];
+    for (let i = 0; i < 13; i++) ids.push((await api("POST", "/api/bots")).body.bot.id);
+
+    const tooMany = await api("POST", "/api/groups", { name: "Too many", bot_ids: ids });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: "group has at most 12 bots" });
+    expect((await api("GET", "/api/groups")).body).toEqual([]);
+
+    // Ten sam bot powtórzony nie zapycha limitu — skład jest odchudzany o duplikaty.
+    const dupes = await api("POST", "/api/groups", { name: "Dupes", bot_ids: Array(13).fill(ids[0]) });
+    expect(dupes.status).toBe(201);
+    expect(dupes.body.bot_ids).toHaveLength(1);
+    expect((await api("DELETE", `/api/groups/${dupes.body.id}`)).status).toBe(200);
+
+    const full = await api("POST", "/api/groups", { name: "Full", bot_ids: ids.slice(0, 12) });
+    expect(full.status).toBe(201);
+    expect(full.body.bot_ids).toHaveLength(12);
+    const added = await api("PATCH", `/api/groups/${full.body.id}/members`, { botId: ids[12] });
+    expect(added.status).toBe(400);
+    expect(added.body).toEqual({ error: "group has at most 12 bots" });
+    // Dopisanie bota, który już jest w grupie, zostaje idempotentne mimo limitu.
+    const again = await api("PATCH", `/api/groups/${full.body.id}/members`, { botId: ids[0] });
+    expect(again.status).toBe(200);
+    expect(again.body.bot_ids).toHaveLength(12);
+    expect((await api("DELETE", `/api/groups/${full.body.id}`)).status).toBe(200);
   });
 
   it("serves a provider-neutral workspace for every harness bot", async () => {
@@ -685,10 +715,10 @@ describe("harness HTTP API", () => {
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {
     const put = await api("PUT", "/api/config", { profile: { name: "Ada Lovelace", email: "Ada@Example.com" } });
     expect(put.status).toBe(200);
-    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatar: null });
 
     const after = await api("GET", "/api/config");
-    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatar: null });
   });
 
   // multibot: strefa czasowa i autoweryfikacja jadą tym samym /api/config co
@@ -752,6 +782,36 @@ describe("harness HTTP API", () => {
   // multibot (F7): własne serwery MCP użytkownika — osobna trasa `/custom/`,
   // wspólny katalog z Composio (karta niesie `source`).
   it("registers a custom MCP connector and tags it in the integrations catalog", async () => {
+    const joined = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "index-plugin-member",
+        password: "index-plugin-member-pass",
+        displayName: "Plugin Member",
+        serverName,
+        serverPassword,
+        deviceName: "vitest-plugin-member",
+      }),
+    });
+    expect(joined.status).toBe(201);
+    const memberToken = (await joined.json() as { accessToken: string }).accessToken;
+    const memberConnector = await fetch(`${BASE}/api/connectors/custom/member-echo`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2", "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Member Echo",
+        transport: { type: "stdio", command: "node", args: ["echo.mjs"] },
+      }),
+    });
+    expect(memberConnector.status).toBe(200);
+    expect((await memberConnector.json() as { connector: { name: string } }).connector.name).toBe("Member Echo");
+    const memberRemoved = await fetch(`${BASE}/api/connectors/custom/member-echo`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${memberToken}`, "x-multibot-protocol": "2" },
+    });
+    expect(memberRemoved.status).toBe(200);
+
     const bad = await api("PUT", "/api/connectors/custom/echo", { transport: { type: "stdio" } });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toContain("command required");
@@ -767,12 +827,55 @@ describe("harness HTTP API", () => {
     expect(catalog.status).toBe(200);
     const custom = catalog.body.cards.filter((c: { source: string }) => c.source === "custom");
     expect(custom).toEqual([
-      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, domain: null, source: "custom" },
+      { slug: "echo", label: "Echo", blurb: "stdio: node echo.mjs", logo: null, source: "custom" },
     ]);
     // Composio zostaje primary: jego karty są w tym samym katalogu, otagowane.
     expect(catalog.body.cards.filter((c: { source: string }) => c.source === "composio").length).toBeGreaterThan(0);
     // sekret konektora nie wychodzi katalogiem
     expect(JSON.stringify(catalog.body)).not.toContain("sekret");
+
+    // „testuj połączenie" na SZKICU: id jeszcze nie istnieje, transport idzie
+    // ciałem, więc panel sprawdza serwer przed zapisem. Nieudana sonda też
+    // wraca 200 — to wynik testu, nie błąd API.
+    const FAKE_MCP = join(SERVER_DIR, "testing", "fake-mcp-server.ts");
+    const draft = await api("POST", "/api/connectors/custom/szkic/test", {
+      name: "Szkic",
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP] },
+    });
+    expect(draft.status).toBe(200);
+    expect(draft.body).toMatchObject({ ok: true, count: 2, serverName: "fake-echo" });
+    expect(draft.body.tools).toEqual(["echo", "ping"]);
+    // sam test niczego nie zapisuje
+    const afterDraft = await api("GET", "/api/connectors/catalog");
+    expect(afterDraft.body.cards.some((c: { slug: string }) => c.slug === "szkic")).toBe(false);
+
+    const broken = await api("POST", "/api/connectors/custom/szkic/test", {
+      transport: { type: "stdio", command: "multibot-no-such-binary-xyz" },
+    });
+    expect(broken.status).toBe(200);
+    expect(broken.body.ok).toBe(false);
+    expect(typeof broken.body.error).toBe("string");
+    expect(broken.body.tools).toBeUndefined();
+
+    // …a test ZAPISANEGO konektora (bez transportu w ciele) dokłada licznik do karty
+    await api("PUT", "/api/connectors/custom/echo", {
+      name: "Echo",
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP] },
+    });
+    const tested = await api("POST", "/api/connectors/custom/echo/test");
+    expect(tested.body).toMatchObject({ ok: true, count: 2 });
+    const counted = await api("GET", "/api/connectors/catalog");
+    expect(counted.body.cards.find((c: { slug: string }) => c.slug === "echo").tools).toBe(2);
+    expect((await api("POST", "/api/connectors/custom/nie-ma/test")).status).toBe(404);
+
+    // test SZKICU pod istniejącym id nie ma prawa przestawić licznika
+    // zapisanego konektora — inaczej ciało HTTP podstawia dowolną liczbę.
+    const spoof = await api("POST", "/api/connectors/custom/echo/test", {
+      transport: { type: "stdio", command: process.execPath, args: [FAKE_MCP], env: { FAKE_MCP_MODE: "one" } },
+    });
+    expect(spoof.body).toMatchObject({ ok: true, count: 1 });
+    const stillTwo = await api("GET", "/api/connectors/catalog");
+    expect(stillTwo.body.cards.find((c: { slug: string }) => c.slug === "echo").tools).toBe(2);
 
     const gone = await api("DELETE", "/api/connectors/custom/echo");
     expect(gone.status).toBe(200);
@@ -956,7 +1059,7 @@ describe("harness HTTP API", () => {
     expect(setupFingerprint).toMatch(/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/);
     // beforeAll already registered the owner, so the route is closed for good.
     expect((await fetch(`${BASE}/api/setup/values`)).status).toBe(404);
-    expect(existsSync(join(home, ".openmausbot", "setup.json"))).toBe(false);
+    expect(existsSync(join(home, ".multibot", "setup.json"))).toBe(false);
     // …and the retired setup route is gone with it.
     expect((await api("POST", "/api/setup/server", { name: "nope" })).status).toBe(404);
   });
@@ -988,6 +1091,30 @@ describe("harness HTTP API", () => {
   it("stores an e-mail on the profile and hands it back with the account", async () => {
     expect((await api("PATCH", "/api/profile", { displayName: "Index Tester", email: "index@example.test" })).body.user.email).toBe("index@example.test");
     expect((await api("GET", "/api/auth/me")).body.user.email).toBe("index@example.test");
+  });
+
+  // Kontrakt (używa go też mobile): POST {image:"data:image/…"} → 200 z profilem
+  // (w tym `avatar`); DELETE → 200, avatar null; `state.config.profile.avatar`.
+  it("stores, exposes and removes the user's profile photo", async () => {
+    const image = `data:image/png;base64,${"a".repeat(64)}`;
+    const posted = await api("POST", "/api/profile/avatar", { image });
+    expect(posted.status).toBe(200);
+    expect(posted.body.user.avatar).toBe(image);
+    expect((await api("GET", "/api/profile")).body.user.avatar).toBe(image);
+    // klient czyta to z `state.config.profile.avatar`
+    expect((await api("GET", "/api/config")).body.profile.avatar).toBe(image);
+
+    // walidacja: brak obrazka, nie-obrazek i limit wielkości
+    expect((await api("POST", "/api/profile/avatar", {})).status).toBe(422);
+    expect((await api("POST", "/api/profile/avatar", { image: "data:text/plain;base64,aaaa" })).status).toBe(422);
+    expect((await api("POST", "/api/profile/avatar", { image: `data:image/png;base64,${"a".repeat(700_001)}` })).status).toBe(413);
+    // nieudane próby niczego nie nadpisały
+    expect((await api("GET", "/api/profile")).body.user.avatar).toBe(image);
+
+    const removed = await api("DELETE", "/api/profile/avatar");
+    expect(removed.status).toBe(200);
+    expect(removed.body.user.avatar).toBeNull();
+    expect((await api("GET", "/api/config")).body.profile.avatar).toBeNull();
   });
 
   // Last in the file on purpose: it registers extra profiles and disables one,

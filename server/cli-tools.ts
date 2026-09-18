@@ -27,6 +27,9 @@ export const CLI_TOOLS: readonly CliToolMetadata[] = [
     id: "grok",
     driverKind: "grokAgent",
     displayName: "Grok",
+    // Wyświetlane, nigdy uruchamiane — dystrybucja Grok Build zmienia się
+    // niezależnie, ale samo polecenie logowania jest stabilne (drivers/acp/grok.ts).
+    loginCommand: "grok login",
     // Grok Build distribution changes independently; detection stays, but no
     // guessed package command is executed.
   },

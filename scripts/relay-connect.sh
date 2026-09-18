@@ -18,21 +18,21 @@ ROOT="${MULTIBOT_ROOT:-}"
 if [ -z "$ROOT" ] && [ -f "$0" ]; then ROOT="$(cd "$(dirname "$0")/.." && pwd)"; fi
 [ -n "$ROOT" ] || { echo "[relay] set MULTIBOT_ROOT=/path/to/multibot when piping this script" >&2; exit 2; }
 
-PORT="${OMB_PORT:-8799}"
+PORT="${MULTIBOT_PORT:-8799}"
 RELAY_USER=mbrelay
 
 # The data directory has to be the one the SERVER uses, or we write relay.env
 # where nothing reads it. The installers bake it into the service, so read it
 # back from there before falling back to the default.
-if [ -z "${OMB_DATA_DIR:-}" ]; then
+if [ -z "${MULTIBOT_DATA_DIR:-}" ]; then
   for RUNFILE in "${PREFIX:-/nonexistent}/var/service/multibot/run" \
                  "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/multibot.service"; do
     [ -f "$RUNFILE" ] || continue
-    FOUND="$(sed -n 's/.*OMB_DATA_DIR="\{0,1\}\([^" ]*\)"\{0,1\}.*/\1/p' "$RUNFILE" | head -1)"
-    if [ -n "$FOUND" ]; then OMB_DATA_DIR="$FOUND"; break; fi
+    FOUND="$(sed -n 's/.*MULTIBOT_DATA_DIR="\{0,1\}\([^" ]*\)"\{0,1\}.*/\1/p' "$RUNFILE" | head -1)"
+    if [ -n "$FOUND" ]; then MULTIBOT_DATA_DIR="$FOUND"; break; fi
   done
 fi
-DATA_DIR="${OMB_DATA_DIR:-$HOME/.openmausbot}"
+DATA_DIR="${MULTIBOT_DATA_DIR:-$HOME/.multibot}"
 KEY="$DATA_DIR/relay_key"
 ENV_FILE="$DATA_DIR/relay.env"
 
@@ -91,7 +91,7 @@ install_service() {
     cat > "$DIR/run" <<EOF
 #!$PREFIX/bin/sh
 exec 2>&1
-exec env HOME="$HOME" MULTIBOT_ROOT="$ROOT" OMB_DATA_DIR="$DATA_DIR" OMB_PORT="$PORT" \\
+exec env HOME="$HOME" MULTIBOT_ROOT="$ROOT" MULTIBOT_DATA_DIR="$DATA_DIR" MULTIBOT_PORT="$PORT" \\
   sh "$ROOT/scripts/relay-connect.sh"
 EOF
     chmod +x "$DIR/run"
@@ -115,8 +115,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=MULTIBOT_ROOT=$ROOT
-Environment=OMB_DATA_DIR=$DATA_DIR
-Environment=OMB_PORT=$PORT
+Environment=MULTIBOT_DATA_DIR=$DATA_DIR
+Environment=MULTIBOT_PORT=$PORT
 ExecStart=/bin/sh $ROOT/scripts/relay-connect.sh
 Restart=always
 RestartSec=5

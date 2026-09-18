@@ -1351,7 +1351,7 @@ połączenia, aby stary token nie utrzymywał dostępu.
 Główna konfiguracja znajduje się w user data aplikacji, zwykle pod:
 
 ~~~
-~/.openmausbot/config.json
+~/.multibot/config.json
 ~~~
 
 Stary katalog `~/.opengrokbot` może być migrowany dla kompatybilności. Nazwy
@@ -1531,7 +1531,7 @@ Od 0.4.0 harness sam słucha po HTTPS (`https://<adres>:8799`) na certyfikacie z
 własnym podpisem, który wystawia sobie przy pierwszym boocie — nic dodatkowego
 nie trzeba stawiać. Zaufanie idzie po odcisku SHA-256 (TOFU), a odcisk widać w
 logu startowym i w `GET /api/public/server`. Zaufane reverse proxy jest opcją;
-wtedy TLS kończy się na nim, a harness stoi na `OMB_HOST=127.0.0.1 OMB_TLS=off`.
+wtedy TLS kończy się na nim, a harness stoi na `MULTIBOT_HOST=127.0.0.1 MULTIBOT_TLS=off`.
 Szczegóły: `docs/REMOTE-ACCESS.md`. Bez usług trzecich i bez tuneli.
 
 ---

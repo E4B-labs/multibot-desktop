@@ -12,10 +12,14 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
+// multibot: jedna granica błędu pod wszystkimi panelami — awaria renderowania
+// pokazuje kartę z przyciskiem zamiast kasować całą aplikację (QA 10.09.2026).
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TeamMapPanel } from "@/components/TeamMapPanel";
 import { InspectorPanel } from "@/components/InspectorPanel";
 // multibot: F6 — panel rutyn bota
 import { RoutinesPanel } from "@/components/RoutinesPanel";
+import { RemindersPanel } from "@/components/RemindersPanel";
 // multibot: F8 — panel skilli bota
 import { SkillsPanel } from "@/components/SkillsPanel";
 // multibot: F9-FE — pokój grupowy
@@ -74,6 +78,7 @@ function Shell() {
       {/* multibot: Cmd/Ctrl+K command palette — fixed overlay, renders null until opened */}
       <CmdK />
       <div className="relative flex min-h-0 flex-1">
+        <ErrorBoundary>
         {state.appSettingsOpen ? (
           <AppSettingsPanel />
         ) : (
@@ -93,11 +98,6 @@ function Shell() {
                 <div className="text-[14px]">
                   {state.connected ? (polish ? "Brak botów" : "No bots yet") : polish ? "Łączenie z serwerem botów…" : "Connecting to the bot server…"}
                 </div>
-                {!state.connected && (
-                  <div className="text-[12px]">
-                    {polish ? "Uruchom:" : "Start it with"} <code className="rounded bg-raised px-1.5 py-0.5">pnpm dev:server</code>
-                  </div>
-                )}
               </main>
             )}
             {/* multibot: wejscie w grupe od razu pokazuje sklad po prawej,
@@ -106,10 +106,15 @@ function Shell() {
             {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
             {state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
             {state.computerOpen && bot && <ComputerPanel bot={bot} />}
-            {/* multibot: routines are harness-owned and available for every driver. */}
-            {state.routinesOpen && bot && <RoutinesPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
+            {/* multibot: routines are harness-owned and available for every driver.
+                Ten sam slot trzyma dwie zakładki: powtarzalne rutyny i
+                jednorazowe przypomnienia (spis całego warsztatu, więc bez bota). */}
+            {state.routinesOpen && state.routinesTab === "reminders" && <RemindersPanel />}
+            {state.routinesOpen && state.routinesTab === "routines" && bot && (
+              <RoutinesPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />
+            )}
             {state.skillsOpen && bot && <SkillsPanel key={`${bot.id}-${state.workspaceVersion}`} bot={bot} />}
-            {/* multibot: live team map (port z OpenMausBot) — globalny overlay */}
+            {/* multibot: live team map (port z upstreamu) — globalny overlay */}
             {state.teamMapOpen && (
               <TeamMapPanel onClose={() => dispatch({ type: "toggleTeamMap", open: false })} />
             )}
@@ -118,6 +123,7 @@ function Shell() {
             {state.pluginsOpen && <PluginsPanel />}
           </>
         )}
+        </ErrorBoundary>
       </div>
       {/* multibot: kontrolki okna siedzą poza układem, bo nagłówek czatu znika
           przy ustawieniach aplikacji i przy pustym stanie, a zamknąć okno

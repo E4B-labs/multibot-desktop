@@ -18,6 +18,7 @@ async function version(command: string, args: string[]): Promise<string | null> 
       cli.args,
       {
         timeout: 5_000,
+        windowsHide: true,
         windowsVerbatimArguments: cli.windowsVerbatimArguments,
         env: { ...process.env, PATH: augmentedPath() },
       },
@@ -40,7 +41,7 @@ async function property(name: string): Promise<string | null> {
     execFile(
       "getprop",
       [name],
-      { timeout: 2_000, env: { ...process.env, PATH: augmentedPath() } },
+      { timeout: 2_000, windowsHide: true, env: { ...process.env, PATH: augmentedPath() } },
       (error, stdout) => resolve(error ? null : String(stdout).trim() || null),
     ),
   );

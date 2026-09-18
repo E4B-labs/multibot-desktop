@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { addressNote, authRequest, backLeavesWizard, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, startingPoint } from "./Onboarding";
+import { addressNote, authRequest, backLeavesWizard, credentialsText, joinErrorField, joinErrorText, joinPlan, nextStep, previousStep, savedSignIn, savedSignInLabel, startingPoint } from "./Onboarding";
 import { isOnionHost } from "@/lib/shell";
 
 // Vitest runs in `node` here and the repo has no jsdom, so the screens
@@ -266,5 +266,44 @@ describe("where onboarding starts", () => {
     expect(backLeavesWizard("https://192.168.1.42:8799", "signin")).toBe(true);
     expect(backLeavesWizard("https://192.168.1.42:8799", "profileKind")).toBe(false);
     expect(backLeavesWizard("", "signin")).toBe(false);
+  });
+});
+
+describe("remembered sign-in", () => {
+  const entry = { url: "https://10.0.0.5:8799", serverName: "brave-otter", username: "kacper" };
+
+  it("puts both names on the button — that is the whole point of remembering", () => {
+    expect(savedSignInLabel(entry, false)).toBe("Sign in as kacper on brave-otter");
+    expect(savedSignInLabel(entry, true)).toBe("Zaloguj jako kacper na brave-otter");
+  });
+
+  it("falls back to the address when the server never told us its name", () => {
+    expect(savedSignInLabel({ ...entry, serverName: "" }, false)).toBe("Sign in as kacper on https://10.0.0.5:8799");
+  });
+
+  it("offers the one-tap only in a shell that can act on it", () => {
+    expect(savedSignIn(entry, true)).toEqual(entry);
+    // Przeglądarka nie ma czym zapamiętać, więc nie ma czego oferować.
+    expect(savedSignIn(entry, false)).toBeNull();
+    expect(savedSignIn(null, true)).toBeNull();
+  });
+
+  it("does not offer a half-written entry — a button leading back to the form is worse than none", () => {
+    expect(savedSignIn({ ...entry, username: "" }, true)).toBeNull();
+    expect(savedSignIn({ url: "", serverName: "", username: "kacper" }, true)).toBeNull();
+  });
+
+  it("explains a saved sign-in the server no longer knows", () => {
+    expect(joinErrorText("no_saved_login", false)).toContain("saved sign-in is gone");
+    expect(joinErrorText("failed", true)).toBe("Serwer odrzucił logowanie.");
+  });
+
+  // Twardy warunek zadania: pięć wartości trzyma POWŁOKA. Ten ekran nie ma
+  // prawa dotknąć localStorage — ani po to, żeby zapisać hasło, ani nazwę.
+  it("never touches localStorage", () => {
+    // Komentarze odpadają: mówić o localStorage wolno, DOTKNĄĆ go nie.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(code).not.toMatch(/localStorage/);
+    expect(code).not.toMatch(/sessionStorage/);
   });
 });

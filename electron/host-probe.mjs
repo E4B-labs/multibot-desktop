@@ -59,6 +59,24 @@ export function classifyJoin(status, body) {
   return { ok: false, error: "not_multibot" };
 }
 
+/** Kody, które `POST /api/auth/login` ma prawo nam podyktować — te same, które
+ * ekran profilu umie postawić przy właściwym polu. Reszta to „serwer odmówił". */
+const LOGIN_CODES = new Set(["no_such_profile", "wrong_profile_password", "join_grant_invalid", "account unavailable"]);
+
+/** `POST /api/auth/login` → sesja albo kod błędu. Token sesji jest tu tak samo
+ * potrzebny jak token dostępu: to żądanie robi proces główny, nie okno, więc
+ * ciastko `mb_v2_session` nie ma jak trafić do Chromium — bez tokenu sesji
+ * pierwsze wygaśnięcie 15-minutowego tokenu byłoby wylogowaniem. */
+export function classifyLogin(status, body) {
+  if (status === 200 && typeof body?.accessToken === "string" && body.accessToken) {
+    return { ok: true, accessToken: body.accessToken, sessionToken: typeof body?.sessionToken === "string" ? body.sessionToken : "" };
+  }
+  const alias = SERVER_ALIASES.get(body?.error);
+  if (alias) return { ok: false, error: alias };
+  if (LOGIN_CODES.has(body?.error)) return { ok: false, error: body.error };
+  return { ok: false, error: "failed" };
+}
+
 function requestJson(url, { method = "GET", body, pin, headers = {}, timeoutMs, createConnection } = {}) {
   return new Promise((resolveWith, rejectWith) => {
     const target = new URL(url);
@@ -187,6 +205,28 @@ export async function joinServer(url, { serverName, serverPassword, ...options }
     });
     const result = classifyJoin(status, json);
     return result.ok ? { ...result, tlsFingerprint } : result;
+  } catch (err) {
+    return { ok: false, error: failureCode(err) };
+  }
+}
+
+/** Spends a join grant on a profile login, natively. Used by the remembered
+ * sign-in: the shell holds both passwords, so it can put the user straight into
+ * the workspace instead of landing the webui on a form it would have to fill
+ * in. `x-multibot-client: native` because the session cookie of this request
+ * would belong to node, not to the window — the session token comes back in
+ * the body instead and travels to the page in the URL fragment, like the
+ * access token already does. Neither password is ever logged. */
+export async function loginServer(url, { joinGrant, username, password, deviceName, ...options } = {}) {
+  if (isCleartextToTheWorld(new URL(url))) return { ok: false, error: "insecure_address" };
+  try {
+    const { status, json } = await requestJson(`${url}/api/auth/login`, {
+      ...options,
+      method: "POST",
+      headers: { ...(options.headers ?? {}), "x-multibot-client": "native" },
+      body: { joinGrant, username, password, deviceName },
+    });
+    return classifyLogin(status, json);
   } catch (err) {
     return { ok: false, error: failureCode(err) };
   }

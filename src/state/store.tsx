@@ -12,9 +12,10 @@ import {
   type ReactNode,
 } from "react";
 import type { MascotShape } from "@/lib/mascotShapes";
-import type { MausColor, MausMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
-import { MAUS_COLORS } from "@/lib/mascot";
+import type { BotColor, BotMotion, RuntimeKind, RuntimePhase } from "@/lib/mascot";
+import { BOT_COLORS } from "@/lib/mascot";
 import { authFetch, authenticatedEventSource } from "@/lib/auth";
+import { markStartup, onStartupReady } from "@/lib/startupTiming";
 import { getLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import {
@@ -27,9 +28,10 @@ import {
   type NotifySnapshot,
 } from "@/lib/notifications";
 import { sortMessages } from "@/lib/messageOrder";
+import { noteLocalBotEdit, settleLocalBotEdits, stripPendingBotEcho } from "@/lib/pendingBotEdits";
 import type { AutoVerifySettings } from "@/lib/autoVerifyTypes";
 
-export type { MausColor } from "@/lib/mascot";
+export type { BotColor } from "@/lib/mascot";
 
 const SELECTED_BOT_KEY = "multibot.selectedBot";
 // multibot: klient trzyma ostatnie pokoje współpracy dla wskaźnika aktywności;
@@ -50,9 +52,24 @@ export interface OptionCardData {
   /** multibot: `computer-handoff` — bot prosi człowieka o zrobienie czegoś na
    *  jego komputerze (logowanie, 2FA, captcha). `connect` — bot prosi o
    *  podłączenie konektora i NIE czeka. Brak = zwykła karta. */
-  kind?: "computer-handoff" | "connect";
+  kind?: "computer-handoff" | "connect" | "approval";
   /** karty `connect`: konektor, który otwiera przycisk „Podłącz". */
   connector?: ConnectorTarget;
+  /** multibot: pytanie wielokrotnego wyboru — checkboxy + „Zatwierdź".
+   *  Odpowiedź wraca jako wybrane etykiety rozdzielone przecinkiem. */
+  multiple?: boolean;
+  /** multibot: odpowiedź przyjęta przez serwer, czyli dojechała do bota. */
+  delivered?: boolean;
+}
+
+/** Karta ZGODY, nie pytania. Rozstrzyga DWIE rzeczy: czy odpowiedź jedzie do
+ * dostawcy jako decyzja (`allow`/`deny`/`always`) czy jako tekst dla modelu, i
+ * czy po odpowiedzi karta zwija się w pokwitowanie. Podtytuł karty zgody to
+ * ślad autoweryfikacji (co zatwierdzono i jaką regułą), więc zwinąć jej nie
+ * wolno. Warunek na „Allow for all" łapie karty zapisane przed dodaniem
+ * `kind` — starych transkryptów nie przepisujemy. */
+export function isApprovalCard(card: OptionCardData): boolean {
+  return card.kind === "approval" || card.options.includes("Allow for all");
 }
 
 /** Skill widziany przez czat: nazwa do podświetlenia + opis do popovera. */
@@ -64,13 +81,15 @@ export interface SkillRefInfo {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret";
+  kind: "text" | "options" | "activity" | "event" | "screen" | "room" | "secret" | "login";
+  /** multibot: karta „logowanie wygasło" (server/store.ts) */
+  login?: { tool: string; signedIn?: boolean };
   text?: string;
   card?: OptionCardData;
   secret?: { target: string; label: string; description: string; placeholder?: string; helpUrl?: string; requestKey: string; provided?: boolean; dismissed?: boolean };
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
-  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "goal-progress"; value: string };
+  event?: { type: "renamed" | "skill-created" | "routine-created" | "reminder-created" | "reminder" | "goal-progress"; value: string };
   /** collaboration-room chip: "X texted Y" / "X replied" → opens the read-only room */
   room?: { id: string; name: string; bot_ids: string[]; ownerBotId: string; status: string; event?: "texted" | "received" | "replied"; groupId?: string };
   /** screen messages: a frame of the bot's computer (base64) */
@@ -101,7 +120,7 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
+  color: BotColor;
   mascotExpression?: string | null;
   mascotShape?: MascotShape;
   avatarUrl?: string | null;
@@ -112,11 +131,13 @@ export interface Bot {
   /** multibot: id pierwszej nieprzeczytanej wiadomości — nad nią rysujemy
    *  separator "NEW" (wyczyszczany przy otwarciu czatu / select). */
   firstUnreadId?: string | null;
-  /** multibot: sekcja sidebaru (port z OpenMausBot #296) — brak = lista główna. */
+  /** multibot: sekcja sidebaru (port z upstreamu #296) — brak = lista główna. */
   section?: string;
   chiefOfStaff?: boolean;
   composioAccounts?: Record<string, string>;
   busy?: boolean;
+  /** tura ruszyła od innego bota, nie od czlowieka (patrz shouldNotify) */
+  botTurn?: boolean;
   // multibot: why the bot is waiting on a human (login/captcha/question); null/absent = not waiting.
   // Arrives via the same `{kind:"bot"}` SSE frame as every other bot patch.
   needsAttention?: string | null;
@@ -144,7 +165,7 @@ export interface ConfigStatus {
   /** kolejność sekcji sidebaru — wspólna dla desktopu i telefonu */
   sectionOrder?: string[];
   /** who's using the app — collected in onboarding, shown in the sidebar */
-  profile?: { name: string; email: string };
+  profile?: { name: string; email: string; avatar?: string | null };
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -186,6 +207,10 @@ export interface Room {
   transcript: Array<{ id: string; from: string; text: string; at: number }>;
   status: "running" | "done" | "failed";
   activeBotId?: string | null;
+  /** Bot handed the next turn that has not started it yet. The server keeps it
+   * so a crash mid-conversation can be resumed; the UI reads it because it is
+   * the only signal that spans the gap between two bots' turns. */
+  pendingTo?: string | null;
   /** Group chat this room mirrors, when it is a group conversation. */
   groupId?: string;
 }
@@ -208,6 +233,8 @@ export interface FleetEnvironment {
 
 interface AppState {
   bots: Bot[];
+  /** false until GET /api/bots answers once — tells an empty fleet from an unloaded one */
+  hydrated: boolean;
   environment: FleetEnvironment | null;
   instances: InstanceInfo[];
   config: ConfigStatus | null;
@@ -219,12 +246,20 @@ interface AppState {
   pluginsConnector?: ConnectorTarget;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  // multibot: narzędzie CLI, którego logowanie ma się otworzyć od razu po
+  // wejściu w ustawienia (banerka wygasłego logowania). Ta sama droga co
+  // `pluginsConnector` dla kart konektorów.
+  appSettingsCliLogin?: string;
   // multibot: F6 — panel rutyn, ten sam prawy slot co settings/computer
   routinesOpen: boolean;
+  /** multibot: prawy slot trzyma dwa spisy planów bota — powtarzalne rutyny i
+   * jednorazowe przypomnienia. Jedna zakładka zamiast drugiego panelu, bo i tak
+   * wykluczałyby się wzajemnie. */
+  routinesTab: "routines" | "reminders";
   // multibot: F8 — panele pamięci i skilli, ten sam prawy slot
   memoryOpen: boolean;
   skillsOpen: boolean;
-  // multibot: live team map (port z OpenMausBot)
+  // multibot: live team map (port z upstreamu)
   teamMapOpen: boolean;
   inspectorOpen: boolean;
   /** multibot: skille bieżącego bota — nazwy podświetlają się w treści
@@ -252,13 +287,17 @@ interface AppState {
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
+  /** multibot: boty, które WŁAŚNIE pracują na komputerze (trzeci poziom
+   *  widoczności — Status). Cała lista przychodzi ramką `computer-queue`,
+   *  więc podmieniamy ją w całości, a koniec tury przysyła pustą. */
+  computerActing: string[];
   connected: boolean;
   workspaceVersion: number;
   error: string | null;
   mascotMotion: {
     botId: string;
     nonce: number;
-    kind: Exclude<MausMotion, "none">;
+    kind: Exclude<BotMotion, "none">;
   } | null;
 }
 
@@ -271,6 +310,9 @@ type Action =
   | { type: "selectComputer"; id: string }
   | { type: "send"; botId: string; text: string; reasoning?: string; attachmentIds?: string[]; replyToId?: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
+  /** multibot: wysyłka odpowiedzi padła — karta wraca do stanu pytania, żeby
+   *  człowiek mógł odpowiedzieć jeszcze raz. */
+  | { type: "cardAnswerFailed"; botId: string; messageId: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot"; visibility?: "team" | "private" }
   | { type: "botAdded"; bot: Bot }
@@ -285,6 +327,7 @@ type Action =
   | { type: "streamClear"; threadId: string }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
+  | { type: "computerActing"; botIds: string[] }
   | { type: "setModel"; botId: string; selection: ModelSelection }
   | { type: "interrupt"; botId: string }
   | { type: "connected"; value: boolean }
@@ -293,13 +336,13 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean; connector?: ConnectorTarget }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleAppSettings"; open?: boolean; cliLogin?: string }
   // multibot: F6 — otwarcie/zamknięcie panelu rutyn
-  | { type: "toggleRoutines"; open?: boolean }
+  | { type: "toggleRoutines"; open?: boolean; tab?: "routines" | "reminders" }
   // multibot: F8 — otwarcie/zamknięcie paneli pamięci i skilli
   | { type: "toggleMemory"; open?: boolean }
   | { type: "toggleSkills"; open?: boolean; skill?: string }
-  // multibot: team map (port z OpenMausBot)
+  // multibot: team map (port z upstreamu)
   | { type: "toggleTeamMap"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   /** multibot: nazwy skilli do podświetlania w treści wiadomości */
@@ -333,7 +376,7 @@ function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppStat
 function withMascotMotion(
   state: AppState,
   botId: string,
-  kind: Exclude<MausMotion, "none">,
+  kind: Exclude<BotMotion, "none">,
 ): AppState {
   return {
     ...state,
@@ -354,7 +397,9 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
-function reducer(state: AppState, action: Action): AppState {
+/** Wystawiony (razem z `initialState`) do testów jednostkowych — reduktor jest
+ *  czysty, więc sprawdza się go bez montowania Providera. */
+export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
       const saved =
@@ -375,7 +420,7 @@ function reducer(state: AppState, action: Action): AppState {
             b.unread && b.id !== selectedId ? (messages.at(-1)?.id ?? null) : b.firstUnreadId,
         };
       });
-      return { ...state, bots, selectedId };
+      return { ...state, bots, selectedId, hydrated: true };
     }
     case "instances":
       return { ...state, instances: action.instances };
@@ -403,12 +448,25 @@ function reducer(state: AppState, action: Action): AppState {
     case "selectComputer":
       return { ...state, selectedId: action.id };
     // optimistic card settle; the server's message.patch confirms it later
-    case "answerCard":
+    case "answerCard": {
+      // multibot: karta pytania NIE znika po kliknięciu — zamienia się w
+      // potwierdzenie (pytanie + wybór + „wysłano do X"), które zostaje w
+      // transkrypcie. Karta bez `requestId` (powitalna) zamyka się jak dotąd:
+      // odpowiedź idzie zwykłą wiadomością i to ona jest śladem w czacie.
+      const card = state.bots.find((b) => b.id === action.botId)?.messages.find((m) => m.id === action.messageId)?.card;
       return withMascotMotion(
-        patchCard(state, action.botId, action.messageId, { answered: action.answer, dismissed: true }),
+        patchCard(state, action.botId, action.messageId, {
+          answered: action.answer,
+          ...(card?.requestId ? {} : { dismissed: true }),
+        }),
         action.botId,
         "working",
       );
+    }
+    case "cardAnswerFailed":
+      // `dismissed` też wraca: karta bez `requestId` chowa się już przy
+      // kliknięciu, więc samo skasowanie odpowiedzi zostawiłoby ją niewidoczną.
+      return patchCard(state, action.botId, action.messageId, { answered: undefined, dismissed: false });
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "botAdded":
@@ -538,10 +596,19 @@ function reducer(state: AppState, action: Action): AppState {
         ...(action.on ? withMascotMotion(state, action.botId, "launch") : state),
         provisioning: { ...state.provisioning, [action.botId]: action.on },
       };
+    case "computerActing": {
+      const same =
+        state.computerActing.length === action.botIds.length &&
+        state.computerActing.every((id, i) => id === action.botIds[i]);
+      return same ? state : { ...state, computerActing: action.botIds };
+    }
     case "setModel":
       return updateBot(state, action.botId, (b) => ({ ...b, modelSelection: action.selection }));
     case "connected":
-      return { ...state, connected: action.value };
+      // Zerwany strumień znaczy, że ramka końca tury już nie przyjdzie — ikona
+      // komputera zostałaby zapalona do następnej tury. Po odzyskaniu łącza
+      // widok odbuduje pierwsza ramka `computer-queue`.
+      return { ...state, connected: action.value, ...(action.value ? {} : { computerActing: [] }) };
     case "error":
       return {
         ...(action.message && state.selectedId
@@ -555,6 +622,10 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         settingsOpen: open,
+        // multibot: inspektora brakowało na tej liście, więc ustawienia
+        // otwierały się OBOK niego. Odkąd panele mają zmienną szerokość, dwa
+        // naraz potrafią zabrać całe okno i zgnieść kolumnę czatu do zera.
+        inspectorOpen: open ? false : state.inspectorOpen,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
         routinesOpen: open ? false : state.routinesOpen,
@@ -589,6 +660,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsCliLogin: action.cliLogin,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -601,10 +673,16 @@ function reducer(state: AppState, action: Action): AppState {
     }
     // multibot: F6 — panel rutyn wypycha pozostałych lokatorów prawego slotu
     case "toggleRoutines": {
-      const open = action.open ?? !state.routinesOpen;
+      // Bez `open` to przełącznik, ALE kliknięcie w drugą zakładkę otwartego
+      // panelu ma ją PRZEŁĄCZYĆ, a nie zamknąć panel.
+      const open = action.open
+        ?? (!state.routinesOpen || (action.tab !== undefined && action.tab !== state.routinesTab));
       return {
         ...state,
         routinesOpen: open,
+        // bez `tab` panel wraca na rutyny — „Rutyny bota" z menu ma otwierać
+        // rutyny także wtedy, gdy ostatnio oglądane były przypomnienia
+        routinesTab: open ? action.tab ?? "routines" : state.routinesTab,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
@@ -766,8 +844,9 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-const initialState: AppState = {
+export const initialState: AppState = {
   bots: [],
+  hydrated: false,
   environment: null,
   instances: [],
   config: null,
@@ -777,6 +856,7 @@ const initialState: AppState = {
   computerOpen: false,
   appSettingsOpen: false,
   routinesOpen: false,
+  routinesTab: "routines",
   memoryOpen: false,
   skillsOpen: false,
   teamMapOpen: false,
@@ -791,6 +871,7 @@ const initialState: AppState = {
   runtime: {},
   screens: {},
   provisioning: {},
+  computerActing: [],
   connected: false,
   workspaceVersion: 0,
   error: null,
@@ -842,6 +923,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         busy: bot.busy,
         unread: bot.unread,
         needsAttention: bot.needsAttention ?? null,
+        botTurn: bot.botTurn,
         notifications: bot.notifications,
       };
       seen.set(bot.id, next);
@@ -852,7 +934,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         title: `${botDisplayName(bot, lang)} ${reason === "attention" ? "needs your input" : "finished"}`,
         body: reason === "attention" ? (next.needsAttention ?? "") : last?.text?.slice(0, 180) ?? "New bot message",
         botId: bot.id,
-        icon: botNotificationIcon(MAUS_COLORS[bot.color]),
+        icon: botNotificationIcon(BOT_COLORS[bot.color]),
       });
     }
   }, [state.bots, state.selectedId]);
@@ -906,10 +988,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
+          // multibot: nieudana wysyłka MUSI oddać kartę z powrotem — inaczej
+          // zostaje pokwitowanie „wysłano do X", którego nikt nie odebrał, a
+          // bot dalej czeka na odpowiedź, której nie da się już kliknąć.
+          const failed = (error: unknown) => {
+            rawDispatch({ type: "cardAnswerFailed", botId: action.botId, messageId: action.messageId });
+            showError(error);
+          };
           if (card?.requestId) {
-            persistCard(action.botId, action.messageId, { answered: action.answer, dismissed: true });
-            const behavior =
-              action.answer === "Allow" ? "allow"
+            // Kartę domyka serwer (`answered` + `delivered` w `POST /respond`),
+            // więc klient jej nie zapisuje — dwa zapisy bez kolejności potrafiły
+            // przepisać cudzą odpowiedź w drugim otwartym oknie.
+            // Rodzaj karty, nie treść odpowiedzi: pytanie, którego opcja brzmi
+            // akurat „Allow", szło do dostawcy jako ZGODA i nigdy nie docierało
+            // do modelu jako odpowiedź.
+            const behavior = !isApprovalCard(card)
+              ? "answer"
+              : action.answer === "Allow" ? "allow"
                 : action.answer === "Allow for all" ? "always"
                   : action.answer === "Deny" ? "deny"
                     : "answer";
@@ -920,13 +1015,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 behavior,
                 message: behavior === "answer" ? action.answer : undefined,
               }),
-            }).catch(showError);
+            }).catch(failed);
           } else {
             persistCard(action.botId, action.messageId, { answered: action.answer, dismissed: true });
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
               body: JSON.stringify({ text: action.answer }),
-            }).catch(showError);
+            }).catch(failed);
           }
           break;
         }
@@ -934,9 +1029,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
           if (card?.requestId) {
+            // `dismiss` mówi serwerowi, że to krzyżyk, a nie odpowiedź „Deny" —
+            // bez tego karta zamknięta ręcznie wracała po przeładowaniu.
             api(`/api/bots/${action.botId}/respond`, {
               method: "POST",
-              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user." }),
+              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user.", dismiss: true }),
             }).catch(() => {});
           } else {
             persistCard(action.botId, action.messageId, { dismissed: true });
@@ -998,6 +1095,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
+          // Znacz edytowane pola: echa z kanału zdarzeń nie nadpiszą ich,
+          // dopóki NAJNOWSZY PATCH ich dotyczący nie wróci z serwera.
+          const editSeq = noteLocalBotEdit(action.botId, Object.keys(action.patch));
           const timers = patchTimers.current;
           const pending = timers.get(action.botId);
           const patch = { ...pending?.patch, ...action.patch };
@@ -1006,7 +1106,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             patch,
             timer: setTimeout(() => {
               timers.delete(action.botId);
-              api(`/api/bots/${action.botId}`, { method: "PATCH", body: JSON.stringify(patch) }).catch(showError);
+              // Po odpowiedzi (także błędnej — serwer i tak nie ma nowszego
+              // stanu) zwalniamy pola do editSeq; nowsze kliknięcia mają
+              // wyższy numer i pozostają chronione do swojego PATCH-a.
+              api(`/api/bots/${action.botId}`, { method: "PATCH", body: JSON.stringify(patch) })
+                .catch(showError)
+                .finally(() => settleLocalBotEdits(action.botId, editSeq));
             }, 400),
           });
           break;
@@ -1035,7 +1140,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let alive = true;
     const loadAll = () => {
       api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
+        .then(({ bots }) =>
+          alive && rawDispatch({
+            type: "hydrate",
+            // reconnect w trakcie niedomkniętej edycji (np. szybkie klikanie
+            // kształtu awatara) nie może hurtowo przywrócić starych pól —
+            // pola z niedomkniętym PATCH-em zachowują wartość lokalną
+            bots: bots.map((b: Bot) => {
+              const stripped = stripPendingBotEcho(b);
+              if (stripped === b) return b;
+              const local = stateRef.current.bots.find((x) => x.id === b.id);
+              if (!local) return b;
+              const kept = Object.fromEntries(
+                Object.keys(b).filter((k) => !(k in stripped)).map((k) => [k, local[k as keyof Bot]]),
+              );
+              return { ...b, ...kept } as Bot;
+            }),
+          }))
         .catch(() => {});
       api("/api/environment")
         .then(({ environment }) => alive && environment && rawDispatch({ type: "environment", environment }))
@@ -1053,6 +1174,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
     };
     loadAll();
+    // multibot: raport startu leci na serwer raz — ląduje w client-timing.jsonl,
+    // żeby dało się porównać starty z telefonu i z drugiego miasta.
+    onStartupReady((report) => {
+      api("/api/client-timing", { method: "POST", body: JSON.stringify(report) }).catch(() => {});
+    });
     const catalogTimer = window.setInterval(() => {
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
@@ -1062,6 +1188,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let lastSequence = 0;
     const es = authenticatedEventSource(`/api/events?lang=${getLanguage()}`);
     es.onopen = () => {
+      markStartup("events-open");
       rawDispatch({ type: "connected", value: true });
       loadAll(); // resync anything missed while disconnected
     };
@@ -1092,10 +1219,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const payload = notifyFrame(frame, { enabled: readDesktopNotifications() });
           if (payload) {
             const bot = stateRef.current.bots.find((b) => b.id === payload.botId);
-            notify({ ...payload, icon: bot ? botNotificationIcon(MAUS_COLORS[bot.color]) : undefined });
+            notify({ ...payload, icon: bot ? botNotificationIcon(BOT_COLORS[bot.color]) : undefined });
           }
           break;
         }
+        // multibot: harness stracił logowanie — ramka niesie narzędzie i
+        // gotową treść, a bot i tak parkuje na `needsAttention`, więc
+        // powłoka trzyma to w JEDNYM polu (banerka, pasek boczny, banerka
+        // systemowa czytają je tak samo).
+        case "auth-expired":
+          if (typeof frame.botId === "string" && typeof frame.message === "string") {
+            rawDispatch({ type: "botPatched", bot: { id: frame.botId, needsAttention: frame.message } });
+          }
+          break;
         case "group":
           rawDispatch({ type: "workspaceChanged", botId: "", resource: "groups" });
           break;
@@ -1114,7 +1250,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           break;
         case "bot": {
-          const bot = frame.bot as Partial<Bot> & { id: string };
+          // multibot: echo serwera nie może nadpisać świeższej, jeszcze
+          // niepotwierdzonej edycji lokalnej (szybkie klikanie kształtu
+          // awatara: stare echo przychodziło po nowym kliknięciu i kształt
+          // przeskakiwał z powrotem). Pola z niedomkniętym PATCH-em wycinamy.
+          const bot = stripPendingBotEcho(frame.bot as Partial<Bot> & { id: string });
           // reading the selected chat clears its badge immediately
           if (bot.unread && bot.id === stateRef.current.selectedId) {
             bot.unread = false;
@@ -1139,6 +1279,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // multibot: bot odpala narzędzie — pasek pokazuje „working" (bez
             // pierścieni). Pierścienie zostają wyłącznie na zimny start.
             rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "tool" });
+          } else if (
+            event.type === "item.completed" &&
+            event.itemType === "tool" &&
+            stateRef.current.runtime[event.threadId]?.kind === "tool"
+          ) {
+            // multibot: narzędzie oddało wynik — do następnego zdarzenia bot
+            // znowu myśli. Bez tego faza zostawała na „tool" i pasek stał na
+            // „working" także w przerwach MIĘDZY narzędziami.
+            //
+            // Cofamy WYŁĄCZNIE fazę „tool": ACP przeplata `item.completed`
+            // narzędzia ze strumieniem tekstu (drivers/acp/core.ts), więc bez
+            // tego warunku settlujące się narzędzie zrywało trzy kropki w
+            // środku widocznej odpowiedzi i podmieniało je na „thinking".
+            rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "reasoning" });
           } else if (event.type === "content.delta" && event.streamKind === "reasoning_text") {
             rawDispatch({ type: "runtimeTick", threadId: event.threadId, kind: "reasoning" });
           } else if (event.type === "content.delta" && event.streamKind === "assistant_text") {
@@ -1155,6 +1309,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
+          break;
+        // multibot: stan dzierżawy wspólnego komputera. Jedyne, czego stąd
+        // potrzebuje powłoka, to KTO właśnie na nim pracuje — z tego świeci
+        // ikona komputera w nagłówku czatu (poziom Status).
+        case "computer-queue":
+          rawDispatch({
+            type: "computerActing",
+            botIds: Array.isArray(frame.agentActing) ? frame.agentActing.filter((id: unknown) => typeof id === "string") : [],
+          });
           break;
         case "bot.deleted":
           rawDispatch({ type: "deleteBot", botId: frame.botId });

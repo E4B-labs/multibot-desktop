@@ -53,9 +53,9 @@ async function boot(
 }> {
   chmodSync(FAKE_CLI, 0o755);
   chmodSync(FAKE_CODEX, 0o755);
-  const home = reuse?.home ?? mkdtempSync(join(tmpdir(), `omb-${prefix}-`));
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  if (!reuse) writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ instances }));
+  const home = reuse?.home ?? mkdtempSync(join(tmpdir(), `multibot-${prefix}-`));
+  mkdirSync(join(home, ".multibot"), { recursive: true });
+  if (!reuse) writeFileSync(join(home, ".multibot", "config.json"), JSON.stringify({ instances }));
 
   // Windows reserves whole bands inside the ephemeral range (`netsh interface
   // ipv4 show excludedportrange`), and a spawn that lands in one dies with
@@ -70,17 +70,17 @@ async function boot(
     // Per-attempt buffer: a late line from a dead child must not pollute the
     // next attempt's EACCES check.
     const log: string[] = [];
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
       cwd: join(SERVER_DIR, ".."),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(port),
-        OMB_HOST: "127.0.0.1",
+        MULTIBOT_PORT: String(port),
+        MULTIBOT_HOST: "127.0.0.1",
         MULTIBOT_COMPUTER: "off",
-        OMB_TURN_DEBOUNCE_MS: "150",
+        MULTIBOT_TURN_DEBOUNCE_MS: "150",
         ...env,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -243,14 +243,14 @@ describe("peer conversation: a message is a real turn", () => {
   let stop: () => Promise<void>;
 
   beforeAll(async () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-peer-map-"));
+    const home = mkdtempSync(join(tmpdir(), "multibot-peer-map-"));
     promptDump = join(home, "acp-prompts.ndjson");
     const booted = await boot(
       "peer",
       {
-        OMB_ONBOARDING_TURN: "0",
+        MULTIBOT_ONBOARDING_TURN: "0",
         FAKE_CODEX_MODE: "steer",
-        OMB_RELAY_HOME: home,
+        MULTIBOT_RELAY_HOME: home,
         // What actually reached a model. A peer envelope is no longer a chat
         // message, so this file is the only place it can be pinned.
         FAKE_ACP_PROMPT_DUMP: join(home, "acp-prompts.ndjson"),
@@ -351,9 +351,9 @@ describe("peer conversation: a message is a real turn", () => {
       expect([...authors].sort()).toEqual([a, b, c].sort());
       // nobody was refused along the way
       expect(JSON.stringify(room.transcript)).not.toContain("Do not retry");
-      // the owner of the room gets the report once it settles
+      // the owner chat keeps only the directional room activity
       const owner = await h.bot(a);
-      expect(owner.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(true);
+      expect(owner.messages.some((m: any) => m.kind === "text" && m.role === "bot" && m.text?.includes("finished (done)"))).toBe(false);
     },
     90_000,
   );
@@ -386,6 +386,32 @@ describe("peer conversation: a message is a real turn", () => {
       expect(
         (await h.bot(slow)).messages?.some((m: any) => m.text?.includes("[Message from @Nudge")),
       ).toBe(false);
+    },
+    60_000,
+  );
+
+  // Between one bot finishing and the next one starting NEITHER side is `busy`.
+  // `pendingTo` is the only thing that spans that gap, so a client watching a
+  // bot-to-bot exchange has to be TOLD when it changes — otherwise the whole
+  // conversation reads as "nobody is doing anything" for a moment and the
+  // mascot above the composer blinks out mid-exchange.
+  it(
+    "broadcasts the room when a turn is handed over and again when it starts",
+    async () => {
+      const sender = await h.newBot("Handover A", "happy");
+      const slow = await h.newBot("Handover B", "slow");
+      const created = await h.api("POST", "/api/rooms", { task: "take this when you can", bot_ids: [sender, slow] });
+      expect(created.status).toBe(201);
+      const roomId = created.body.id as string;
+
+      const roomFrames = () => h.frames.filter((f) => f.kind === "room" && f.room?.id === roomId);
+      await h.waitFor("the hand-over frame", 20_000, () => roomFrames().some((f) => f.room.pendingTo === slow));
+      // …and the debt is cleared on a frame of its own once that turn starts.
+      await h.waitFor("the turn-start frame", 30_000, async () => {
+        const seen = roomFrames();
+        const handover = seen.findIndex((f) => f.room.pendingTo === slow);
+        return handover !== -1 && seen.slice(handover + 1).some((f) => !f.room.pendingTo);
+      });
     },
     60_000,
   );
@@ -551,6 +577,7 @@ describe("peer conversation: a message is a real turn", () => {
   it(
     "a question and its answer end the conversation by silence, not by a limit",
     async () => {
+      const dumpBefore = prompts().length;
       const asker = await h.newBot("Silent Asker", "quiet");
       const peer = await h.newBot("Role Peer", "answerer");
 
@@ -564,6 +591,7 @@ describe("peer conversation: a message is a real turn", () => {
       // the question and the answer: nothing after them
       expect(room.transcript.length).toBeLessThanOrEqual(4);
       expect(room.transcript.some((m: any) => m.text.includes("I run the release checks."))).toBe(true);
+      expect(prompts().slice(dumpBefore)).toContain("Every message from a peer must get a reply");
       // silence is never written down as a message
       expect(room.transcript.some((m: any) => m.text.includes("[NO REPLY]"))).toBe(false);
       // and the owner is not told the conversation hit a budget
@@ -654,12 +682,12 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
   let relayHome = "";
 
   beforeAll(async () => {
-    relayHome = mkdtempSync(join(tmpdir(), "omb-peer-budget-map-"));
+    relayHome = mkdtempSync(join(tmpdir(), "multibot-peer-budget-map-"));
     const booted = await boot(
       "peerbudget",
       // Onboarding stays ON here: a brand new bot must speak first by itself.
       // The watchdog ceiling is 70 s in production; no test waits that out.
-      { OMB_COLLAB_MAX_MESSAGES: "4", OMB_BUSY_WATCHDOG_MS: "5000" },
+      { MULTIBOT_COLLAB_MAX_MESSAGES: "4", MULTIBOT_BUSY_WATCHDOG_MS: "5000" },
       {
         happy: { driver: "grokAgent", environment: { FAKE_ACP_MODE: "happy" }, config: { cli: FAKE_CLI, fullAuto: true } },
         relay: relayInstance(relayHome),
@@ -724,7 +752,7 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
     90_000,
   );
   it(
-    "OMB_COLLAB_MAX_MESSAGES=4 stops a ring that would otherwise never stop",
+    "MULTIBOT_COLLAB_MAX_MESSAGES=4 stops a ring that would otherwise never stop",
     async () => {
       const a = await h.newBot("Loop A", "relay");
       const b = await h.newBot("Loop B", "relay");
@@ -746,11 +774,10 @@ describe("peer conversation: budgets and the first turn of a new bot", () => {
       const room = await h.room(roomId);
       expect(room.status).toBe("done");
       expect(room.transcript).toHaveLength(4);
-      // The owner is told the room finished — but never that a "budget" ran
-      // out: a bot↔bot conversation has no message limit the user is shown.
+      // The room status is visible through the directional activity chip, not
+      // as a technical report in the owner's chat.
       const owner = await h.bot(a);
-      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes(`Room "never stop" finished (done)`))).toBe(true);
-      expect(JSON.stringify(owner.messages)).not.toContain("budget spent");
+      expect(owner.messages.some((m: any) => m.kind === "text" && m.text?.includes(`Room "never stop" finished (done)`))).toBe(false);
     },
     90_000,
   );
@@ -766,7 +793,7 @@ describe("peer conversation: a quiet room still settles", () => {
   beforeAll(async () => {
     const booted = await boot(
       "peerclock",
-      { OMB_ONBOARDING_TURN: "0", OMB_COLLAB_MAX_MS: "3000" },
+      { MULTIBOT_ONBOARDING_TURN: "0", MULTIBOT_COLLAB_MAX_MS: "3000" },
       { happy: { driver: "grokAgent", environment: { FAKE_ACP_MODE: "happy" }, config: { cli: FAKE_CLI, fullAuto: true } } },
     );
     h = booted.harness;
@@ -779,7 +806,7 @@ describe("peer conversation: a quiet room still settles", () => {
   });
 
   it(
-    "the sweep closes a room past its wall clock and reports it to the owner",
+    "the sweep closes a room past its wall clock without a technical chat report",
     async () => {
       const owner = await h.newBot("Zegar A", "happy");
       const peer = await h.newBot("Zegar B", "happy");
@@ -788,9 +815,7 @@ describe("peer conversation: a quiet room still settles", () => {
 
       await h.waitFor("the sweep to close the room", 30_000, async () => (await h.room(created.body.id)).status !== "running");
       expect((await h.room(created.body.id)).status).toBe("done");
-      await h.waitFor("the owner to be told", 15_000, async () =>
-        Boolean((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("finished (done)"))));
-      expect(JSON.stringify(await h.bot(owner))).not.toContain("budget spent");
+      expect((await h.bot(owner))?.messages?.some((m: any) => m.kind === "text" && m.text?.includes("finished (done)"))).toBe(false);
 
     },
     60_000,
@@ -812,7 +837,7 @@ describe("peer conversation: a restart resumes instead of failing", () => {
           config: { cli: FAKE_CLI, fullAuto: true },
         },
       };
-      const first = await boot("resume", { OMB_ONBOARDING_TURN: "0" }, instances);
+      const first = await boot("resume", { MULTIBOT_ONBOARDING_TURN: "0" }, instances);
       const h1 = first.harness;
       let sender = "";
       let busy = "";
@@ -837,7 +862,7 @@ describe("peer conversation: a restart resumes instead of failing", () => {
       await first.stop(true);
 
       // ...and the harness comes back on the same data dir.
-      const again = await boot("resume", { OMB_ONBOARDING_TURN: "0" }, instances, { home: h1.home });
+      const again = await boot("resume", { MULTIBOT_ONBOARDING_TURN: "0" }, instances, { home: h1.home });
       const h2 = again.harness;
       try {
         // The message really goes out again: B picks up a turn for it, which is

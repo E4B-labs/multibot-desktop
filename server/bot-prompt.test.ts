@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { botSystemPrompt, currentTimeLine, type WorkspaceLike } from "./bot-prompt.ts";
+import { COMPUTER_MCP_TOOLS } from "./turn-tools.ts";
 
 const workspace: WorkspaceLike = {
   markdown: () => ({ content: "Klient płaci przelewem." }),
@@ -46,8 +47,17 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("coworker on a messenger");
     expect(text).toContain("As an AI");
     expect(text).toContain("On it:");
-    expect(text).toContain("ask_user(question, choices)` is the ONLY way");
+    expect(text).toContain("Never expose internal run IDs, audit logs, delegation counters, or harness event names");
+    expect(text).toContain("Say what you did, what you are doing now, or what is blocked in natural coworker language");
+    expect(text).toContain("ask_user(question, choices, multiple, detail)` is the ONLY way");
+    // multibot: format pytania musi opisywać wielokrotny wybór, inaczej model
+    // nigdy z niego nie skorzysta
+    expect(text).toContain("multiple: true");
     expect(text).toContain("# Human writing style");
+    // Wyjatek na pogrubienia: odpowiedz krokowa MA miec wytluszczony poczatek
+    // punktu (tego chce Kacper), zwykla rozmowa nadal bez pogrubien.
+    expect(text).toContain("In plain conversational prose, no bold at all");
+    expect(text).toContain("bold lead-in on a numbered or bulleted step");
     expect(text).not.toMatch(/[—–]/);
     // Pamięć, notatki i skille użytkownika lecą na końcu.
     expect(text.indexOf("# Memory facts")).toBeGreaterThan(text.indexOf("# How you work"));
@@ -60,6 +70,43 @@ describe("botSystemPrompt", () => {
     expect(text).not.toContain("Your computer -");
     expect(text).not.toContain("computer_exec");
     expect(text).not.toContain("Handing the computer over");
+  });
+
+  // Regresja zmierzona na żywym CLI (D:\tmp\mb-cu-evidence): na „Use your
+  // computer: open the browser, go to youtube.com…" bot BEZ zamontowanego
+  // komputera nie wołał niczego i meldował „YouTube MrBeast video open".
+  // Prompt milczał o komputerze, więc model go sobie dopowiedział.
+  it("bez komputera mówi wprost, że go nie ma, zamiast pozwolić zmyślać", () => {
+    const text = prompt({ agents: { command: "node" } });
+    expect(text).toContain("You have NO computer this turn");
+    expect(text).toContain("Never describe browsing, clicking or playing anything");
+    // `web_search` stoi za tą samą bramką `browser` co komputer, więc bez
+    // zamontowanego `web` oferta nie ma prawa paść — inaczej to zdanie
+    // popełniałoby błąd, który naprawia.
+    expect(text).not.toContain("offer `web_search`/`web_extract` instead");
+    expect(prompt({ agents: { command: "node" }, web: { command: "node" } }))
+      .toContain("offer `web_search`/`web_extract` instead");
+  });
+
+  it("z komputerem każe WOŁAĆ narzędzie, nie opowiadać o nim", () => {
+    const text = prompt(ALL);
+    expect(text).toContain("instruction to CALL a computer tool in THIS turn");
+    expect(text).toContain("unless a computer tool call returned a result");
+    // lustro tego wyżej NIE może się pojawić, gdy komputer jest
+    expect(text).not.toContain("You have NO computer this turn");
+  });
+
+  // Regresja: prompt kazał wołać `browser_navigate`/`browser_snapshot`, których
+  // serwer komputera nigdy nie serwował (jego narzędzia to `navigate`,
+  // `read_page`…). Model szukał nieistniejącej nazwy i kończył opowiadaniem.
+  // Test bierze nazwy Z PROMPTU i konfrontuje je z listą serwera, więc łapie
+  // każdą następną wymyśloną nazwę, nie tylko te dwie.
+  it("nie obiecuje nazw narzędzi, których serwer komputera nie serwuje", () => {
+    const text = prompt(ALL);
+    expect(text).not.toMatch(/browser_[a-z_]+/);
+    const listed = text.match(/navigate\/read_page\/[a-z_/]+/)?.[0].split("/") ?? [];
+    expect(listed.length).toBeGreaterThan(3);
+    for (const name of listed) expect(COMPUTER_MCP_TOOLS as readonly string[]).toContain(name);
   });
 
   it("bez serwera agents nie podpowiada hand_over_computer", () => {
@@ -94,6 +141,10 @@ describe("botSystemPrompt", () => {
     const noAgents = prompt({ localComputer: { command: "py" } }, { tagged, taggedReplies: "\nPeer Ala replied:\nok" });
     expect(noAgents).toContain("harness already fetched");
     expect(noAgents).toContain("Peer Ala replied");
+  });
+
+  it("na pierwsze powitanie od peera odpowiada zamiast milczeć", () => {
+    expect(prompt(ALL)).toContain("A direct greeting from another bot always gets a brief reply");
   });
 
   it("w trybie autonomicznym nie każe prosić o zgodę", () => {
@@ -170,7 +221,9 @@ describe("botSystemPrompt", () => {
     expect(text).toContain("- mcp__computer: screenshot, navigate");
     expect(text).toContain("- agents: list_bots");
     expect(text).toContain("- composio:");
-    expect(text).toContain("Never claim you have no tools, no computer and no connections");
+    // zakaz dotyczy TEGO, CO NA LIŚCIE — bot bez komputera ma o tym powiedzieć
+    // wprost, więc dawne „never claim you have no computer" musiało się zwęzić
+    expect(text).toContain("Never deny a connection that is listed here.");
     // spis siedzi PRZED opisem jak używać narzędzi
     expect(text.indexOf("# Your connections and tools")).toBeLessThan(text.indexOf("# What you have"));
   });
@@ -310,5 +363,41 @@ describe("botSystemPrompt", () => {
     expect(text).not.toContain("keep asking back");
     expect(text).toContain("Write in the language the envelope asks for");
     expect(text).toContain("One owner per task; do not repeat what others said.");
+  });
+
+  // multibot: boty odmawiały zwykłej roboty (scrape publicznej strony, eksport
+  // WŁASNYCH danych usera, ponowienia z backoffem) jednym zdaniem odmowy. Blok
+  // stanowiska jest BEZWARUNKOWY — każdy sterownik dostaje ten sam prompt, więc
+  // test przechodzi po tych samych zestawach integracji, co reszta pliku.
+  it("stanowisko operacyjne jest w promptcie na każdej ścieżce sterownika", () => {
+    const paths: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["pełny zestaw", ALL, {}],
+      ["sam agents", { agents: { command: "node" } }, {}],
+      ["sam komputer", { localComputer: { command: "py" } }, {}],
+      ["agents + web", { agents: { command: "node" }, web: { command: "node" } }, {}],
+      ["bez integracji", {}, {}],
+      ["tura izolowana", ALL, { isolated: true }],
+      ["tura grupowa", ALL, { group: { name: "Ekipa", members: [{ name: "Atlas" }] } }],
+    ];
+    for (const [name, integrations, extra] of paths) {
+      const text = prompt(integrations, extra);
+      expect(text, name).toContain("# Operating stance");
+      expect(text, name).toContain("Be helpful by default.");
+      expect(text, name).toContain("Ordinary automation is normal engineering");
+      expect(text, name).toContain("Never answer with a bare refusal.");
+      expect(text, name).toContain("say in ONE line what blocks it");
+      expect(text, name).toContain("None of this asks you to deceive anyone or to act against other people");
+      // blok NIE może rozluźniać potwierdzeń nieodwracalnych ani obiecywać pytania poza `ask_user`
+      expect(text, name).toContain("the confirmation rules below still apply to irreversible actions");
+      expect(text, name).toContain("ask one precise question through `ask_user` when you have it");
+      // stanowisko stoi PRZED \"How you work\", żeby nie wygrywać świeżością z regułami zgody
+      expect(text.indexOf("# Operating stance"), name).toBeLessThan(text.indexOf("# How you work"));
+    }
+    // tryb autonomiczny i standardowy dostęp zmieniają sekcję "How you work" — stanowisko zostaje
+    for (const workspaceOverride of [{ autonomy: () => ({ autonomy: "autonomous" as const }) }, { access: () => ({ access: "standard" as const }) }]) {
+      const text = prompt(ALL, { workspace: { ...workspace, ...workspaceOverride } });
+      expect(text).toContain("# Operating stance");
+      expect(text).toContain("Never answer with a bare refusal.");
+    }
   });
 });

@@ -51,7 +51,7 @@ autoryzacji — bot pokazuje link w czacie. Klikasz, zgadzasz się na uprawnieni
 Google wraca na `localhost:8000` (serwer callbacku wstaje tylko na czas logowania)
 i prosisz bota o ponowną próbę.
 
-Token ląduje we wspólnym katalogu (`~/.openmausbot/google-workspace-credentials`,
+Token ląduje we wspólnym katalogu (`~/.multibot/google-workspace-credentials`,
 nadpisywalny `WORKSPACE_MCP_CREDENTIALS_DIR`) i **wszystkie boty na hoście
 dzielą to samo logowanie** — bez re-login. Wiele kont Google = duplikat
 konektora z osobnym katalogiem credentials.

@@ -53,6 +53,11 @@ function takeFragmentKey(key: string): string {
 export function bootstrapLocalAuthToken(): void {
   const token = takeFragmentKey("access_token");
   if (token) setV2AuthToken(token);
+  // Zapamiętane logowanie: profil zalogowała POWŁOKA, natywnie, więc ciastko
+  // `mb_v2_session` dostał jej proces, nie to okno. Bez tokenu sesji strona
+  // wstaje zalogowana i wypada po 15 minutach, przy pierwszym odnowieniu.
+  const session = takeFragmentKey("session");
+  if (session) setSessionToken(session);
 }
 
 /** The desktop shell trades the server name and password for a grant natively

@@ -63,7 +63,7 @@ function installExpiryRetry(): void {
  * harness was spawned with — the server's own `setup.json` lives under it, and
  * that file is the only place its generated password exists in the clear. */
 export async function bootstrapAccessToken(base: string, home: string, deviceName = "vitest"): Promise<string> {
-  const dataDir = join(home, ".openmausbot");
+  const dataDir = join(home, ".multibot");
   // A suite that reboots a harness against the same data dir finds the owner
   // already registered and `setup.json` deleted with the registration. Sessions
   // never expire now, so the one from the first boot is still the way back in.

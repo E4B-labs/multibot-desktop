@@ -1,5 +1,5 @@
 // Bot avatar — the Blob Studio "Blob" mascot (BlobAvatar.tsx), wrapped in the
-// app's historical MausAvatar API so no call site changes: per-bot color
+// app's historical BotAvatar API so no call site changes: per-bot color
 // becomes a body gradient, the app's one-shot motion beats borrow the
 // face/state for a moment, and the eyes follow the pointer. BlobAvatar owns
 // blinking, drift, body motion, effects and glyphs; nothing here re-draws them.
@@ -12,7 +12,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { BOT_COLORS, type BotColor, type BotMotion, type BotState } from "@/lib/mascot";
 import { mascotShape, type MascotShape } from "@/lib/mascotShapes";
 import { BlobAvatar, DEFAULT_GAZE, type BlobAvatarHandle } from "./BlobAvatar";
 
@@ -28,7 +28,7 @@ const STUDIO = {
 };
 
 /**
- * Legacy face-placement knobs from the Maus body era. The blob places its own
+ * Legacy face-placement knobs from the old mascot body era. The blob places its own
  * face; these remain only so the preview harness's sliders keep compiling —
  * the matching props are accepted and ignored.
  */
@@ -43,13 +43,14 @@ export const MOUTH_WEIGHT = 11;
  * safe; with the expressions' authored gaze they already start off-centre.
  */
 const POINTER_GAZE = { forward: 1, authored: 0.25 };
+const FORWARD_GAZE = { x: 0, y: 0 };
 
 /**
  * What a one-shot motion does while it plays: BlobAvatar animates the body
  * per state, so borrowing the state for a beat moves body and face together.
  */
 const MOTION_FACE: Partial<
-  Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+  Record<Exclude<BotMotion, "none">, { state?: BotState; blink?: boolean; spin?: number }>
 > = {
   arrive: { state: "spawning", spin: 900 },
   switch: { state: "waking", spin: 620 },
@@ -88,29 +89,40 @@ function mix(hex: string, toward: string, t: number): string {
  * shadow), with the same light/dark spread as the pack's default blue
  * ["#A5D8FF", "#3B82F6", "#082b8c"].
  */
-const gradientFor = (color: MausColor): [string, string, string] => {
+const gradientFor = (color: BotColor): [string, string, string] => {
   // Czarny nie znosi tej formuly: rozjasnienie o 55% do bieli daje szarosc,
   // a przyciemnienie o 42% do czerni — plaska plame. Stad wlasny gradient,
   // ktory trzyma kontrast na ciemnym tle zamiast go gubic.
   if (color === "black") return ["#5A5A5A", "#2A2A2A", "#101010"];
-  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
+  // Biel z drugiej strony tej samej sciany: rozjasnienie o 55% zjada roznice
+  // miedzy stopami, wiec sylwetka gubi bryle. Wlasny gradient schodzi glebiej
+  // w szarosc, zeby na jasnym motywie bylo widac krawedz.
+  if (color === "white") return ["#FFFFFF", "#F4F4F5", "#B9B9C0"];
+  const fill = BOT_COLORS[color] ?? BOT_COLORS.green;
   return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
 };
 
-export type MausAvatarHandle = BlobAvatarHandle;
+/**
+ * Kolor twarzy. Domyslne biale oczy znikaja na bialej sylwetce — tak samo jak
+ * czarny potrzebowal wlasnego gradientu, biel potrzebuje wlasnej twarzy.
+ */
+const eyeColorFor = (color: BotColor): string | undefined =>
+  color === "white" ? "#3F3F46" : undefined;
 
-export type MausAvatarProps = {
-  color: MausColor;
+export type BotAvatarHandle = BlobAvatarHandle;
+
+export type BotAvatarProps = {
+  color: BotColor;
   shape?: MascotShape;
   /** Custom photo — circular, overrides mascot when present (FB/GrokBot style). */
   avatarUrl?: string | null;
   /** Named behaviour — drives the expression pool, its cadence and blinking. */
-  state?: MausState;
+  state?: BotState;
   /** Pin one of the faces and stop the state's own drift. */
   expression?: number;
   size?: number;
   label?: string;
-  motion?: MausMotion;
+  motion?: BotMotion;
   motionKey?: number;
   /** Head turn in degrees. */
   turn?: number;
@@ -128,16 +140,18 @@ export type MausAvatarProps = {
   forward?: boolean;
   /** Let the eyes follow the pointer across this avatar. */
   trackPointer?: boolean;
+  /** Allow pointer-follow while the avatar itself remains paused/static. */
+  trackPointerWhenPaused?: boolean;
   /** Run the animation. Off renders the state's resting face. */
   animated?: boolean;
-  /** Legacy Maus face-placement knobs — accepted, ignored. */
+  /** Legacy mascot face-placement knobs — accepted, ignored. */
   eyeSpacing?: number;
   faceX?: number;
   faceY?: number;
   faceScale?: number;
 };
 
-function MausAvatarComponent(
+function BotAvatarComponent(
   {
     color,
     shape = "blob",
@@ -155,11 +169,12 @@ function MausAvatarComponent(
     showFace = true,
     showMouth,
     mouthStroke,
-    forward = false,
+    forward = true,
     trackPointer = true,
+    trackPointerWhenPaused = false,
     animated = true,
-  }: MausAvatarProps,
-  ref: React.Ref<MausAvatarHandle>,
+  }: BotAvatarProps,
+  ref: React.Ref<BotAvatarHandle>,
 ) {
   const inner = useRef<BlobAvatarHandle>(null);
   useImperativeHandle(ref, () => ({
@@ -169,7 +184,7 @@ function MausAvatarComponent(
   }));
 
   // A one-shot motion borrows the state for a moment, then hands it back.
-  const [motionState, setMotionState] = useState<MausState | null>(null);
+  const [motionState, setMotionState] = useState<BotState | null>(null);
   useEffect(() => {
     if (motion === "none" || !animated) {
       setMotionState(null);
@@ -189,12 +204,59 @@ function MausAvatarComponent(
   }, [motion, motionKey, animated]);
 
   const shown = motionState ?? state;
+  const restingGaze = forward ? FORWARD_GAZE : DEFAULT_GAZE;
 
   // Pointer-follow gaze, composed with any gaze the caller pins.
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
+  const pointerFollow = trackPointer && (animated || trackPointerWhenPaused);
+  // multibot: mascot renders (and follows the pointer) unless a photo replaces it.
+  const mascotShown = !avatarUrl || shown === "thinking-dots";
+  const spanRef = useRef<HTMLSpanElement>(null);
+  // multibot: „scope" śledzenia — gdy awatar stoi w kontenerze oznaczonym
+  // `data-mb-avatar-scope` (np. hover-podświetlany wiersz bota w sidebarze),
+  // buźka podąża za kursorem po CAŁYM tym kontenerze, nie tylko nad samym
+  // awatarem. Gaze liczony od środka spana awatara i normalizowany tak, by na
+  // krawędziach scope'a dochodził do ±1 (osobno w każdej osi, clamp), razy
+  // `range`. Bez scope'a zostają handlery Reacta na spanie (niżej).
+  const [scoped, setScoped] = useState(false);
+  useEffect(() => {
+    if (!pointerFollow || !mascotShown) {
+      setScoped(false);
+      return;
+    }
+    const span = spanRef.current;
+    const scope = span?.closest<HTMLElement>("[data-mb-avatar-scope]");
+    if (!span || !scope) {
+      setScoped(false);
+      return;
+    }
+    setScoped(true);
+    const onMove = (event: PointerEvent) => {
+      const scopeRect = scope.getBoundingClientRect();
+      const rect = span.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      // Największa odległość od środka awatara do krawędzi scope'a w danej osi
+      // — dzielenie przez nią daje dokładnie ±1 na dalszej krawędzi.
+      const spanX = Math.max(cx - scopeRect.left, scopeRect.right - cx) || 1;
+      const spanY = Math.max(cy - scopeRect.top, scopeRect.bottom - cy) || 1;
+      setPointer({
+        x: Math.max(-1, Math.min(1, (event.clientX - cx) / spanX)) * range,
+        y: Math.max(-1, Math.min(1, (event.clientY - cy) / spanY)) * range,
+      });
+    };
+    const onLeave = () => setPointer({ x: 0, y: 0 });
+    scope.addEventListener("pointermove", onMove);
+    scope.addEventListener("pointerleave", onLeave);
+    return () => {
+      scope.removeEventListener("pointermove", onMove);
+      scope.removeEventListener("pointerleave", onLeave);
+      setPointer({ x: 0, y: 0 });
+    };
+  }, [pointerFollow, mascotShown, range]);
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (!trackPointer || !animated) return;
+    if (!pointerFollow) return;
     const rect = event.currentTarget.getBoundingClientRect();
     setPointer({
       x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
@@ -224,10 +286,13 @@ function MausAvatarComponent(
 
   return (
     <span
+      ref={spanRef}
       className="relative inline-flex shrink-0"
       style={{ width: size, height: size }}
-      onPointerMove={trackPointer && animated ? onPointerMove : undefined}
-      onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
+      // multibot: w scope śledzi natywny listener na kontenerze; handlery na
+      // spanie zostają tylko dla awatarów bez scope'a (stare zachowanie).
+      onPointerMove={pointerFollow && !scoped ? onPointerMove : undefined}
+      onPointerLeave={pointerFollow && !scoped ? onPointerLeave : undefined}
     >
       <BlobAvatar
         ref={inner}
@@ -236,11 +301,12 @@ function MausAvatarComponent(
         size={size}
         shape={mascotShape(shape)}
         gradient={gradientFor(color)}
+        eyeColor={eyeColorFor(color)}
         title={label ?? null}
         lookAround={forward ? 0 : STUDIO.lookAround}
         gaze={{
-          x: (gaze?.x ?? DEFAULT_GAZE.x) + pointer.x,
-          y: (gaze?.y ?? DEFAULT_GAZE.y) + pointer.y,
+          x: (gaze?.x ?? restingGaze.x) + pointer.x,
+          y: (gaze?.y ?? restingGaze.y) + pointer.y,
         }}
         turn={turn}
         spring={spring}
@@ -254,7 +320,7 @@ function MausAvatarComponent(
   );
 }
 
-export const MausAvatar = memo(forwardRef(MausAvatarComponent));
+export const BotAvatar = memo(forwardRef(BotAvatarComponent));
 
 export function InitialsAvatar({
   initials,

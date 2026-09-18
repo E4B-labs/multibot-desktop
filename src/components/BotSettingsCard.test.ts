@@ -31,31 +31,37 @@ describe("karta Bot w ustawieniach ogólnych", () => {
 
   it("opis Autoweryfikacji mówi o MultiBocie, nie o cudzym bocie", () => {
     expect(card).toContain("MultiBot sprawdza każdą akcję przed jej uruchomieniem");
-    expect(card).toContain("Gdy MultiBot chce:");
     expect(card.toLowerCase()).not.toContain("grok bot");
+    // opis nie obiecuje już dodawania reguł — edytor wyleciał z UI
+    expect(card).not.toContain("Dodaj reguły");
+    expect(card).not.toContain("Add rules");
   });
 
-  it("ma wszystkie trzy elementy edytora reguł", () => {
-    expect(card).toContain("Reguły Autoweryfikacji");
-    expect(card).toContain("np. odpowiadaj za mnie na e-maile");
-    expect(card).toContain("Powinien:");
-    expect(card).toContain("Zezwalaj automatycznie");
-    expect(card).toContain("Najpierw pytaj");
-    expect(card).toContain("Dodaj regułę");
+  // multibot: edytor „Reguł Autoweryfikacji" usunięty z UI (wrzesień 2026) —
+  // w danych i na serwerze `autoVerify.rules` zostaje, znika tylko karta.
+  it("nie ma już edytora reguł ani jego martwego kodu", () => {
+    for (const leftover of [
+      "Reguły Autoweryfikacji",
+      "Auto-verification rules",
+      "np. odpowiadaj za mnie na e-maile",
+      "Dodaj regułę",
+      "addRule",
+      "setRules",
+      "DecisionSelect",
+      "inputClass",
+      "Te reguły dotyczą tylko Ciebie.",
+    ]) {
+      expect(card, `został ślad edytora reguł: ${leftover}`).not.toContain(leftover);
+    }
   });
 
-  it("domyślnie pyta o wszystko — także w polu nowej reguły", () => {
+  it("domyślnie pyta o wszystko", () => {
     // Bez żadnej reguły MultiBot pyta o każdą akcję: to wynika z włączonego
     // przełącznika i pustej listy (server/auto-verify.ts decideAction).
     expect(types).toContain("{ enabled: true, rules: [] }");
-    // A pole „Powinien:" ma startować na pytaniu, nie na cichej zgodzie —
-    // domyślną wartość klika się bez zastanowienia.
-    expect(card).toContain('useState<AutoVerifyDecision>("ask")');
-    expect(card).not.toContain('useState<AutoVerifyDecision>("allow")');
   });
 
   it("nie obiecuje wbudowanych kontroli bezpieczeństwa, których nie mamy", () => {
-    expect(card).toContain("Te reguły dotyczą tylko Ciebie.");
     expect(card).not.toContain("Wbudowane kontrole bezpieczeństwa");
   });
 

@@ -24,7 +24,7 @@ if [[ "$MODE" == docker ]]; then
   command -v docker >/dev/null || { say "missing docker" >&2; exit 1; }
   run docker compose -f "$ROOT/docker-compose.selfhost.yml" up -d --build
   say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
-  say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
+  say "Reverse proxy (optional): terminate TLS there and set MULTIBOT_TLS=off with MULTIBOT_HOST=127.0.0.1"
   # setup.json lives inside the container volume, so the values come out of the
   # log the entrypoint prints them to, not out of a file on this host.
   say "Three values (address, name, password): docker compose -f $ROOT/docker-compose.selfhost.yml logs app"
@@ -62,9 +62,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$ROOT
 Environment=HOME=%h
-Environment=OMB_HOST=0.0.0.0
-Environment=OMB_PORT=8799
-Environment=OMB_DATA_DIR=${OMB_DATA_DIR:-$HOME/.openmausbot}
+Environment=MULTIBOT_HOST=0.0.0.0
+Environment=MULTIBOT_PORT=8799
+Environment=MULTIBOT_DATA_DIR=${MULTIBOT_DATA_DIR:-$HOME/.multibot}
 ExecStart=$BASH_BIN $ROOT/scripts/start-multibot.sh
 Restart=always
 RestartSec=5
@@ -78,13 +78,13 @@ EOF
 fi
 
 say "HTTPS: on by default, self-signed certificate — the first connection asks you to trust its fingerprint"
-say "Reverse proxy (optional): terminate TLS there and set OMB_TLS=off with OMB_HOST=127.0.0.1"
+say "Reverse proxy (optional): terminate TLS there and set MULTIBOT_TLS=off with MULTIBOT_HOST=127.0.0.1"
 
 # The server mints its three values on its first boot and writes them to
 # setup.json; systemd has just started it, so wait for the file instead of
 # guessing an address from `hostname`.
 if (( DRY_RUN )); then
-  say "print the three values from \$HOME/.openmausbot/setup.json"
+  say "print the three values from \$HOME/.multibot/setup.json"
 else
   bash "$ROOT/scripts/print-setup-values.sh" 90 || true
 fi

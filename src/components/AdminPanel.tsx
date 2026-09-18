@@ -3,11 +3,12 @@
 // server actually sent its data — the address, GPU and TLS fields arrive with
 // their own PRs, and a placeholder that says "—" forever is worse than no card.
 import { useEffect, useState } from "react";
-import { Copy, Loader2 } from "lucide-react";
+import { Copy } from "lucide-react";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { copyText } from "@/lib/shell";
 import { MachineResources } from "./AppSettingsPanel";
+import { LoadingRow, Skeleton, Spinner } from "./Loading";
 import { addressNote } from "./Onboarding";
 
 /** One poll for the whole tab. Ten seconds is slow enough to be free on a
@@ -33,10 +34,25 @@ export type AdminUser = {
   disabled?: boolean;
 };
 
+/** Mirrors `GpuInfo` in server/admin.ts — one row per card, because
+ * `nvidia-smi` reports one row per card. Typing it as a string is what took
+ * the whole app down with React #31 on every machine that has a GPU.
+ *
+ * Mirrored, not imported: server/admin.ts pulls in node:child_process and
+ * imports its neighbours with `.ts` extensions, which the app's tsconfig does
+ * not allow. `AdminPanel.test.ts` diffs the two shapes so they cannot drift
+ * apart again. */
+export type GpuInfo = {
+  name: string;
+  utilization: number;
+  memoryUsedMb: number;
+  memoryTotalMb: number;
+};
+
 export type AdminOverview = {
   users?: AdminUser[];
   server?: {
-    gpu?: string | null;
+    gpu?: GpuInfo[] | null;
     tlsFingerprint?: string | null;
     uptimeMs?: number;
     version?: string;
@@ -59,25 +75,9 @@ type AddressReport = {
   portMapping: { state: string };
 };
 
-const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-  ["year", 31_536_000_000],
-  ["month", 2_592_000_000],
-  ["day", 86_400_000],
-  ["hour", 3_600_000],
-  ["minute", 60_000],
-  ["second", 1_000],
-];
-
-/** "3 minutes ago" in whichever language the app is in. Timestamps straight
- * from the database mean nothing to the person reading the table. */
-export function relativeTime(at: number | undefined | null, now: number, locale: string): string {
-  if (!at) return "—";
-  const delta = at - now;
-  const absolute = Math.abs(delta);
-  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  for (const [unit, ms] of UNITS) if (absolute >= ms) return format.format(Math.round(delta / ms), unit);
-  return format.format(0, "second");
-}
+// „3 minutes ago" mieszka teraz w `@/lib/relativeTime` — ten sam formater
+// potrzebny był panelowi przypomnień.
+import { relativeTime } from "@/lib/relativeTime";
 
 export function uptimeText(ms: number | undefined, polish: boolean): string {
   if (!ms || ms < 0) return "—";
@@ -86,6 +86,28 @@ export function uptimeText(ms: number | undefined, polish: boolean): string {
   if (days > 0) return polish ? `${days} d ${hours % 24} h` : `${days}d ${hours % 24}h`;
   const minutes = Math.floor(ms / 60_000) % 60;
   return polish ? `${hours} h ${minutes} min` : `${hours}h ${minutes}m`;
+}
+
+/** nvidia-smi answers in MiB; a bare 24576 on screen is a number, not an answer. */
+export function gpuMemoryText(usedMb: number, totalMb: number): string {
+  const gb = (mb: number) => (mb / 1024).toFixed(1).replace(/\.0$/, "");
+  return `${gb(usedMb)} / ${gb(totalMb)} GB`;
+}
+
+/** Nothing at all on most machines: `gpu` is null without an NVIDIA driver
+ * (server/admin.ts), and a card that says "—" forever is worse than no card —
+ * the same rule the rest of this tab follows. */
+export function GpuRows({ gpus }: { gpus?: GpuInfo[] | null }) {
+  if (!gpus?.length) return null;
+  return (
+    <>
+      {gpus.map((gpu, index) => (
+        <div key={`${gpu.name}#${index}`} className="mt-2 rounded-xl bg-card px-4 py-3 text-[12.5px] text-ink-secondary">
+          GPU <b className="font-medium text-ink">{gpu.name}</b> · {Math.round(gpu.utilization)}% · {gpuMemoryText(gpu.memoryUsedMb, gpu.memoryTotalMb)}
+        </div>
+      ))}
+    </>
+  );
 }
 
 const ERROR_TEXTS: Record<string, [string, string]> = {
@@ -170,7 +192,12 @@ export function AdminPanel() {
   // — okienko, które znika samo, gubi poświadczenie bez śladu.
   const [secret, setSecret] = useState<{ kind: "serverPassword" | "recoveryCode"; value: string; who?: string } | null>(null);
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Which action is in flight, keyed per target: two user rows must not both
+  // spin because one of them was clicked.
+  const [pending, setPending] = useState<string | null>(null);
+  const busy = pending !== null;
+  const [serverLoaded, setServerLoaded] = useState(false);
+  const [addressesLoaded, setAddressesLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -193,13 +220,13 @@ export function AdminPanel() {
   // somebody changes them, not on a timer.
   useEffect(() => {
     let alive = true;
-    void authFetch("/api/server").then((response) => response.ok && response.json()).then((value) => { if (!alive || !value) return; setServer(value); setName(value.name ?? ""); }).catch(() => {});
-    void authFetch("/api/server/address").then((response) => response.ok && response.json()).then((value) => alive && value && setAddresses(value as AddressReport)).catch(() => {});
+    void authFetch("/api/server").then((response) => response.ok && response.json()).then((value) => { if (!alive || !value) return; setServer(value); setName(value.name ?? ""); }).catch(() => {}).finally(() => alive && setServerLoaded(true));
+    void authFetch("/api/server/address").then((response) => response.ok && response.json()).then((value) => alive && value && setAddresses(value as AddressReport)).catch(() => {}).finally(() => alive && setAddressesLoaded(true));
     return () => { alive = false; };
   }, []);
 
-  const post = async (path: string, body: unknown) => {
-    setBusy(true);
+  const post = async (path: string, body: unknown, key: string) => {
+    setPending(key);
     setError(null);
     try {
       const response = await authFetch(path, { method: "POST", body: JSON.stringify(body) });
@@ -210,12 +237,12 @@ export function AdminPanel() {
       setError(adminErrorText(reason instanceof Error ? reason.message : String(reason), polish));
       return null;
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
   const renameServer = async () => {
-    setBusy(true);
+    setPending("rename");
     setError(null);
     try {
       const response = await authFetch("/api/server", { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
@@ -225,12 +252,12 @@ export function AdminPanel() {
     } catch (reason) {
       setError(adminErrorText(reason instanceof Error ? reason.message : String(reason), polish));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
   const patchUser = async (id: string, change: { role?: string; disabled?: boolean }) => {
-    setBusy(true);
+    setPending(`toggle:${id}`);
     setError(null);
     try {
       const response = await authFetch(`/api/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) });
@@ -239,7 +266,7 @@ export function AdminPanel() {
     } catch (reason) {
       setError(adminErrorText(reason instanceof Error ? reason.message : String(reason), polish));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -261,24 +288,26 @@ export function AdminPanel() {
   const performance = overview?.performance;
 
   if (!overview && !server) {
-    return <div className="mt-6 flex items-center gap-2 text-[13px] text-ink-secondary"><Loader2 size={16} className="animate-spin" />{polish ? "Wczytywanie…" : "Loading…"}</div>;
+    return <LoadingRow label={polish ? "Wczytywanie…" : "Loading…"} className="mt-6" />;
   }
 
   return (
     <>
-      {(server?.name || address || overview?.server?.version) && (
+      {(server?.name || address || overview?.server?.version || !serverLoaded) && (
         <Card title={polish ? "Serwer" : "Server"}>
-          {server?.name !== undefined && (
+          {!serverLoaded && <Skeleton className="mt-3 h-[38px] w-full" />}
+          {serverLoaded && server?.name !== undefined && (
             <div className="mt-3 flex gap-2">
               {/* The name is one of the three values somebody types into another
                   device, so it has to stay a slug — the rule the server enforces. */}
               <input value={name} onChange={(event) => setName(event.target.value)} aria-label={polish ? "Nazwa serwera" : "Server name"} placeholder="brave-otter" className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink outline-none focus:border-hairline" />
-              <button type="button" disabled={busy || !isServerName(name.trim()) || name.trim() === server.name} onClick={() => void renameServer()} className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{polish ? "Zapisz nazwę" : "Save name"}</button>
+              <button type="button" disabled={busy || !isServerName(name.trim()) || name.trim() === server.name} onClick={() => void renameServer()} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{pending === "rename" && <Spinner size={12} />}{polish ? "Zapisz nazwę" : "Save name"}</button>
             </div>
           )}
           {overview?.server?.version && <Row label={polish ? "Wersja" : "Version"} value={overview.server.version} />}
           {overview?.server?.uptimeMs !== undefined && <Row label={polish ? "Czas pracy" : "Uptime"} value={uptimeText(overview.server.uptimeMs, polish)} />}
           {overview?.server?.connectionsActive !== undefined && <Row label={polish ? "Połączenia" : "Connections"} value={overview.server.connectionsActive} />}
+          {!address && (!serverLoaded || !addressesLoaded) && <Skeleton className="mt-3 h-[34px] w-full" />}
           {address && (
             <div className="mt-3 flex items-center gap-2 rounded-lg bg-inset px-3 py-2">
               <code className="min-w-0 flex-1 select-all break-all text-[12.5px] text-ink">{address}</code>
@@ -298,23 +327,21 @@ export function AdminPanel() {
                 <div key={candidate.address} className="mt-1 flex items-center gap-2 text-[12px]">
                   <code className="min-w-0 flex-1 truncate text-ink">{candidate.address}</code>
                   <span className="shrink-0 text-ink-secondary">{candidate.kind}</span>
-                  <button type="button" disabled={busy} onClick={() => void post("/api/server/address", { address: candidate.address }).then((value) => value && setAddresses(value as AddressReport))} className="shrink-0 text-ink-secondary hover:text-ink disabled:opacity-50">{polish ? "Przypnij" : "Pin"}</button>
+                  <button type="button" disabled={busy} onClick={() => void post("/api/server/address", { address: candidate.address }, `pin:${candidate.address}`).then((value) => value && setAddresses(value as AddressReport))} className="inline-flex shrink-0 items-center gap-1.5 text-ink-secondary hover:text-ink disabled:opacity-50">{pending === `pin:${candidate.address}` && <Spinner size={11} />}{polish ? "Przypnij" : "Pin"}</button>
                 </div>
               ))}
             </div>
           )}
           <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" disabled={busy} onClick={() => void post("/api/server/address", { refresh: true }).then((value) => value && setAddresses(value as AddressReport))} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{polish ? "Odśwież adres" : "Refresh address"}</button>
-            <button type="button" disabled={busy} onClick={() => { if (!window.confirm(polish ? "Wygenerować nowe hasło serwera? Stare przestanie działać i każde urządzenie będzie musiało dołączyć nowym." : "Generate a new server password? The old one stops working and every device has to join with the new one.")) return; void post("/api/server/password", {}).then((value) => value && setSecret({ kind: "serverPassword", value: String(value.serverPassword ?? "") })); }} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{polish ? "Nowe hasło serwera" : "New server password"}</button>
+            <button type="button" disabled={busy} onClick={() => void post("/api/server/address", { refresh: true }, "refresh").then((value) => value && setAddresses(value as AddressReport))} className="inline-flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{pending === "refresh" && <Spinner size={12} />}{polish ? "Odśwież adres" : "Refresh address"}</button>
+            <button type="button" disabled={busy} onClick={() => { if (!window.confirm(polish ? "Wygenerować nowe hasło serwera? Stare przestanie działać i każde urządzenie będzie musiało dołączyć nowym." : "Generate a new server password? The old one stops working and every device has to join with the new one.")) return; void post("/api/server/password", {}, "password").then((value) => value && setSecret({ kind: "serverPassword", value: String(value.serverPassword ?? "") })); }} className="inline-flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{pending === "password" && <Spinner size={12} />}{polish ? "Nowe hasło serwera" : "New server password"}</button>
           </div>
           {secret?.kind === "serverPassword" && <SecretBox secret={secret} polish={polish} onDismiss={() => setSecret(null)} />}
         </Card>
       )}
 
       <MachineResources />
-      {overview?.server?.gpu && (
-        <div className="mt-2 rounded-xl bg-card px-4 py-3 text-[12.5px] text-ink-secondary">GPU <b className="font-medium text-ink">{overview.server.gpu}</b></div>
-      )}
+      <GpuRows gpus={overview?.server?.gpu} />
 
       {users.length > 0 && (
         <Card title={polish ? "Użytkownicy" : "Users"}>
@@ -339,8 +366,8 @@ export function AdminPanel() {
                     <td className="py-1 pr-2 text-right">{user.messages ?? 0}</td>
                     <td className="py-1 pr-2 text-ink-secondary">{user.role}</td>
                     <td className="py-1 text-right">
-                      <button type="button" disabled={busy} onClick={() => { const who = user.name || user.username || user.id; if (!window.confirm(polish ? `Zresetować hasło profilu ${who}? Dostaniesz jednorazowy kod, który trzeba mu przekazać.` : `Reset the profile password for ${who}? You get a one-time code to hand over.`)) return; void post(`/api/admin/users/${encodeURIComponent(user.id)}/reset`, {}).then((value) => value?.recoveryCode && setSecret({ kind: "recoveryCode", value: String(value.recoveryCode), who })); }} className="text-ink-secondary hover:text-ink disabled:opacity-50">Reset</button>
-                      <button type="button" disabled={busy} onClick={() => { const who = user.name || user.username || user.id; if (!window.confirm(user.disabled ? (polish ? `Włączyć profil ${who} z powrotem?` : `Enable ${who} again?`) : polish ? `Wyłączyć profil ${who}? Nie zaloguje się, dopóki go nie włączysz.` : `Disable ${who}? They cannot sign in until you enable them again.`)) return; void patchUser(user.id, { disabled: !user.disabled }); }} className="ml-3 text-ink-secondary hover:text-danger disabled:opacity-50">{user.disabled ? (polish ? "Włącz" : "Enable") : polish ? "Wyłącz" : "Disable"}</button>
+                      <button type="button" disabled={busy} onClick={() => { const who = user.name || user.username || user.id; if (!window.confirm(polish ? `Zresetować hasło profilu ${who}? Dostaniesz jednorazowy kod, który trzeba mu przekazać.` : `Reset the profile password for ${who}? You get a one-time code to hand over.`)) return; void post(`/api/admin/users/${encodeURIComponent(user.id)}/reset`, {}, `reset:${user.id}`).then((value) => value?.recoveryCode && setSecret({ kind: "recoveryCode", value: String(value.recoveryCode), who })); }} className="inline-flex items-center gap-1.5 text-ink-secondary hover:text-ink disabled:opacity-50">{pending === `reset:${user.id}` && <Spinner size={11} />}Reset</button>
+                      <button type="button" disabled={busy} onClick={() => { const who = user.name || user.username || user.id; if (!window.confirm(user.disabled ? (polish ? `Włączyć profil ${who} z powrotem?` : `Enable ${who} again?`) : polish ? `Wyłączyć profil ${who}? Nie zaloguje się, dopóki go nie włączysz.` : `Disable ${who}? They cannot sign in until you enable them again.`)) return; void patchUser(user.id, { disabled: !user.disabled }); }} className="ml-3 inline-flex items-center gap-1.5 text-ink-secondary hover:text-danger disabled:opacity-50">{pending === `toggle:${user.id}` && <Spinner size={11} />}{user.disabled ? (polish ? "Włącz" : "Enable") : polish ? "Wyłącz" : "Disable"}</button>
                     </td>
                   </tr>
                 ))}

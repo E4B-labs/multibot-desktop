@@ -291,6 +291,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
         windowsVerbatimArguments: cli.windowsVerbatimArguments,
         detached: true,
       });
@@ -727,7 +728,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
-      const probe = (args: string[]) => new Promise<{ ok: boolean; output: string }>((resolve) => {
+      const probe = (args: string[]) => new Promise<{ ok: boolean; exited: boolean; output: string }>((resolve) => {
         const cli = resolveCliSpawn(config.cli, args); // multibot
         execFile(
           cli.command,
@@ -735,15 +736,30 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           {
             timeout: 8000,
             env: { ...process.env, PATH: augmentedPath() },
+            windowsHide: true,
             windowsVerbatimArguments: cli.windowsVerbatimArguments,
           },
-          (err, stdout, stderr) => resolve({ ok: !err, output: `${stdout}${stderr}`.trim() }),
+          // `exited` = CLI naprawdę doszedł do końca i oddał kod wyjścia.
+          // Zabity zegarem (`killed`) albo nieodpalony (ENOENT, brak `code`) to
+          // NIE jest odpowiedź „niezalogowany".
+          (err, stdout, stderr) => resolve({
+            ok: !err,
+            exited: !err || (typeof err.code === "number" && !(err as { killed?: boolean }).killed),
+            output: `${stdout}${stderr}`.trim(),
+          }),
         );
       });
       const version = await probe(["--version"]);
       if (!version.ok || !version.output) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
       const auth = await probe(["login", "status"]);
-      return { state: "available", version: version.output, authenticated: auth.ok };
+      // Pod prootem każdy syscall to przystanek ptrace, więc 8 s potrafi minąć
+      // bez winy logowania. Niepewność zostawiamy jako `undefined` — picker
+      // przygasza tylko twarde „nie", nie brak odpowiedzi (lib/instanceGate.ts).
+      return {
+        state: "available",
+        version: version.output,
+        ...(auth.ok || auth.exited ? { authenticated: auth.ok } : {}),
+      };
     };
 
     return {

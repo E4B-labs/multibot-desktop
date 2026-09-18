@@ -17,7 +17,7 @@
 export const DEFAULT_MAX_PARALLEL_TURNS = 4;
 
 export function maxParallelTurns(): number {
-  const raw = Number(process.env.OMB_MAX_PARALLEL_TURNS);
+  const raw = Number(process.env.MULTIBOT_MAX_PARALLEL_TURNS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_PARALLEL_TURNS;
 }
 

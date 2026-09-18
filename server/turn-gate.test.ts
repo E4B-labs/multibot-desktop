@@ -5,7 +5,7 @@ import { DEFAULT_MAX_PARALLEL_TURNS, TurnGate, maxParallelTurns } from "./turn-g
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => {
-  delete process.env.OMB_MAX_PARALLEL_TURNS;
+  delete process.env.MULTIBOT_MAX_PARALLEL_TURNS;
 });
 
 describe("maxParallelTurns", () => {
@@ -13,12 +13,12 @@ describe("maxParallelTurns", () => {
     expect(maxParallelTurns()).toBe(DEFAULT_MAX_PARALLEL_TURNS);
   });
 
-  it("czyta OMB_MAX_PARALLEL_TURNS i odrzuca śmieci", () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "2";
+  it("czyta MULTIBOT_MAX_PARALLEL_TURNS i odrzuca śmieci", () => {
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "2";
     expect(maxParallelTurns()).toBe(2);
-    process.env.OMB_MAX_PARALLEL_TURNS = "0";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "0";
     expect(maxParallelTurns()).toBe(DEFAULT_MAX_PARALLEL_TURNS);
-    process.env.OMB_MAX_PARALLEL_TURNS = "nonsense";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "nonsense";
     expect(maxParallelTurns()).toBe(DEFAULT_MAX_PARALLEL_TURNS);
   });
 });
@@ -35,7 +35,7 @@ describe("TurnGate", () => {
   });
 
   it("ponad sufit czeka w FIFO i rusza po zwolnieniu slotu", async () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "2";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "2";
     const gate = new TurnGate();
     await gate.acquire("a");
     await gate.acquire("b");
@@ -51,7 +51,7 @@ describe("TurnGate", () => {
   });
 
   it("ten sam bot nie bierze drugiego slotu (tura zagnieżdżona)", async () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "1";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "1";
     const gate = new TurnGate();
     await gate.acquire("a");
     await gate.acquire("a"); // nie zawiesza się na sobie
@@ -59,7 +59,7 @@ describe("TurnGate", () => {
   });
 
   it("zwolnienie klucza bez slotu jest bezpieczne, także z kolejki", async () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "1";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "1";
     const gate = new TurnGate();
     await gate.acquire("a");
     void gate.acquire("b");
@@ -71,7 +71,7 @@ describe("TurnGate", () => {
   });
 
   it("reset budzi wszystkich czekających", async () => {
-    process.env.OMB_MAX_PARALLEL_TURNS = "1";
+    process.env.MULTIBOT_MAX_PARALLEL_TURNS = "1";
     const gate = new TurnGate();
     await gate.acquire("a");
     let woken = false;

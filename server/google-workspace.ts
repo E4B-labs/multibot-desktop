@@ -49,7 +49,7 @@ export function workspaceMcpInstalled(): boolean {
 export function credentialsDir(): string {
   return (
     process.env.WORKSPACE_MCP_CREDENTIALS_DIR ??
-    join(homedir(), ".openmausbot", "google-workspace-credentials")
+    join(homedir(), ".multibot", "google-workspace-credentials")
   );
 }
 

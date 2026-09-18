@@ -1,8 +1,8 @@
-import { ChevronLeft, ImagePlus, Pencil, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImagePlus, Pencil, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useStore, type Bot } from "@/state/store";
-import { MausAvatar } from "./Avatar";
-import { MAUS_COLORS, MAUS_COLOR_NAMES, stateForBot } from "@/lib/mascot";
+import { BotAvatar } from "./Avatar";
+import { BOT_COLORS, BOT_COLOR_NAMES, pickerAvatarState } from "@/lib/mascot";
 import { MASCOT_SHAPES } from "@/lib/mascotShapes";
 import { ModelPicker } from "./ModelPicker";
 import { EngineAutonomy } from "./EngineAutonomy";
@@ -12,6 +12,9 @@ import { requestBrowserNotifications } from "@/lib/notifications";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName, botDisplayTitle } from "@/lib/botNames";
 import { AvatarCropper } from "./AvatarCropper";
+import { Spinner } from "./Loading";
+import { SidePanel } from "./ResizablePanel";
+import { UsagePanel } from "./UsagePanel";
 
 function Field({
   label,
@@ -37,6 +40,7 @@ function BotSharing({ bot }: { bot: Bot }) {
   const [visibility, setVisibility] = useState<"team" | "private">(bot.visibility === "private" ? "private" : "team");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -45,7 +49,8 @@ function BotSharing({ bot }: { bot: Bot }) {
     ]).then(([sharing]) => {
       if (!alive) return;
       setVisibility(sharing.visibility === "private" ? "private" : "team");
-    }).catch((reason) => alive && setError(reason instanceof Error ? reason.message : String(reason)));
+    }).catch((reason) => alive && setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [bot.id]);
 
@@ -74,20 +79,23 @@ function BotSharing({ bot }: { bot: Bot }) {
       <div className="mt-0.5 text-[12px] text-ink-secondary">
         {polish ? "Zespołowy dla wszystkich albo prywatny tylko dla właściciela." : "Team-visible for everyone or private to its owner."}
       </div>
-      <select
-        value={visibility}
-        disabled={busy}
-        onChange={(event) => {
-          const value = event.target.value as typeof visibility;
-          setVisibility(value);
-          void save(value);
-        }}
-        className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink"
-      >
-        <option value="team">{polish ? "Zespół" : "Team"}</option>
-        <option value="private">{polish ? "Prywatny" : "Private"}</option>
-      </select>
-      {visibility === "private" && <div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Inni członkowie nie zobaczą bota, pamięci ani rozmów." : "Other members cannot see this bot, its memory, or its conversations."}</div>}
+      <div className="mt-3 flex items-center gap-2">
+        <select
+          value={visibility}
+          disabled={busy || loading}
+          onChange={(event) => {
+            const value = event.target.value as typeof visibility;
+            setVisibility(value);
+            void save(value);
+          }}
+          className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink disabled:opacity-50"
+        >
+          <option value="team">{polish ? "Zespół" : "Team"}</option>
+          <option value="private">{polish ? "Prywatny" : "Private"}</option>
+        </select>
+        {(loading || busy) && <Spinner className="shrink-0 text-ink-secondary" />}
+      </div>
+      {!loading && visibility === "private" &&<div className="mt-2 text-[12px] text-ink-secondary">{polish ? "Inni członkowie nie zobaczą bota, pamięci ani rozmów." : "Other members cannot see this bot, its memory, or its conversations."}</div>}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
@@ -102,6 +110,10 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   // Kliknięcie awatara otwiera panel wyglądu; wybór konkretnego trybu odbywa
   // się w zakładkach Bot / Prześlij.
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>("closed");
+  // multibot: „Zużycie" zajmuje ten sam slot co ustawienia (własny SidePanel
+  // z własną zapamiętaną szerokością), a „Wstecz" wraca tutaj. Bez nowej flagi
+  // w sklepie — panel jest dostępny wyłącznie stąd.
+  const [usageOpen, setUsageOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -114,13 +126,19 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       const match = !needle || (card.textContent ?? "").toLocaleLowerCase().includes(needle);
       (card as HTMLElement).style.display = match ? "" : "none";
     }
-  }, [query, appearanceMode]);
+    // `usageOpen` w zależnościach, bo powrót z „Zużycia" montuje te karty od
+    // nowa (wczesne wyjście niżej) — bez tego wpisane szukanie przestawało
+    // filtrować, choć w polu dalej stał tekst.
+  }, [query, appearanceMode, usageOpen]);
+  // Przełączenie bota przy otwartym „Zużyciu" wraca do ustawień — inaczej
+  // otwierasz ustawienia innego bota i widzisz od razu jego licznik.
+  useEffect(() => setUsageOpen(false), [bot.id]);
   const patch = (
     p: Partial<
       Pick<Bot, "name" | "title" | "description" | "notifications" | "color" | "mascotExpression" | "mascotShape" | "avatarUrl">
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
-  const activeState = stateForBot(bot);
+  const activeState = pickerAvatarState(bot);
 
   const handleAvatarClick = () => setAppearanceMode((m) => (m === "closed" ? "bot" : "closed"));
 
@@ -161,8 +179,17 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
     }
   };
 
+  // `key` = świeży panel per bot: bez tego odpowiedź poprzedniego bota po
+  // szybkim przełączeniu wpisałaby się do panelu nowego.
+  if (usageOpen) return <UsagePanel key={bot.id} bot={bot} onBack={() => setUsageOpen(false)} />;
+
   return (
-    <aside className="animate-panel-in flex h-full w-[320px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <SidePanel
+      storageKey="multibot.panelWidth.settings"
+      defaultWidth={320}
+      label={polish ? "Zmień szerokość panelu bota" : "Resize bot panel"}
+      className="border-l border-hairline/40"
+    >
       <div data-shell-header className="flex items-center justify-between px-3 py-2.5">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
@@ -211,7 +238,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             aria-label={polish ? "Zmień wygląd bota" : "Change bot appearance"}
             className="group relative rounded-full ring-offset-4 ring-offset-panel transition hover:opacity-90 focus:outline-none"
           >
-            <MausAvatar
+            <BotAvatar
               color={bot.color}
               shape={bot.mascotShape}
               avatarUrl={bot.avatarUrl}
@@ -261,7 +288,8 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   </button>
                 )}
                 {appearanceMode === "photo" && bot.avatarUrl && (
-                  <button type="button" onClick={removeAvatar} disabled={avatarBusy} className="rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised">
+                  <button type="button" onClick={removeAvatar} disabled={avatarBusy} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised disabled:opacity-50">
+                    {avatarBusy && <Spinner size={12} />}
                     {polish ? "Usuń" : "Remove"}
                   </button>
                 )}
@@ -285,7 +313,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                         title={shape}
                         aria-label={`${polish ? "Użyj kształtu ikony" : "Use"} ${shape}`}
                       >
-                        <MausAvatar color={bot.color} shape={shape} avatarUrl={null} state={activeState} size={32} animated={false} trackPointer={false} showFace={false} />
+                        <BotAvatar color={bot.color} shape={shape} avatarUrl={null} state={activeState} size={32} animated={false} trackPointer={false} showFace={false} />
                       </button>
                     ))}
                   </div>
@@ -293,17 +321,22 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   <div className="mb-1.5 mt-3 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
                     {polish ? "Kolor" : "Color"}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {MAUS_COLOR_NAMES.map((color) => (
+                  {/* Siedem kolumn pod 14 barw z BOT_COLOR_NAMES — dwa pelne
+                      rzedy. Zawijany flex zostawial w drugim rzedzie dziury po
+                      brakujacych pozycjach. */}
+                  <div className="grid grid-cols-7 justify-items-center gap-2">
+                    {BOT_COLOR_NAMES.map((color) => (
                       <button
                         type="button"
                         key={color}
                         onClick={() => patch({ color })}
                         className={cn(
-                          "size-7 rounded-full border-2 border-transparent transition-transform hover:scale-110",
+                          // Obwódka, nie przezroczysta: `bg-card` na jasnych
+                          // motywach to biel, więc biała próbka bez niej znika.
+                          "size-7 rounded-full border-2 border-hairline/70 transition-transform hover:scale-110",
                           bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                         )}
-                        style={{ backgroundColor: MAUS_COLORS[color] }}
+                        style={{ backgroundColor: BOT_COLORS[color] }}
                         title={color}
                         aria-label={`${polish ? "Użyj koloru awatara" : "Use mascot color"}: ${color}`}
                       />
@@ -327,7 +360,14 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                       </button>
                     </div>
                   ) : (
-                    <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+                    <>
+                      <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+                      {avatarBusy && (
+                        <div className="mt-2 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
+                          <Spinner size={12} /> {polish ? "Zapisywanie…" : "Saving…"}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -370,6 +410,20 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             <ModelPicker bot={bot} />
           </div>
 
+          <button
+            type="button"
+            onClick={() => setUsageOpen(true)}
+            className="flex w-full items-center justify-between gap-4 rounded-xl bg-card p-3 text-left hover:bg-raised"
+          >
+            <div>
+              <div className="text-[14px] font-medium text-ink">{polish ? "Zużycie" : "Usage"}</div>
+              <div className="mt-0.5 text-[12px] text-ink-secondary">
+                {polish ? "Tokeny i tury zużyte przez tego bota" : "Tokens and turns this bot has used"}
+              </div>
+            </div>
+            <ChevronRight size={16} className="shrink-0 text-ink-secondary" />
+          </button>
+
           <EngineAutonomy key={`autonomy-${bot.id}`} bot={bot} />
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-3">
             <div>
@@ -402,6 +456,6 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           </div>
         </div>
       </div>
-    </aside>
+    </SidePanel>
   );
 }

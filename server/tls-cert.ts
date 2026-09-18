@@ -183,7 +183,7 @@ function restrictKeyFile(keyPath: string): void {
   const user = process.env.USERNAME;
   if (!user) return;
   try {
-    execFileSync("icacls", [keyPath, "/inheritance:r", "/grant:r", `${user}:F`], { stdio: "ignore" });
+    execFileSync("icacls", [keyPath, "/inheritance:r", "/grant:r", `${user}:F`], { stdio: "ignore", windowsHide: true });
   } catch (error) {
     console.warn(`[multibot] nie udało się ograniczyć praw do ${keyPath}: ${error instanceof Error ? error.message : error}`);
   }

@@ -26,7 +26,7 @@
   --color-warning: #ff9800;
   --color-focus: #459ffe;
   --color-scrollbar: #3d3d3d;
-  --color-maus-line: #fcfcfc;
+  --color-bot-line: #fcfcfc;
 
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
     "Segoe UI", system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
@@ -37,19 +37,19 @@
   --radius-xl: 16px;
 }
 
-:root { --color-accent-ink: #ffffff; --color-danger-ink: #ffffff; --color-scrollbar: #3d3d3d; --color-maus-line: #fcfcfc; }
+:root { --color-accent-ink: #ffffff; --color-danger-ink: #ffffff; --color-scrollbar: #3d3d3d; --color-bot-line: #fcfcfc; }
 
 [data-skin="midnight"] {
-  --color-app:#070707; --color-panel:#111111; --color-raised:#2f2f2f; --color-raised-hover:#3d3d3d; --color-card:#262626; --color-inset:#191919; --color-control:#2f2f2f; --color-hairline:#333333; --color-ink:#fcfcfc; --color-ink-secondary:#fcfcfc99; --color-accent:#1084fe; --color-accent-border:#459ffe; --color-accent-text:#7fc0ff; --color-accent-ink:#fff; --color-bubble-user:#5a5a5a; --color-success:#38d591; --color-danger:#ff5667; --color-danger-ink:#fff; --color-warning:#ff9800; --color-focus:#459ffe; --color-scrollbar:#3d3d3d; --color-maus-line:#fcfcfc;
+  --color-app:#070707; --color-panel:#111111; --color-raised:#2f2f2f; --color-raised-hover:#3d3d3d; --color-card:#262626; --color-inset:#191919; --color-control:#2f2f2f; --color-hairline:#333333; --color-ink:#fcfcfc; --color-ink-secondary:#fcfcfc99; --color-accent:#1084fe; --color-accent-border:#459ffe; --color-accent-text:#7fc0ff; --color-accent-ink:#fff; --color-bubble-user:#5a5a5a; --color-success:#38d591; --color-danger:#ff5667; --color-danger-ink:#fff; --color-warning:#ff9800; --color-focus:#459ffe; --color-scrollbar:#3d3d3d; --color-bot-line:#fcfcfc;
 }
 [data-skin="atelier"] {
-  --color-app:#f5f1eb; --color-panel:#fbf8f2; --color-raised:#fff; --color-raised-hover:#f2e9dc; --color-card:#fff; --color-inset:#f5f1eb; --color-control:#ece4d6; --color-hairline:#c8bda8; --color-ink:#1a1a18; --color-ink-secondary:#6b6559; --color-accent:#a05f25; --color-accent-border:#b06a2c; --color-accent-text:#96551f; --color-accent-ink:#fff; --color-bubble-user:#f2e9dc; --color-success:#3f6b47; --color-danger:#a33a32; --color-danger-ink:#fff; --color-warning:#7a5f31; --color-focus:#96551f; --color-scrollbar:#c9c0ae; --color-maus-line:#6b6559;
+  --color-app:#f5f1eb; --color-panel:#fbf8f2; --color-raised:#fff; --color-raised-hover:#f2e9dc; --color-card:#fff; --color-inset:#f5f1eb; --color-control:#ece4d6; --color-hairline:#c8bda8; --color-ink:#1a1a18; --color-ink-secondary:#6b6559; --color-accent:#a05f25; --color-accent-border:#b06a2c; --color-accent-text:#96551f; --color-accent-ink:#fff; --color-bubble-user:#f2e9dc; --color-success:#3f6b47; --color-danger:#a33a32; --color-danger-ink:#fff; --color-warning:#7a5f31; --color-focus:#96551f; --color-scrollbar:#c9c0ae; --color-bot-line:#6b6559;
 }
 [data-skin="foundry"] {
-  --color-app:#100e0b; --color-panel:#171410; --color-raised:#262019; --color-raised-hover:#322b21; --color-card:#1e1a14; --color-inset:#0b0a08; --color-control:#262019; --color-hairline:#3d3529; --color-ink:#f4efe4; --color-ink-secondary:#b0a696; --color-accent:#d99a3e; --color-accent-border:#e8b25e; --color-accent-text:#e0a44c; --color-accent-ink:#1c150c; --color-bubble-user:#2a2318; --color-success:#57b078; --color-danger:#e0685e; --color-danger-ink:#1c0d0b; --color-warning:#dfa441; --color-focus:#e0a44c; --color-scrollbar:#3d3529; --color-maus-line:#b0a696;
+  --color-app:#100e0b; --color-panel:#171410; --color-raised:#262019; --color-raised-hover:#322b21; --color-card:#1e1a14; --color-inset:#0b0a08; --color-control:#262019; --color-hairline:#3d3529; --color-ink:#f4efe4; --color-ink-secondary:#b0a696; --color-accent:#d99a3e; --color-accent-border:#e8b25e; --color-accent-text:#e0a44c; --color-accent-ink:#1c150c; --color-bubble-user:#2a2318; --color-success:#57b078; --color-danger:#e0685e; --color-danger-ink:#1c0d0b; --color-warning:#dfa441; --color-focus:#e0a44c; --color-scrollbar:#3d3529; --color-bot-line:#b0a696;
 }
 [data-skin="lagoon"] {
-  --color-app:#dfeceb; --color-panel:#ecf4f3; --color-raised:#fff; --color-raised-hover:#cfe4e1; --color-card:#fff; --color-inset:#d5e8e5; --color-control:#c3dcd9; --color-hairline:#aebfbd; --color-ink:#14201f; --color-ink-secondary:#4d5c5b; --color-accent:#11736d; --color-accent-border:#14807a; --color-accent-text:#0d5f5a; --color-accent-ink:#fff; --color-bubble-user:#cfe4e1; --color-success:#2f6b4f; --color-danger:#a8382f; --color-danger-ink:#fff; --color-warning:#7a5a2a; --color-focus:#0d5f5a; --color-scrollbar:#a6b8b6; --color-maus-line:#4d5c5b;
+  --color-app:#dfeceb; --color-panel:#ecf4f3; --color-raised:#fff; --color-raised-hover:#cfe4e1; --color-card:#fff; --color-inset:#d5e8e5; --color-control:#c3dcd9; --color-hairline:#aebfbd; --color-ink:#14201f; --color-ink-secondary:#4d5c5b; --color-accent:#11736d; --color-accent-border:#14807a; --color-accent-text:#0d5f5a; --color-accent-ink:#fff; --color-bubble-user:#cfe4e1; --color-success:#2f6b4f; --color-danger:#a8382f; --color-danger-ink:#fff; --color-warning:#7a5a2a; --color-focus:#0d5f5a; --color-scrollbar:#a6b8b6; --color-bot-line:#4d5c5b;
 }
 
 html,
@@ -78,10 +78,19 @@ body {
       plus 8 px przerwy = 114 px). Zasłoniłyby nagłówek tego panelu, który
       akurat stoi przy prawej krawędzi — a stoi tam za każdym razem inny:
       czat, grupa, pokój, ustawienia aplikacji, skille, rutyny, komputer,
-      inspektor. `:last-child` wybiera go sam, więc żaden z nich nie musi
-      o tym wiedzieć ani dostawać propa. Overlaye na całą powłokę (mapa
-      zespołu, konektory) to `div`, nie `main`/`aside` — celowo poza regułą,
-      bo i tak zasłaniają nagłówek pod spodem. */
+      inspektor, lista pokojów. Reguła wybiera go sama, więc żaden z nich nie
+      musi dostawać propa — musi tylko wystawić `data-shell-header` na swoim
+      bezpośrednim dziecku, bo w to celuje reguła. Panel bez tego atrybutu
+      jest dla niej niewidzialny i po cichu zostaje bez odstępu.
+
+      „Ostatni" znaczy: ostatni `main`/`aside`, a NIE ostatnie dziecko.
+      Nakładki na całą powłokę (konektory, mapa zespołu) to `div` doklejone
+      za panelami — przy `:last-child` sama ich obecność zdejmowała odstęp
+      panelowi pod spodem i jego ikony wjeżdżały pod minimalizuj/
+      maksymalizuj/zamknij. Nakładka jest półprzezroczysta (`bg-black/40`),
+      więc widać to jako zlepek ikon w prawym górnym rogu — dokładnie na to
+      Kacper się skarżył przy otwartym oknie wtyczek (0.5.33). Wcześniejszy
+      komentarz zakładał, że nakładka nagłówek ZASŁANIA; nie zasłania. */
 .multibot-frameless [data-shell-header] { -webkit-app-region: drag; }
 /* 3. Jedna linia na całej górze okna. Rząd nagłówka czatu ma 72 px (awatar
       bota), nagłówki paneli same z siebie 50 px — ich przyciski stały o 11 px
@@ -109,10 +118,40 @@ body {
 }
 .multibot-frameless [data-shell-rail-search] { padding-top: 4px; }
 
-.multibot-frameless > .relative > main:last-child > [data-shell-header],
-.multibot-frameless > .relative > aside:last-child > [data-shell-header] {
+/* „nie ma po sobie żadnego innego panelu" — nakładki (`div`) się nie liczą */
+.multibot-frameless > .relative > :is(main, aside):not(:has(~ :is(main, aside))) > [data-shell-header] {
   padding-right: 114px;
 }
+
+/* 5. Nakładki na całą powłokę (konektory, mapa zespołu, pełny ekran podglądu
+      komputera, paleta poleceń). Pas tytułowy należy do okna, więc żadna
+      z nich nie ma prawa w niego wejść — modal zaczyna się PONIŻEJ tych
+      72 px, dokładnie tam, gdzie kończą się kontrolki okna.
+
+      To jest właściwa poprawka, nie sam `no-drag` niżej. Do 0.5.33 modal
+      konektorów szedł `md:h-full` od górnej krawędzi, więc jego rząd
+      z „X" i odświeżaniem wypadał w środku pasa z punktu 1 — a tam
+      Chromium trzyma region `drag` z nagłówka spod spodu i kliknięcia idą
+      w przesuwanie okna, nie w przycisk. Ten sam pas zjadał „X" pełnego
+      ekranu podglądu komputera (`p-[5%]` = ~45 px) i „✕" okna zespołu
+      z folderu. Odstęp od góry zdejmuje to wszystkim naraz i nie zależy
+      od szerokości okna ani od tego, jak szeroki jest dany modal — inaczej
+      każdy potrzebowałby własnej stałej.
+      Przy okazji nic już nie nachodzi na minimalizuj/maksymalizuj/zamknij,
+      bo te siedzą wyżej (z-90, `fixed`) i nakładka ich nie zasłania.
+      Bez media query: `.multibot-frameless` istnieje tylko na pulpicie,
+      a okno ma `minWidth: 900` (electron/main.mjs), więc układ jest
+      zawsze `md:`. */
+.multibot-frameless [data-shell-overlay] { padding-top: 72px; }
+/* 6. …a samo tło nakładki przestaje być uchwytem do przeciągania okna, żeby
+      klik w ciemne pole nad modalem zamykał go, zamiast ruszać oknem.
+      UWAGA: to działa tylko dla nakładek montowanych w drzewie PO nagłówku
+      czatu (App.tsx). Chromium składa regiony w kolejności drzewa, więc
+      późniejszy `drag` zjada wcześniejszy `no-drag` — pilnuje tego
+      WindowControls.test.ts. Nakładka montowana z szyny botów
+      (ScoutTeamModal w Sidebar.tsx) stoi PRZED nagłówkiem i tego regionu
+      nie zdejmie; jej przyciski ratuje odstęp z punktu 5, tło nie. */
+.multibot-frameless [data-shell-overlay] { -webkit-app-region: no-drag; }
 
 /* multibot: G5 — phone layout keeps bot list first, then full-width chat/panel.
    Existing desktop spacing and motion remain unchanged. */
@@ -134,12 +173,20 @@ body {
     position: fixed;
     inset: 0;
     z-index: 30;
+    /* Nadpisuje `w-[var(--panel-width)]` — na telefonie panel zakrywa ekran,
+       a zapamiętana szerokość czeka do powrotu na szeroki ekran. Działa, bo
+       szerokość jedzie KLASĄ, nie stylem inline (styl inline wygrałby). */
     width: 100%;
     height: 100dvh;
     min-height: 100dvh;
     border-left: 0;
     border-top: 1px solid var(--color-hairline);
     overflow-y: auto;
+  }
+  /* Panel zakrywa ekran, więc nie ma czego ciągnąć — a pasek uchwytu przy samej
+     krawędzi (`touch-none`) zjadałby przewijanie palcem. */
+  .multibot-shell > .relative > aside:not(:first-child) > [role="separator"] {
+    display: none;
   }
   .multibot-shell button,
   .multibot-shell input,
@@ -160,9 +207,51 @@ body {
      otwartym panelu bocznym. Poziom nadal czyta `aria-label`, wiec czytnik
      nic nie traci. Powyzej 700 px nic sie nie zmienia. */
   [data-composer-row] { flex-wrap: wrap; }
-  [data-composer-row] > [data-composer-input] { order: -1; flex-basis: 100%; }
+  /* K2: celem jest pudelko pola (`data-composer-field`), bo od tej pory pole
+     siedzi w nim razem z warstwa podswietlenia wzmianek. Samo
+     `[data-composer-input]` przestalo byc dzieckiem rzedu. */
+  [data-composer-row] > [data-composer-field] { order: -1; flex-basis: 100%; }
   [data-composer-row] > button > span,
   [data-composer-row] > div > button > span { display: none; }
+}
+
+/* == multibot: seria dymków (iMessage/Grok) ==============================
+   Kilka wiadomości pod rząd od tej samej strony ma się czytać jak JEDEN
+   blok: rogi, którymi dwa dymki serii się stykają, robią się ostrzejsze
+   (6 px zamiast 16 px z `rounded-2xl`), rogi zewnętrzne zostają pełne,
+   a odstęp w środku serii schodzi z 4 px (`gap-1` listy) do 2 px. Odstęp
+   MIĘDZY nadawcami zostaje bez zmian.
+
+   Serię wyznacza sąsiedztwo w DOM, nie indeks wiadomości — `+` i `:has(+)`.
+   To celowo: między dymkami stają pigułki zdarzeń, chipy pokoju, karty
+   opcji, podglądy ekranu, karta SKILL.md i separatory sesji, a wszystkie
+   przerywają serię już przez to, że stoją pomiędzy. Mapa liczona w JS
+   musiałaby powtórzyć całą logikę „czy ta wiadomość w ogóle coś rysuje"
+   z pętli w ChatView i rozjeżdżałaby się przy każdym nowym rodzaju wiersza.
+   Wymaga `:has()` (Chromium 105+) — ten plik i tak korzysta z Highlight API
+   (105) i color-mix (111), więc próg się nie podnosi.
+
+   Reguły stoją POZA warstwami, więc biją `rounded-2xl` z `@layer utilities`
+   Tailwinda niezależnie od specyficzności (tak samo jak nagłówki paneli
+   wyżej biją swoje utility). Znacznikami są `data-mb-side` (wiersz) i
+   `data-mb-bubble` (sam dymek) — patrz src/components/ChatView.tsx. */
+[data-mb-side="bot"] + [data-mb-side="bot"],
+[data-mb-side="user"] + [data-mb-side="user"] {
+  margin-top: -2px;
+}
+/* dymek, nad którym stoi dymek tej samej strony — ostry róg GÓRNY wewnętrzny */
+[data-mb-side="bot"] + [data-mb-side="bot"] [data-mb-bubble] {
+  border-top-left-radius: 6px;
+}
+[data-mb-side="user"] + [data-mb-side="user"] [data-mb-bubble] {
+  border-top-right-radius: 6px;
+}
+/* dymek, pod którym stoi dymek tej samej strony — ostry róg DOLNY wewnętrzny */
+[data-mb-side="bot"]:has(+ [data-mb-side="bot"]) [data-mb-bubble] {
+  border-bottom-left-radius: 6px;
+}
+[data-mb-side="user"]:has(+ [data-mb-side="user"]) [data-mb-bubble] {
+  border-bottom-right-radius: 6px;
 }
 
 ::-webkit-scrollbar {
@@ -197,6 +286,19 @@ body {
 [data-composer-input]::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* multibot K2: gdy w szkicu jest wzmianka, litery pola są przezroczyste —
+   maluje je warstwa pod spodem (Composer.tsx, MentionHighlight). Chrome NIE
+   rysuje wtedy podświetlenia zaznaczenia w ogóle: przy `color: transparent`
+   pomija cały pas i Ctrl+A wyglądało, jakby nic nie było zaznaczone (zmierzone
+   na zrzutach `sel-plain.png` vs `sel-mention.png`). Jawne tło przywraca pas,
+   a kolory systemowe dają dokładnie ten sam wygląd co pole bez wzmianki — stąd
+   `Highlight`/`HighlightText`, nie nasze tokeny. Reguła celuje w `data-mentions`,
+   więc każda inna wiadomość zostaje na domyślnym zachowaniu przeglądarki. */
+[data-composer-input][data-mentions]::selection {
+  color: HighlightText;
+  background: Highlight;
 }
 
 @keyframes panel-in {
@@ -342,4 +444,27 @@ body {
 :root[data-motion="reduced"] .menu-icon-in,
 :root[data-motion="reduced"] .menu-letter {
   animation: none !important;
+}
+
+/* multibot: find-in-chat — trafienia maluje CSS Custom Highlight API, więc
+   markdown/KaTeX/shiki w dymkach zostają nietknięte (żadnego <mark> w drzewie
+   Reacta). Range'e rejestruje src/lib/findInChat.ts. */
+::highlight(mb-find) {
+  /* Sam Highlight API jest od Chromium 105, ale color-mix() dopiero od 111.
+     Bez tej pary silnik z przedziału 105–110 wyrzuca CAŁĄ regułę jako
+     nieznaną i trafienia są NIEWIDOCZNE, choć licznik chodzi. Pierwsza
+     deklaracja to dosłowny akcent — mniej subtelnie, ale widać. */
+  background-color: var(--color-accent);
+  background-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  color: inherit;
+}
+
+::highlight(mb-find-current) {
+  /* Akcent przyciemniony o 15%: czysty --color-accent w skórce „midnight"
+     daje białemu tekstowi 3,65:1, czyli poniżej progu WCAG AA dla treści
+     dymka. Po przyciemnieniu przechodzi, a pozostałe trzy skórki i tak były
+     ponad progiem. */
+  background-color: var(--color-accent);
+  background-color: color-mix(in srgb, var(--color-accent) 85%, black);
+  color: var(--color-accent-ink);
 }

@@ -1,10 +1,12 @@
 // multibot (H2): the parts of the computer that are decidable without a daemon.
 // The container lifecycle itself is covered by the H0 spike against a real
 // image, not here.
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   BACKEND,
+  IDLE_MS,
   CONTAINER_NAME,
   CONTAINER_PORTS,
   VOLUME_NAME,
@@ -12,6 +14,12 @@ import {
   dockerCommand,
   ensureComputer,
   parsePortOutput,
+  rememberReadyPorts,
+  _idleForTests,
+  computerIdleStatus,
+  holdComputer,
+  releaseComputerHold,
+  touchComputer,
 } from "./hosted-computer.ts";
 
 describe("naming", () => {
@@ -70,6 +78,25 @@ describe("ensureComputer", () => {
     expect(a).toEqual(b);
     expect(a.state).toBe("error");
   });
+
+  it("skips docker while the last known browser still answers its CDP probe", async () => {
+    // Docker is refused under vitest, so a "ready" answer can only have come
+    // from the probe shortcut — the ~10 s of `wsl docker …` per turn on Windows.
+    const cdp = createServer((_req, res) => res.end("{}"));
+    await new Promise<void>((resolve) => cdp.listen(0, "127.0.0.1", resolve));
+    const port = (cdp.address() as { port: number }).port;
+    try {
+      rememberReadyPorts({ cdp: port, novnc: port, api: port });
+      expect((await ensureComputer()).state).toBe("ready");
+      cdp.close();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Browser gone → back to the real path, which is refused here.
+      expect((await ensureComputer()).state).toBe("error");
+    } finally {
+      rememberReadyPorts(null);
+      cdp.close();
+    }
+  });
 });
 
 describe("ports", () => {
@@ -84,5 +111,68 @@ describe("backend selection", () => {
   // machine with nobody having decided that.
   it("defaults to docker", () => {
     expect(BACKEND).toBe("docker");
+  });
+});
+
+// Computer on demand: the desktop sleeps after IDLE_MS without use, unless a
+// turn with the computer tools mounted still holds it. Measured on the phone:
+// without this the native backend kept a whole XFCE running forever.
+describe("idle stop", () => {
+  const stops: number[] = [];
+  const idle = _idleForTests(async () => { stops.push(Date.now()); });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    stops.length = 0;
+    idle.holds.clear();
+    idle.running = true;
+  });
+  afterEach(() => {
+    if (idle.timer) clearTimeout(idle.timer);
+    idle.timer = null;
+    idle.running = false;
+    vi.useRealTimers();
+  });
+
+  it("defaults to five minutes", () => {
+    expect(IDLE_MS).toBe(300_000);
+    expect(computerIdleStatus()).toEqual({ running: true, idleMs: IDLE_MS });
+  });
+
+  it("stops once nothing used it for IDLE_MS", async () => {
+    touchComputer();
+    await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+    expect(stops).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stops).toEqual([IDLE_MS]);
+    expect(computerIdleStatus().running).toBe(false);
+  });
+
+  it("every use pushes the deadline back", async () => {
+    touchComputer();
+    await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+    touchComputer();
+    await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+    expect(stops).toEqual([]);
+    await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+    expect(stops).toEqual([IDLE_MS * 1.5]);
+  });
+
+  it("a turn holding the computer keeps it awake until released", async () => {
+    holdComputer("bot-a");
+    await vi.advanceTimersByTimeAsync(IDLE_MS * 3);
+    expect(stops).toEqual([]);
+    expect(computerIdleStatus().running).toBe(true);
+    releaseComputerHold("bot-a");
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
+    expect(stops).toHaveLength(1);
+  });
+
+  it("does nothing while the computer is already down", async () => {
+    idle.running = false;
+    touchComputer();
+    await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+    expect(stops).toEqual([]);
   });
 });

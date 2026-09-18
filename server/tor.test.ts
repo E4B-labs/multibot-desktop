@@ -26,7 +26,7 @@ import {
 } from "./tor.ts";
 
 describe("torrc", () => {
-  const torrc = torrcText("/home/u/.openmausbot/tor");
+  const torrc = torrcText("/home/u/.multibot/tor");
 
   it("points the hidden service at the ingress port, not at the harness port", () => {
     expect(torrc).toContain("HiddenServicePort 8799 127.0.0.1:8798");
@@ -43,8 +43,8 @@ describe("torrc", () => {
   // A Windows data directory is `C:\Users\Jan Kowalski\…` more often than not,
   // and an unquoted space would silently turn one option into two.
   it("quotes and escapes the data directory, spaces and backslashes included", () => {
-    const windows = torrcText("C:\\Users\\Jan Kowalski\\.openmausbot\\tor");
-    expect(windows).toContain('DataDirectory "C:\\\\Users\\\\Jan Kowalski\\\\.openmausbot\\\\tor"');
+    const windows = torrcText("C:\\Users\\Jan Kowalski\\.multibot\\tor");
+    expect(windows).toContain('DataDirectory "C:\\\\Users\\\\Jan Kowalski\\\\.multibot\\\\tor"');
     expect(torPath('a"b')).toBe('"a\\"b"');
   });
 
@@ -102,8 +102,8 @@ describe("rateLimitAddress", () => {
 describe("torEnabled", () => {
   it("is on unless the owner says otherwise", () => {
     expect(torEnabled({})).toBe(true);
-    expect(torEnabled({ OMB_TOR: "1" })).toBe(true);
-    for (const value of ["0", "off", "false", "no", " OFF "]) expect(torEnabled({ OMB_TOR: value })).toBe(false);
+    expect(torEnabled({ MULTIBOT_TOR: "1" })).toBe(true);
+    for (const value of ["0", "off", "false", "no", " OFF "]) expect(torEnabled({ MULTIBOT_TOR: value })).toBe(false);
   });
 });
 
@@ -112,10 +112,10 @@ describe("findTorBinary", () => {
     expect(findTorBinary({ PATH: "" }, "linux")).toBeNull();
   });
 
-  it("prefers OMB_TOR_BIN when it points at a real file", () => {
+  it("prefers MULTIBOT_TOR_BIN when it points at a real file", () => {
     // This test file itself is the one path we know exists.
     const self = new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-    expect(findTorBinary({ OMB_TOR_BIN: self, PATH: "" }, "linux")).toBe(self);
+    expect(findTorBinary({ MULTIBOT_TOR_BIN: self, PATH: "" }, "linux")).toBe(self);
   });
 });
 
@@ -193,8 +193,8 @@ describe("onionSuppressed", () => {
 
   // No certificate means no fingerprint, so `probeOnion` could never confirm
   // the onion — and it would still outrank every unverified rung. It would also
-  // walk straight past the reverse proxy that OMB_TLS=off exists for.
-  it("refuses OMB_TLS=off, where the onion could never be verified", () => {
-    expect(onionSuppressed(false, true)).toMatch(/OMB_TLS=off/);
+  // walk straight past the reverse proxy that MULTIBOT_TLS=off exists for.
+  it("refuses MULTIBOT_TLS=off, where the onion could never be verified", () => {
+    expect(onionSuppressed(false, true)).toMatch(/MULTIBOT_TLS=off/);
   });
 });

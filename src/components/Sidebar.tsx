@@ -1,4 +1,5 @@
 import { track } from "@/lib/analytics";
+import { markStartup } from "@/lib/startupTiming";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   Crown,
   EyeOff,
   FolderPlus,
+  ImagePlus,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -25,21 +27,25 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useStore, formatTime, type Bot, type EngineGroup } from "@/state/store";
-import { MausAvatar, InitialsAvatar } from "./Avatar";
+import { useStore, formatTime, type Bot, type ConfigStatus, type EngineGroup } from "@/state/store";
+import { Skeleton, Spinner } from "./Loading";
+import { AvatarCropper } from "./AvatarCropper";
+import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { ScoutTeamModal } from "./ScoutTeamModal";
-import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { activityPhrase, type LiveTurn, mascotClockActive, type RuntimePhase, sidebarAvatarProps } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { plainPreview } from "@/lib/plainPreview";
 import { authFetch } from "@/lib/auth";
 // multibot: F11 — status silnika dla warunkowej kropki w stopce
 import { getLanguage, useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { groupAvatarSplit, groupRowTitle } from "@/lib/groupRow";
+import { groupAvatarLayout, type GroupAvatarLayout, groupRowTitle, MAX_GROUP_MEMBERS } from "@/lib/groupRow";
 // multibot: kolejność sekcji i podział wierszy — czysta logika, testowana osobno
 import { moveSectionTo, sectionRows } from "@/lib/sidebarSections";
 // multibot: czerwony wykrzyknik na ikonie ustawień — jest widoczna aktualizacja
 import { useUpdaterState } from "@/lib/updater";
+// multibot: wspólna mechanika zmiany szerokości — szyna i panele po prawej
+import { ResizeHandle, useResizableWidth } from "./ResizablePanel";
 
 const isElectron = navigator.userAgent.includes("Electron");
 
@@ -56,19 +62,46 @@ export function clampSidebarWidth(width: number): number {
   return Math.min(Math.max(Math.round(width), MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
 }
 
-export function sidebarWidthFromDrag(startWidth: number, deltaX: number): number {
-  return clampSidebarWidth(startWidth + deltaX);
-}
-
 /** Awatar w pasku bocznym — helper mieszka w `@/lib/mascot`, bo naglowek
  * czatu trzyma sie tej samej zasady. Reeksport, zeby importy nie ruszaly. */
 export { sidebarAvatarProps };
 
 /**
  * Awatar czlonka grupy w stosie na wierszu grupy — dokladnie ta sama zasada
- * co wiersz bota: stoi, dopoki bot nie pracuje.
+ * co wiersz bota: stoi, dopoki bot nie pracuje, a pracujacy sie rusza.
  */
-export const groupMemberAvatarProps = sidebarAvatarProps;
+export function groupMemberAvatarProps(bot: Bot, live: LiveTurn = {}) {
+  return sidebarAvatarProps(bot, live);
+}
+
+/**
+ * JEDEN zegar dla całego rostera (wiersze, grupy, szyna, kafelek hovera).
+ * Wiersze tabeli stanów zależne od czasu (loading po 10 s, celebrate gaśnie po
+ * 1 s) nie mają własnego eventu — tykamy co pół sekundy, ale tylko dopóki
+ * `mascotClockActive` (żywa tura albo okno świętowania). Nieaktywny zegar
+ * oddaje świeże `Date.now()`, więc nigdy nie zamarza na wartości sprzed
+ * ostatniego ticka — to właśnie trzymało `celebrate` w nieskończoność.
+ */
+function useMascotClock(active: boolean): number {
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [active]);
+  return active ? clock : Date.now();
+}
+
+/** Fazę tury i strumień tekstu trzyma store per wątek, nie per bot. */
+function liveTurn(state: { runtime: Record<string, RuntimePhase>; streaming: Record<string, string> }, bot: Bot, now: number): LiveTurn {
+  return {
+    runtime: state.runtime[bot.threadId] ?? null,
+    streaming: state.streaming[bot.threadId] !== undefined,
+    focused: typeof document === "undefined" || document.hasFocus(),
+    now,
+  };
+}
 
 function readSidebarWidth(key: string, fallback: number): number {
   if (typeof window === "undefined") return fallback;
@@ -94,6 +127,251 @@ function profileInitials(profile?: { name?: string; email?: string }): string {
   }
   const email = profile?.email?.trim();
   return email ? email[0]!.toUpperCase() : "?";
+}
+
+/**
+ * multibot: profil w stopce sidebara. Klik otwiera mały popover NAD stopką
+ * (zakotwiczony przy przycisku profilu, nie centralny modal) z uploadem
+ * zdjęcia profilowego — ten sam przepływ co w edycji awatara bota
+ * (ukryty input file + AvatarCropper), tylko zapis idzie w
+ * POST /api/profile/avatar. Hover podświetla jak przycisk „Wtyczki", ale
+ * TYLKO część flex-1 — z marginesem, żeby nie nachodził na koło zębate obok.
+ */
+/** Bok kwadratowego panelu zdjęcia profilowego (px) i szerokość panelu na czas
+ * kadrowania (cropper ma podgląd 220 px + padding). */
+const PROFILE_POPOVER_SIZE = 216;
+const PROFILE_POPOVER_CROP_WIDTH = 288;
+
+/**
+ * multibot: pozycja panelu zdjęcia profilowego. Sidebar (`<aside>`) ma
+ * overflow-hidden, więc popover `absolute` był ucinany z PRAWEJ, gdy panel
+ * (240 px) wystawał poza sidebar (domyślnie też 240 px, footer ma padding
+ * 12 px) — prawa krawędź traciła zaokrąglone rogi. Dlatego popover jest
+ * `fixed` (jak menu kontekstowe i hover-karta bota).
+ *
+ * Poziomo panel jest WYŚRODKOWANY w sidebarze: left = sidebar.left +
+ * (szerokość sidebara − szerokość panelu) / 2, czyli równy margines między
+ * lewą krawędzią sidebara a uchwytem zmiany szerokości (ResizeHandle, w-2 =
+ * 8 px przy prawej krawędzi). Panel mieszczący się w sidebarze nie może
+ * dotykać uchwytu — prawa krawędź trzyma się 8 px od krawędzi sidebara.
+ * Szerszy od sidebara cropper (288 px) zostaje wyśrodkowany względem
+ * sidebara na tyle, na ile pozwala clamp do okna — może wystawać w prawo,
+ * bo inaczej nie ma się gdzie zmieścić.
+ */
+/** Uchwyt zmiany szerokości sidebara to pasek `w-2` (8 px) przy prawej
+ * krawędzi — panel zdjęcia trzyma się od niego z daleka. */
+const PROFILE_POPOVER_HANDLE_CLEARANCE = 8;
+
+export function profilePopoverPosition(
+  anchor: { top: number },
+  sidebar: { left: number; width: number },
+  panelWidth: number,
+  innerWidth: number,
+  innerHeight: number,
+): { left: number; bottom: number } {
+  const margin = 8;
+  let left = sidebar.left + (sidebar.width - panelWidth) / 2;
+  if (panelWidth + PROFILE_POPOVER_HANDLE_CLEARANCE <= sidebar.width) {
+    left = Math.min(left, sidebar.left + sidebar.width - panelWidth - PROFILE_POPOVER_HANDLE_CLEARANCE);
+  }
+  return {
+    left: Math.max(margin, Math.min(Math.round(left), innerWidth - panelWidth - margin)),
+    bottom: Math.max(margin, innerHeight - anchor.top + margin),
+  };
+}
+
+/** `collapsed` — wariant dla zwężonej szyny (80 px): sam awatar 32 px bez
+ *  nazwy, ten sam popover uploadu (fixed + clamp w profilePopoverPosition,
+ *  więc panel 216 px przy szynie 80 px cofa się do left = 8 od okna). */
+function ProfileFooterButton({ collapsed = false }: { collapsed?: boolean }) {
+  const { state, dispatch } = useStore();
+  const polish = useLanguage() === "pl";
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; sidebarLeft: number; sidebarWidth: number } | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const profile = state.config?.profile;
+  const avatar = profile?.avatar ?? null;
+
+  const close = () => {
+    setOpen(false);
+    setPendingFile(null);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  /** Odpowiedź POST/DELETE niesie świeży profil — wciskamy go w state.config,
+   *  żeby stopka odświeżyła się bez czekania na kolejny GET /api/config. */
+  const applyUser = (user: { displayName?: string; email?: string | null; avatar?: string | null }) => {
+    const config: ConfigStatus = {
+      composio: { configured: false },
+      box: { configured: false },
+      ...state.config,
+      profile: {
+        name: user.displayName ?? profile?.name ?? "",
+        email: profile?.email ?? "",
+        avatar: user.avatar ?? null,
+      },
+    };
+    dispatch({ type: "configStatus", config });
+  };
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) setPendingFile(f);
+    e.target.value = "";
+  };
+
+  const saveAvatar = async (dataUrl: string) => {
+    setBusy(true);
+    try {
+      const res = await authFetch("/api/profile/avatar", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: dataUrl }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "upload failed");
+      applyUser(body.user ?? {});
+      setPendingFile(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    setBusy(true);
+    try {
+      const res = await authFetch("/api/profile/avatar", { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "delete failed");
+      applyUser(body.user ?? {});
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={rootRef} className={collapsed ? "relative" : "relative min-w-0 flex-1"}>
+      <button
+        type="button"
+        onClick={() => {
+          if (open) {
+            close();
+            return;
+          }
+          const rect = rootRef.current?.getBoundingClientRect();
+          // Rect CAŁEGO sidebara (`<aside>` z ResizeHandle) — z niego idzie
+          // szerokość do wyśrodkowania panelu między lewą krawędzią a uchwytem.
+          const aside = rootRef.current?.closest("aside")?.getBoundingClientRect();
+          setAnchor(
+            rect
+              ? {
+                  top: rect.top,
+                  sidebarLeft: aside?.left ?? 0,
+                  sidebarWidth: aside?.width ?? DEFAULT_SIDEBAR_WIDTH,
+                }
+              : null,
+          );
+          setOpen(true);
+        }}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={polish ? "Zdjęcie profilowe" : "Profile photo"}
+        className={
+          collapsed
+            ? "flex shrink-0 items-center rounded-full hover:bg-raised/50"
+            : "mr-1.5 flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+        }
+      >
+        {avatar ? (
+          <img src={avatar} alt="" className="size-8 shrink-0 rounded-full object-cover" />
+        ) : (
+          <InitialsAvatar initials={profileInitials(profile)} size={32} />
+        )}
+        {!collapsed && (
+          <span className="truncate text-[14px] font-semibold text-ink">
+            {profile?.name?.trim() || profile?.email?.trim() || "You"}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label={polish ? "Zdjęcie profilowe" : "Profile photo"}
+          // Kwadrat z zaokrąglonymi rogami: bok 216 px — mieści się w
+          // domyślnym sidebarze 240 px minus paddingi stopki (2×12 px), więc
+          // panel nie wystaje poza sidebar. Oba stany awatara (bez zdjęcia
+          // i ze zdjęciem + „Usuń zdjęcie") mieszczą się bez ucinania:
+          // podgląd 80 px + gap-2. Treść wyśrodkowana.
+          // Cropper potrzebuje 220 px podglądu, więc na czas kadrowania
+          // panel wraca do szerokości w-72 bez wymuszania kwadratu.
+          // FIXED zamiast absolute: `<aside>` sidebara ma overflow-hidden i
+          // ucinał panelowi prawą krawędź (patrz profilePopoverPosition).
+          className={cn(
+            "fixed z-50 rounded-2xl border border-hairline/40 bg-card p-3 shadow-xl",
+            pendingFile ? "w-72" : "w-[216px] aspect-square",
+          )}
+          style={(() => {
+            const a = anchor ?? { top: window.innerHeight, sidebarLeft: 0, sidebarWidth: DEFAULT_SIDEBAR_WIDTH };
+            const width = pendingFile ? PROFILE_POPOVER_CROP_WIDTH : PROFILE_POPOVER_SIZE;
+            const pos = profilePopoverPosition({ top: a.top }, { left: a.sidebarLeft, width: a.sidebarWidth }, width, window.innerWidth, window.innerHeight);
+            return { left: pos.left, bottom: pos.bottom };
+          })()}
+        >
+          {!pendingFile ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2">
+              <div className="w-full text-center text-[12px] font-medium text-ink-secondary">
+                {polish ? "Zdjęcie profilowe" : "Profile photo"}
+              </div>
+              {avatar ? (
+                <img src={avatar} alt="avatar" className="size-[80px] rounded-full border border-hairline/30 object-cover" />
+              ) : (
+                <div className="flex size-[80px] items-center justify-center rounded-full border border-dashed border-hairline bg-inset">
+                  <ImagePlus size={24} className="text-ink-secondary" />
+                </div>
+              )}
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFilePick} />
+              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy} className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50">
+                {avatar ? (polish ? "Zmień zdjęcie" : "Change photo") : (polish ? "Prześlij zdjęcie" : "Upload photo")}
+              </button>
+              {avatar && (
+                <button type="button" onClick={removeAvatar} disabled={busy} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-raised disabled:opacity-50">
+                  {busy && <Spinner size={12} />}
+                  {polish ? "Usuń zdjęcie" : "Remove photo"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <AvatarCropper file={pendingFile} onSave={saveAvatar} onCancel={() => setPendingFile(null)} />
+              {busy && (
+                <div className="mt-2 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
+                  <Spinner size={12} /> {polish ? "Zapisywanie…" : "Saving…"}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function preview(bot: Bot): string {
@@ -144,7 +422,7 @@ function BotContextMenu({
 }: {
   menu: MenuState;
   onClose: () => void;
-  /** multibot: sekcje sidebaru (port z OpenMausBot #296) */
+  /** multibot: sekcje sidebaru (port z upstreamu #296) */
   onMoveToSection?: (botId: string) => void;
 }) {
   const { state, dispatch } = useStore();
@@ -245,7 +523,7 @@ function BotContextMenu({
 // — obcy tekst czy link nie ma prawa udawać wiersza ani sekcji.
 const SIDEBAR_DRAG_TYPES = ["text/mb-section", "text/mb-group-id", "text/mb-bot-id"] as const;
 
-// multibot: nagłówek sekcji na liście (port z OpenMausBot #296). Wysokość i
+// multibot: nagłówek sekcji na liście (port z upstreamu #296). Wysokość i
 // marginesy są STAŁE (`h-9`, zero paddingu pionowego) — wcześniej `pt-3 pb-1`
 // dawało inny odstęp nad pierwszą sekcją niż między kolejnymi, więc kilka
 // zwiniętych nagłówków obok siebie wyglądało na krzywo poukładane. Odstępy
@@ -495,23 +773,57 @@ function SectionPicker({
   );
 }
 
+/** Szerokość kafelka hovera (`w-72` = 18rem), jego wysokość przy dwóch liniach
+ * opisu i odstęp od krawędzi okna. Kafelek jest `fixed`, więc żaden rodzic go nie
+ * domyka — pozycję trzeba policzyć samemu. */
+const HOVER_CARD_WIDTH = 288;
+// 120 + 24 px wiersza „co teraz robi" (zmierzone: pojawia się tylko przy zajętym bocie)
+const HOVER_CARD_HEIGHT = 144;
+const HOVER_CARD_MARGIN = 8;
+
+/** Kafelek staje po prawej stronie wiersza, ale nigdy poza oknem — ani po prawej,
+ * ani (to był błąd) po lewej. W oknie węższym niż `WIDTH + 2 * MARGIN` kafelek
+ * zwęża się klasą `max-w-[calc(100vw-16px)]`, więc lewa granica `MARGIN` daje wtedy
+ * dokładnie równy margines z obu stron. */
+export function hoverCardPosition(
+  rect: { top: number; right: number },
+  innerWidth: number,
+  innerHeight: number,
+): { top: number; left: number } {
+  const clamp = (value: number, max: number) =>
+    Math.max(HOVER_CARD_MARGIN, Math.min(value, max));
+  return {
+    top: clamp(rect.top - 4, innerHeight - HOVER_CARD_HEIGHT - HOVER_CARD_MARGIN),
+    left: clamp(rect.right + 10, innerWidth - HOVER_CARD_WIDTH - HOVER_CARD_MARGIN),
+  };
+}
+
 // Kafelek hovera: te same klasy co menu kontekstowe, ale pointer-events-none —
 // musnięcie kafelka nie może go zgasić. Pozycję liczy Sidebar (clamp do viewportu).
-function BotHoverCard({ bot, top, left }: { bot: Bot; top: number; left: number }) {
+function BotHoverCard({ bot, live, top, left }: { bot: Bot; live: LiveTurn; top: number; left: number }) {
   const lang = useLanguage();
   const last = bot.messages[bot.messages.length - 1];
+  // „co teraz robi" — zdanie z tej samej tabeli co mina; przy bezczynnym bocie
+  // wiersza nie ma wcale, kafelek wygląda jak dotąd.
+  const doing = activityPhrase(bot, live, lang);
   return (
     <div
       style={{ top, left }}
-      className="pointer-events-none fixed z-50 w-72 rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
+      className="pointer-events-none fixed z-50 w-72 max-w-[calc(100vw-16px)] rounded-xl border border-hairline/50 bg-card p-3 shadow-2xl shadow-black/60"
     >
       <div className="flex items-center gap-2">
-        <MausAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={28} animated={false} />
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} size={28} {...sidebarAvatarProps(bot, live)} />
         {/* godzina na wysokości nazwy; flex-1 na nazwie trzyma ją przy prawej
             krawędzi kafelka (ta sama oś X co wcześniej) */}
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{botDisplayName(bot, lang)}</span>
         {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
       </div>
+      {doing && (
+        <div data-mb-bot-activity className="mt-1.5 flex items-center gap-1.5 text-[12px] text-ink">
+          <span className="size-1.5 shrink-0 rounded-full bg-accent" />
+          <span className="truncate">{doing}</span>
+        </div>
+      )}
       <div className="mt-1.5">
         {/* opis ma pierwszeństwo; bez opisu — ostatnie zadanie/wiadomość (preview) */}
         <span className="line-clamp-2 text-[12.5px] leading-snug text-ink-secondary">
@@ -528,18 +840,21 @@ function BotListItem({
   collapsed,
   onHover,
   onUnhover,
+  now,
 }: {
   bot: Bot;
   onMenu: (menu: MenuState) => void;
   collapsed?: boolean;
   onHover?: (botId: string, rect: DOMRect) => void;
   onUnhover?: () => void;
+  /** wspólny zegar rostera (`useMascotClock` w Sidebar) */
+  now: number;
 }) {
   const { state, dispatch } = useStore();
   // U20: zaznaczenie ma być jedno — po otwarciu grupy bot przestaje być
   // podświetlony (inaczej świecą dwa: grupa i ostatni bot).
   const selected = state.selectedId === bot.id && !state.groupOpen;
-  const avatar = sidebarAvatarProps(bot);
+  const avatar = sidebarAvatarProps(bot, liveTurn(state, bot, now));
   const lang = useLanguage();
   const last = bot.messages[bot.messages.length - 1];
   return (
@@ -547,8 +862,18 @@ function BotListItem({
       onClick={() => dispatch({ type: "select", id: bot.id })}
       onContextMenu={(e) => {
         e.preventDefault();
+        // Android: długie przytrzymanie strzela `contextmenu` — kafelek hovera
+        // nie może stać pod menu kontekstowym.
+        onUnhover?.();
         onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
       }}
+      // Dotyk: przytrzymanie wiersza pokazuje ten sam kafelek co hover (350 ms
+      // opóźnienia siedzi w `showHoverCard`, więc zwykłe tapnięcie go nie budzi);
+      // przesunięcie palca (scroll) kasuje go, zanim wyskoczy.
+      onTouchStart={(e) => onHover?.(bot.id, e.currentTarget.getBoundingClientRect())}
+      onTouchMove={() => onUnhover?.()}
+      onTouchEnd={() => onUnhover?.()}
+      onTouchCancel={() => onUnhover?.()}
       // multibot 0.1.46: bota można przeciągnąć na wiersz grupy (filtracja składu)
       draggable
       onDragStart={(e) => {
@@ -560,13 +885,16 @@ function BotListItem({
       // w szynie nazwa wraca w kafelku, nie w title.
       onMouseEnter={(e) => onHover?.(bot.id, e.currentTarget.getBoundingClientRect())}
       onMouseLeave={() => onUnhover?.()}
+      // multibot: buźka podąża za kursorem po całym podświetlanym wierszu,
+      // nie tylko nad samym awatarem (scope śledzenia — patrz Avatar.tsx).
+      data-mb-avatar-scope
       className={cn(
         "flex w-full items-center rounded-xl text-left",
         collapsed ? "relative justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5",
         selected ? "bg-raised" : "hover:bg-raised/50",
       )}
     >
-      <MausAvatar
+      <BotAvatar
         color={bot.color} avatarUrl={bot.avatarUrl}
         shape={bot.mascotShape}
         state={avatar.state}
@@ -574,6 +902,7 @@ function BotListItem({
         motion={avatar.motion}
         motionKey={avatar.motionKey}
         animated={avatar.animated}
+        trackPointerWhenPaused
       />
       {/* multibot: nazwa i podgląd znikają w szynie, ale kropka zostaje —
           to jedyny sygnał „coś się tu dzieje", jaki tam przeżył. Ta sama
@@ -629,7 +958,7 @@ function GroupContextMenu({ menu, onClose }: { menu: GroupMenuState; onClose: ()
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
   const [busy, setBusy] = useState(false);
-  // multibot: zmiana nazwy grupy (port z OpenMausBot #343) — inline input
+  // multibot: zmiana nazwy grupy (port z upstreamu #343) — inline input
   // w menu, Enter zapisuje (IME-safe), Escape wraca do pozycji menu.
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(menu.group.name || "");
@@ -780,6 +1109,21 @@ function useEngineGroups(workspaceVersion: unknown) {
   return [groups, setGroups] as const;
 }
 
+/** Pozycje elementów klastra w pudełku 48×48 wiersza grupy — indeks wybiera
+ *  slot, plakietka „+N" bierze slot za ostatnim awatarem. Pudełko jest to samo
+ *  co przy bocie, więc wiersze mają równą wysokość.
+ *
+ *  Współrzędne są w pikselach, nie w skoku Tailwinda, bo klaster ma się nakładać
+ *  o ~25%: element ma 24 px, sąsiedzi stoją co 18 px, więc części wspólne mają
+ *  po 6 px. Cały klaster (42×42) siedzi wyśrodkowany w pudełku — stąd margines
+ *  3 px z każdej strony. Kolejność w DOM = kolejność malowania, więc dalszy
+ *  element zawsze leży NA bliższym; żadnego `z-*` tu nie trzeba. */
+const GROUP_AVATAR_SLOTS: Record<GroupAvatarLayout, string[]> = {
+  solo: ["inset-0"],
+  pair: ["left-[3px] top-[12px]", "left-[21px] top-[12px]"],
+  trio: ["left-[3px] top-[3px]", "left-[21px] top-[3px]", "left-[12px] top-[21px]"],
+};
+
 /** Wiersz grupy. Osobnej sekcji „GRUPY" już nie ma — grupa stoi w liście tam,
  *  gdzie wskazuje jej `section`, dokładnie tak samo jak bot. */
 function GroupRow({
@@ -788,12 +1132,15 @@ function GroupRow({
   collapsed,
   onMenu,
   onUpdated,
+  now,
 }: {
   group: EngineGroup;
   bots: Bot[];
   collapsed?: boolean;
   onMenu: (menu: GroupMenuState) => void;
   onUpdated: (group: EngineGroup) => void;
+  /** wspólny zegar rostera (`useMascotClock` w Sidebar) */
+  now: number;
 }) {
   const { state, dispatch } = useStore();
   const lang = useLanguage();
@@ -822,7 +1169,7 @@ function GroupRow({
   const members = g.bot_ids
     .map((id) => bots.find((b) => "mb-" + b.threadId === id))
     .filter((b): b is Bot => b != null);
-  const { shown, overflow } = groupAvatarSplit(members, 2, g.bot_ids.length);
+  const { layout, shown, hiddenCount } = groupAvatarLayout(members, g.bot_ids.length);
   const last = g.messages?.[g.messages.length - 1];
   const attention = members.find((b) => b.needsAttention != null)?.needsAttention;
 
@@ -856,33 +1203,50 @@ function GroupRow({
         else setDragOver(false);
       }}
       title={g.name || g.id}
+      // multibot: scope śledzenia buźki tylko dla grupy z JEDNYM awatarem —
+      // stos kilku awatarów zostaje przy starym śledzeniu nad samym awatarem.
+      data-mb-avatar-scope={layout === "solo" ? "" : undefined}
       className={cn(
         "relative flex w-full items-center rounded-xl text-left",
-        collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2.5",
+        collapsed ? "justify-center px-0 py-1.5" : "gap-3 px-3 py-2.5",
         dragOver ? "bg-raised ring-1 ring-accent" : state.groupOpen?.id === g.id ? "bg-raised" : "hover:bg-raised/50",
       )}
     >
       {members.length > 0 ? (
-        // multibot: wzorzec z Grok Bota - dwa male awatary jeden na drugim
-        // (drugi w prawo i w dol), a "+N" to znaczek NA tym drugim, nie osobny
-        // kafelek obok nazwy. Wiersz ma byc kompaktowy, jak wiersz bota.
-        <span className="relative flex shrink-0 items-center">
-          {shown.map((b, i) => (
-            <span key={b.id} className={cn("relative shrink-0", i > 0 && "-ml-2 mt-2")}>
-              <MausAvatar
-                color={b.color}
-                avatarUrl={b.avatarUrl}
-                shape={b.mascotShape}
-                size={20}
-                {...groupMemberAvatarProps(b)}
+        <span className="relative size-12 shrink-0">
+          {shown.map((member, index) => (
+            // Klucz z indeksem, bo stare grupy mogą nieść ten sam bot_id dwa razy
+            // (dedup wszedł dopiero teraz, po stronie serwera).
+            // `flex` nie jest ozdobą: bez niego slot jest inline i łapie 6 px
+            // zejścia linii pod awatarem, więc awatar 24 px zajmuje 24×30 i
+            // rozjeżdża się z plakietką, która jest blokowa.
+            <span key={`${member.id}-${index}`} className={cn("absolute flex", GROUP_AVATAR_SLOTS[layout][index])}>
+              <BotAvatar
+                color={member.color}
+                avatarUrl={member.avatarUrl}
+                shape={member.mascotShape}
+                size={layout === "solo" ? 48 : 24}
+                {...groupMemberAvatarProps(member, liveTurn(state, member, now))}
+                trackPointerWhenPaused
               />
-              {i === shown.length - 1 && overflow > 0 && (
-                <span className="absolute -bottom-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-control text-[8px] font-semibold leading-none text-ink">
-                  +{overflow}
-                </span>
-              )}
             </span>
           ))}
+          {hiddenCount > 0 && (
+            <span
+              role="img"
+              aria-label={`${hiddenCount} more group members`}
+              // Plakietka jest kolejnym elementem klastra, więc stoi w slocie za
+              // ostatnim awatarem i ma dokładnie jego 24 px. `ring-2` rysował się
+              // NA ZEWNĄTRZ, przez co plakietka miała 28 px i obwódkę, której
+              // żaden awatar nie ma; `border` mieści się w tych samych 24 px.
+              className={cn(
+                "absolute flex size-6 items-center justify-center rounded-full border border-hairline bg-raised text-[11px] font-semibold text-ink-secondary",
+                GROUP_AVATAR_SLOTS[layout][shown.length],
+              )}
+            >
+              +{hiddenCount}
+            </span>
+          )}
           {attention && (
             <span
               title={attention}
@@ -893,8 +1257,8 @@ function GroupRow({
           )}
         </span>
       ) : (
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
-          <Users size={14} />
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
+          <Users size={20} />
         </span>
       )}
       {!collapsed && (
@@ -902,7 +1266,7 @@ function GroupRow({
           <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">
             {groupRowTitle(members.map((b) => botDisplayName(b, lang))) || g.name || g.id}
           </span>
-          {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
+          {last && <span className="shrink-0 text-xs text-ink-secondary">{formatTime(last.at)}</span>}
         </div>
       )}
     </button>
@@ -935,7 +1299,7 @@ function GroupCreateForm({
     setPicked((cur) => {
       const next = new Set(cur);
       if (next.has(engineBotId)) next.delete(engineBotId);
-      else next.add(engineBotId);
+      else if (next.size < MAX_GROUP_MEMBERS) next.add(engineBotId);
       return next;
     });
 
@@ -1004,11 +1368,17 @@ function GroupCreateForm({
                 checked={picked.has(engineBotId)}
                 onChange={() => toggle(engineBotId)}
                 className="accent-accent"
+                disabled={!picked.has(engineBotId) && picked.size >= MAX_GROUP_MEMBERS}
               />
               <span className="truncate">{botDisplayName(b, lang)}</span>
             </label>
           );
         })}
+      </div>
+      {/* Przy 12/12 pola wyboru gasną — licznik jest jedynym wyjaśnieniem, więc
+          czytnik ekranu musi go usłyszeć bez wracania kursorem. */}
+      <div aria-live="polite" className="text-[11px] text-ink-secondary">
+        {picked.size}/{MAX_GROUP_MEMBERS}
       </div>
       {error && <div className="text-[12px] text-danger">{error}</div>}
       <div className="flex gap-2">
@@ -1056,6 +1426,10 @@ function UpdateBadge() {
 
 export function Sidebar() {
   const { state, dispatch } = useStore();
+  // multibot: lista botów właśnie się narysowała (efekt leci po commicie).
+  useEffect(() => {
+    if (state.hydrated) markStartup("bots-rendered");
+  }, [state.hydrated]);
   const polish = useLanguage() === "pl";
   const lang = useLanguage();
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -1067,11 +1441,11 @@ export function Sidebar() {
   // przejeżdżaniu myszką przez listę; wyjazd z wiersza kasuje go natychmiast.
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Jeden zegar dla całego rostera; tyka tylko przy żywej turze lub świętowaniu.
+  const clock = useMascotClock(mascotClockActive(state.bots, state.runtime, Date.now()));
   const showHoverCard = (botId: string, rect: DOMRect) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    // clamp do viewportu: szerokość w-72 (288 px), wysokość ~120 px
-    const top = Math.max(8, Math.min(rect.top - 4, window.innerHeight - 128));
-    const left = Math.min(rect.right + 10, window.innerWidth - 296);
+    const { top, left } = hoverCardPosition(rect, window.innerWidth, window.innerHeight);
     hoverTimer.current = setTimeout(() => setHover({ botId, top, left }), 350);
   };
   const hideHoverCard = () => {
@@ -1079,47 +1453,34 @@ export function Sidebar() {
     hoverTimer.current = null;
     setHover(null);
   };
-  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH));
+  // multibot: ta sama mechanika co panele po prawej (ResizablePanel), tylko
+  // z własnym domknięciem — szyna zwija się do ikon poniżej progu, więc
+  // `clamp` idzie z zewnątrz zamiast prostego min/max.
+  const resize = useResizableWidth(SIDEBAR_WIDTH_KEY, {
+    defaultWidth: DEFAULT_SIDEBAR_WIDTH,
+    min: COLLAPSED_SIDEBAR_WIDTH,
+    max: MAX_SIDEBAR_WIDTH,
+    side: "right",
+    label: polish ? "Zmień szerokość panelu botów" : "Resize bot panel",
+    clamp: clampSidebarWidth,
+  });
+  const sidebarWidth = resize.width;
+  const setSidebarWidth = resize.setWidth;
+  const resizing = resize.resizing;
   const expandedWidth = useRef(
     Math.max(MIN_SIDEBAR_WIDTH, readSidebarWidth(SIDEBAR_EXPANDED_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH)),
   );
-  const [resizing, setResizing] = useState(false);
-  const resizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const collapsed = sidebarWidth === COLLAPSED_SIDEBAR_WIDTH;
 
   useEffect(() => {
+    if (collapsed) return;
+    expandedWidth.current = sidebarWidth;
     try {
-      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
-      if (!collapsed) window.localStorage.setItem(SIDEBAR_EXPANDED_WIDTH_KEY, String(expandedWidth.current));
+      window.localStorage.setItem(SIDEBAR_EXPANDED_WIDTH_KEY, String(sidebarWidth));
     } catch {
       // Private browsing/storage-disabled: sidebar still works for this run.
     }
   }, [collapsed, sidebarWidth]);
-
-  useEffect(() => {
-    const onMove = (event: PointerEvent) => {
-      const drag = resizeRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const width = sidebarWidthFromDrag(drag.startWidth, event.clientX - drag.startX);
-      setSidebarWidth(width);
-      if (width !== COLLAPSED_SIDEBAR_WIDTH) expandedWidth.current = width;
-    };
-    const onStop = (event: PointerEvent) => {
-      if (!resizeRef.current || resizeRef.current.pointerId !== event.pointerId) return;
-      resizeRef.current = null;
-      setResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onStop);
-    window.addEventListener("pointercancel", onStop);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onStop);
-      window.removeEventListener("pointercancel", onStop);
-    };
-  }, []);
 
   // multibot: zwinięcie zamyka wysuwane menu, obojętne czy zwinął je
   // użytkownik, czy zwężone okno. Szyna je i tak przestaje rysować, ale bez
@@ -1143,7 +1504,7 @@ export function Sidebar() {
   const visibleBots = state.bots
     .filter((b) => !b.hidden)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
-  // multibot: sekcje sidebaru (port z OpenMausBot #296) — przypięte zostają na
+  // multibot: sekcje sidebaru (port z upstreamu #296) — przypięte zostają na
   // górze bez podziałów; reszta dzieli się na „bez sekcji" i sekcje w
   // kolejności zapisanej na serwerze. W zwiniętej szynie podziałów nie rysujemy.
   const [sectionPicker, setSectionPicker] = useState<{ botId: string; x: number; y: number } | null>(null);
@@ -1230,42 +1591,7 @@ export function Sidebar() {
       )}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
     >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
-        aria-valuemax={MAX_SIDEBAR_WIDTH}
-        aria-valuenow={sidebarWidth}
-        aria-label={polish ? "Zmień szerokość panelu botów" : "Resize bot panel"}
-        tabIndex={0}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          resizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth };
-          setResizing(true);
-          document.body.style.cursor = "col-resize";
-          document.body.style.userSelect = "none";
-          event.currentTarget.setPointerCapture?.(event.pointerId);
-        }}
-        onKeyDown={(event) => {
-          const next = event.key === "Home"
-            ? COLLAPSED_SIDEBAR_WIDTH
-            : event.key === "End"
-              ? MAX_SIDEBAR_WIDTH
-              : event.key === "ArrowLeft"
-                ? clampSidebarWidth(sidebarWidth - 16)
-                : event.key === "ArrowRight"
-                  ? clampSidebarWidth(sidebarWidth + 16)
-                  : null;
-          if (next == null) return;
-          event.preventDefault();
-          setSidebarWidth(next);
-          if (next !== COLLAPSED_SIDEBAR_WIDTH) expandedWidth.current = next;
-        }}
-        className="group absolute inset-y-0 right-0 z-20 flex w-2 cursor-col-resize touch-none items-center justify-center"
-      >
-        <span className="h-full w-px bg-transparent transition-colors group-hover:bg-accent/50 group-focus-visible:bg-accent" />
-      </div>
+      <ResizeHandle resize={resize} />
       {/* Titlebar: real traffic lights in Electron, faux ones in the browser.
           multibot: data-shell-rail-top = przy oknie bez ramki ten rząd rośnie
           o 4 px, żeby jego przyciski stanęły w linii z kontrolkami okna
@@ -1412,20 +1738,28 @@ export function Sidebar() {
                     onClick={() => dispatch({ type: "select", id: b.id })}
                     onContextMenu={(e) => {
                       e.preventDefault();
+                      hideHoverCard();
                       setMenu({ botId: b.id, x: e.clientX, y: e.clientY });
                     }}
                     onMouseEnter={(e) => showHoverCard(b.id, e.currentTarget.getBoundingClientRect())}
                     onMouseLeave={() => hideHoverCard()}
+                    onTouchStart={(e) => showHoverCard(b.id, e.currentTarget.getBoundingClientRect())}
+                    onTouchMove={() => hideHoverCard()}
+                    onTouchEnd={() => hideHoverCard()}
+                    onTouchCancel={() => hideHoverCard()}
+                    // multibot: cały podświetlany kafelek to scope śledzenia buźki.
+                    data-mb-avatar-scope
                     className={cn(
                       "flex flex-col items-center gap-1.5 rounded-2xl px-2 py-2",
                       isSelected ? "bg-raised" : "hover:bg-raised/50",
                     )}
                   >
-                    <MausAvatar
+                    <BotAvatar
                       color={b.color} avatarUrl={b.avatarUrl}
                       shape={b.mascotShape}
                       size={avatarSize}
-                      {...sidebarAvatarProps(b)}
+                      {...sidebarAvatarProps(b, liveTurn(state, b, clock))}
+                      trackPointerWhenPaused
                     />
                     <span className="w-full truncate text-center text-[12px] font-medium leading-tight text-ink">
                       {botDisplayName(b, lang)}
@@ -1446,6 +1780,8 @@ export function Sidebar() {
             bota, wiersz grupy i nagłówek sekcji dostają ten sam odstęp, więc
             kilka zwiniętych nagłówków obok siebie stoi równo. */}
         <div className="flex flex-col gap-0.5">
+          {!state.hydrated && state.bots.length === 0 &&
+            [0, 1, 2, 3, 4].map((i) => <Skeleton key={`bot-skeleton-${i}`} className="h-9 w-full" />)}
           {flatBots.map((b) => (
             <BotListItem
               key={b.id}
@@ -1454,8 +1790,10 @@ export function Sidebar() {
               collapsed={collapsed}
               onHover={showHoverCard}
               onUnhover={hideHoverCard}
+              now={clock}
             />
           ))}
+          {groups === null && state.hydrated && <Skeleton className="h-9 w-full" />}
           {(collapsed ? groupList : rows.unsectioned.groups).map((g) => (
             <GroupRow
               key={g.id}
@@ -1464,6 +1802,7 @@ export function Sidebar() {
               collapsed={collapsed}
               onMenu={setGroupMenu}
               onUpdated={(next) => setGroups((gs) => (gs ?? []).map((x) => (x.id === next.id ? next : x)))}
+              now={clock}
             />
           ))}
           {!collapsed &&
@@ -1489,6 +1828,7 @@ export function Sidebar() {
                         collapsed={collapsed}
                         onHover={showHoverCard}
                         onUnhover={hideHoverCard}
+                        now={clock}
                       />
                     ))}
                     {section.groups.map((g) => (
@@ -1499,6 +1839,7 @@ export function Sidebar() {
                         collapsed={collapsed}
                         onMenu={setGroupMenu}
                         onUpdated={(next) => setGroups((gs) => (gs ?? []).map((x) => (x.id === next.id ? next : x)))}
+                        now={clock}
                       />
                     ))}
                   </>
@@ -1517,44 +1858,49 @@ export function Sidebar() {
       </div>
 
       {/* Footer */}
-      <div className={cn("pb-3 pt-2", collapsed ? "px-1" : "px-3")}>
+      {/* multibot: w szynie (80 px) stopka trzyma pl-2 — Wtyczki i awatar
+          profilu NIE dotykają lewej krawędzi okna; kolumna: Wtyczki nad
+          awatarem, koło zębate obok awatara (8+32+4+32 = 76 ≤ 80, nic nie
+          wystaje poza szynę). */}
+      <div className={cn("pb-3 pt-2", collapsed ? "pl-2 pr-1" : "px-3")}>
         {/* multibot: Rozmowy botów i Mapa zespołu przeniesione do 3-kropek
             w nagłówku czatu (prawy górny róg) — tu celowo puste. */}
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
           title={collapsed ? (polish ? "Wtyczki" : "Plugins") : undefined}
           className={cn(
-            "flex w-full items-center rounded-xl gap-3 px-3 py-2 text-left hover:bg-raised/50",
-            collapsed ? "justify-center px-0" : "",
+            "flex items-center text-left hover:bg-raised/50",
+            collapsed ? "rounded-full py-1" : "w-full gap-3 rounded-xl px-3 py-2",
           )}
         >
-          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-[#151515] text-ink-secondary">
+          {/* multibot: slot ikony jak DOMYŚLNY awatar profilu (InitialsAvatar:
+              rounded-full bg-raised, 32 px) — wypełnione koło bez obrysu,
+              ikona w text-ink-secondary jak inicjały. */}
+          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
             <Plug size={18} />
           </span>
             {!collapsed && <span className="text-[14px] font-semibold text-ink">{polish ? "Wtyczki" : "Plugins"}</span>}
         </button>
-        {/* multibot: w szynie nazwa użytkownika znika, a ustawienia aplikacji
-            zostają — awatar profilu bez nazwy nic nie wnosi, a koło zębate
-            jest jedynym wejściem w ustawienia. */}
+        {/* multibot: w szynie nazwa użytkownika znika, ale awatar profilu
+            zostaje (klik → ten sam popover uploadu zdjęcia), a koło zębate
+            stoi obok niego w tym samym wierszu. */}
         {collapsed ? (
-          <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className="inline-flex size-8 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"
-            title={polish ? "Ustawienia aplikacji" : "App settings"}
-          >
-            <span className="relative inline-flex">
-              <Settings size={20} />
-              <UpdateBadge />
-            </span>
-          </button>
+          <div className="flex items-center gap-1 pt-1">
+            <ProfileFooterButton collapsed />
+            <button
+              onClick={() => dispatch({ type: "toggleAppSettings" })}
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"
+              title={polish ? "Ustawienia aplikacji" : "App settings"}
+            >
+              <span className="relative inline-flex">
+                <Settings size={20} />
+                <UpdateBadge />
+              </span>
+            </button>
+          </div>
         ) : (
         <div className="flex items-center">
-          <div className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left">
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} size={28} />
-            <span className="truncate text-[14px] text-ink">
-              {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
-            </span>
-          </div>
+          <ProfileFooterButton />
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
             className="inline-flex size-8 items-center justify-center rounded-md p-0 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -1591,7 +1937,7 @@ export function Sidebar() {
       {scoutOpen && <ScoutTeamModal onClose={() => setScoutOpen(false)} />}
       {hover && (() => {
         const bot = state.bots.find((b) => b.id === hover.botId);
-        return bot ? <BotHoverCard bot={bot} top={hover.top} left={hover.left} /> : null;
+        return bot ? <BotHoverCard bot={bot} live={liveTurn(state, bot, clock)} top={hover.top} left={hover.left} /> : null;
       })()}
     </aside>
   );

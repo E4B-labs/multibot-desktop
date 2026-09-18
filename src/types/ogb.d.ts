@@ -39,7 +39,20 @@ declare global {
       /** Trades the server name + password for a short-lived join grant, saves
        * the host and switches the window to it with `#join=<grant>`. The
        * password never leaves the main process. */
-      joinHost?(url: string, serverName: string, serverPassword: string): Promise<HostJoinResult>;
+      joinHost?(url: string, serverName: string, serverPassword: string, remember?: boolean): Promise<HostJoinResult>;
+      /** "Remember me": the five values live encrypted with the OS keystore in
+       * the main process. Only the harmless three come back here — enough to
+       * write "sign in as X on Y" on a button, and not one password. */
+      rememberedLogin?(): Promise<RememberedLogin | null>;
+      /** One tap: the shell does the join AND the profile login natively, then
+       * reloads the window with a ready session. Like `joinHost`, the promise
+       * usually dies with the page. */
+      signInRemembered?(): Promise<{ ok: boolean; error?: string }>;
+      /** The profile half of a remembered login, sent once after the login this
+       * page just made succeeded. Over the bridge, never through the URL. */
+      rememberProfile?(username: string, password: string): Promise<boolean>;
+      /** Drops the remembered login. The explicit "Forget" action. */
+      forgetRemembered?(): Promise<boolean>;
       /** Forgets this host's pinned certificate so the next connection trusts
        * again from scratch — the only way past "server certificate changed",
        * and deliberately a decision the user has to make. */
@@ -126,6 +139,15 @@ export type HostErrorCode =
 export type HostJoinResult =
   | { ok: true; hasUsers?: boolean }
   | { ok: false; error: HostErrorCode | "wrong_server_name" | "wrong_server_password" | "server_not_set_up" | "rate_limited" };
+
+/** The three values of a remembered login the page is allowed to see. Both
+ * passwords stay in the shell's keystore-encrypted store and never reach a
+ * renderer, a log, or localStorage. */
+export interface RememberedLogin {
+  url: string;
+  serverName: string;
+  username: string;
+}
 
 export interface UpdaterState {
   status: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";

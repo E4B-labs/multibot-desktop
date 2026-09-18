@@ -105,8 +105,12 @@ export function SpeakButton({ text }: { text: string }) {
         // multibot: bez `mt-1` i z mniejszym paddingiem — przycisk siedzi teraz
         // w jednym rzędzie ze znacznikiem czasu (stopka dymka w ChatView),
         // więc nie może dokładać własnego odstępu ani rozpychać wiersza.
-        "rounded p-1 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/msg:opacity-100",
-        phase === "error" ? "text-danger" : "text-ink-secondary hover:bg-raised hover:text-ink",
+        // multibot: na telefonie nie ma hovera, wiec `group-hover/msg` nigdy by nie
+        // zadzialal i przycisk bylby niewidoczny - dotyk dostaje go na stale.
+        "rounded p-1 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100",
+        // multibot: ta sama jasna stylistyka co CopyMessageButton — rząd stopki
+        // leży teraz na tle czatu, nie w dymku
+        phase === "error" ? "text-danger" : "text-ink/85 hover:bg-raised hover:text-white",
         phase !== "idle" && "opacity-100",
       )}
       title={

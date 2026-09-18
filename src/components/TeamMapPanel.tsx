@@ -1,4 +1,4 @@
-// multibot: live team map (port z OpenMausBot, TeamMapPage → Panel).
+// multibot: live team map (port z upstreamu, TeamMapPage → Panel).
 // Polls GET /api/team-map co 3s; krawędzie live z snapshotu, sekcje z rostra
 // botów. Droga awaryjna, gdy backend nie ma delegacji: pokazuje same sekcje.
 import { useEffect, useState } from "react";
@@ -7,8 +7,9 @@ import { useStore } from "@/state/store";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
+import { Skeleton } from "./Loading";
 import {
   buildTeamMapEdges,
   buildTeamMapSections,
@@ -21,6 +22,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
   const { state } = useStore();
   const polish = useLanguage() === "pl";
   const [snapshot, setSnapshot] = useState<TeamMapSnapshot>(EMPTY_TEAM_MAP_SNAPSHOT);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -30,7 +32,10 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
         if (!alive || !res.ok) return;
         const body = (await res.json()) as TeamMapSnapshot;
         setSnapshot(body);
-      } catch {}
+      } catch {
+      } finally {
+        if (alive) setLoaded(true);
+      }
     };
     void tick();
     const id = window.setInterval(tick, 3000);
@@ -44,7 +49,14 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
   const edges = buildTeamMapEdges(state.bots, snapshot);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
+    <div
+      // multibot: `data-shell-overlay` — ta sama pułapka co w PluginsPanel:
+      // bez niej okno bez ramki zostawia w górnych 72 px region `drag`
+      // z nagłówka spod spodu i kliknięcia tam nie docierają (styles.css, 5).
+      data-shell-overlay
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6"
+      onClick={onClose}
+    >
       <div
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[86vh] w-[880px] max-w-full flex-col overflow-hidden rounded-2xl border border-hairline/40 bg-panel shadow-2xl"
@@ -57,6 +69,13 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
+          {!loaded ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <Skeleton className="h-28" />
+              <Skeleton className="h-28" />
+            </div>
+          ) : (
+          <>
           {edges.length > 0 && (
             <div className="mb-5 rounded-xl bg-card p-3">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
@@ -104,7 +123,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
                             className="flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-2 py-1 text-[12px] text-ink"
                             title={s.label}
                           >
-                            <MausAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={20} animated={false} />
+                            <BotAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={20} animated={false} />
                             {botDisplayName(bot, polish ? "pl" : "en")} <span className={`size-1.5 rounded-full ${s.tone === "success" ? "bg-emerald-500" : s.tone === "warning" ? "bg-warning" : s.tone === "danger" ? "bg-danger" : "bg-ink-secondary/50"}`} />
                           </span>
                         );
@@ -121,7 +140,7 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
                         className="flex items-center gap-1.5 rounded-full bg-raised px-2 py-1 text-[12px] text-ink"
                         title={s.label}
                       >
-                        <MausAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={18} animated={false} />
+                        <BotAvatar color={(bot as unknown as { color: string }).color as never} shape={(bot as unknown as { shape: unknown }).shape as never} state={stateForBot(bot as never)} size={18} animated={false} />
                         {botDisplayName(bot, polish ? "pl" : "en")}
                       </span>
                     );
@@ -134,6 +153,8 @@ export function TeamMapPanel({ onClose }: { onClose: () => void }) {
             ))}
             {sections.length === 0 && <span className="text-[13px] text-ink-secondary">{polish ? "Brak zespołów" : "No teams"}</span>}
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>

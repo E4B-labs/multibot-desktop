@@ -80,7 +80,7 @@ describe("host resolve", () => {
 
 describe("local harness startup decision", () => {
   // Sedno poprawki: z aktywnym hostem zdalnym zapakowana apka nie forkuje
-  // lokalnego serwera — inaczej zakłada ~/.openmausbot i pokazuje ekran
+  // lokalnego serwera — inaczej zakłada ~/.multibot i pokazuje ekran
   // zakładania serwera, którego użytkownik nigdy nie chciał.
   it("never starts the harness while a remote host is active", () => {
     expect(shouldStartLocalHarness({ isPackaged: true, mode: "remote" })).toBe(false);

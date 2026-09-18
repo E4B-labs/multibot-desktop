@@ -8,7 +8,7 @@
 //
 // The binary itself: bundled `tor.exe` on packaged Windows (PR 3 ships it),
 // otherwise a system `tor` on PATH (`brew install tor` / `apt install tor`),
-// otherwise `OMB_TOR_BIN` for a dev machine. If none of the three is there, an
+// otherwise `MULTIBOT_TOR_BIN` for a dev machine. If none of the three is there, an
 // onion address is simply unavailable and the sign-in screen says so — never a
 // silent direct connection, which would put the address in a DNS query.
 import { spawn } from "node:child_process";
@@ -80,14 +80,14 @@ function findOnPath(name, env, exists) {
  */
 export function resolveTorBinary({ resourcesPath = null, platform = process.platform, env = process.env, exists = existsSync } = {}) {
   // The whole feature has an off switch, and it is the same one the server uses.
-  if (env.OMB_TOR === "0") return null;
+  if (env.MULTIBOT_TOR === "0") return null;
   if (platform === "win32" && resourcesPath) {
     const bundled = join(resourcesPath, "tor", "tor.exe");
     if (exists(bundled)) return bundled;
   }
   const onPath = findOnPath(platform === "win32" ? "tor.exe" : "tor", env, exists);
   if (onPath) return onPath;
-  const dev = env.OMB_TOR_BIN;
+  const dev = env.MULTIBOT_TOR_BIN;
   return dev && exists(dev) ? dev : null;
 }
 

@@ -5,6 +5,10 @@ import { bootstrapLocalAuthToken } from "./lib/auth";
 import "./styles.css";
 import { applySkin, readSkin } from "./lib/skins";
 import { applyMotionMode, readMotionMode } from "./lib/motion";
+import { markStartup } from "./lib/startupTiming";
+
+// multibot: pierwszy znacznik startu — paczka JS sparsowana i uruchomiona.
+markStartup("js-start");
 
 bootstrapLocalAuthToken();
 applySkin(readSkin());

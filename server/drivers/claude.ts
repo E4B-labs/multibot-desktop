@@ -15,11 +15,13 @@ import { fileURLToPath } from "node:url";
 
 import { DATA_DIR } from "../config.ts";
 import { augmentedPath, resolveCliSpawn } from "../env-path.ts";
+import { prootRoots } from "../attachments.ts";
 // multibot (F7): wspólny montaż mcpServers (Composio + własne konektory).
 import { mcpServers as buildMcpServers } from "../mcp-servers.ts";
 import { killTree } from "../kill-tree.ts";
 import { approvalRule } from "../approval-rules.ts";
 import { staleCliNotice } from "../cli-update.ts";
+import { memoryGuard } from "../mem.ts";
 import { approvalRuleAllowed, autoApproveAllowed, canUseIntegration, toolAllowed, turnPolicy } from "../turn-policy.ts";
 
 import type {
@@ -36,6 +38,71 @@ import { appendNative } from "./native.ts";
 import { historyBlock } from "./history.ts";
 
 const DRIVER_KIND = "claudeAgent";
+
+/** Syntetyczny komunikat CLI o padniętym logowaniu — zawsze od pierwszego znaku. */
+const CLI_AUTH_ERROR = /^\s*Failed to authenticate\b/i;
+/** Powód błędu idzie do transkryptu i pusha — klucz API, gdyby CLI go
+ * zacytowało, nie może tam trafić. */
+const redactKeys = (text: string) => text.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-…");
+
+// Gdzie może leżeć `.credentials.json` claude'a. Na Termuxie `claude` to shim
+// (`proot-distro login debian -- …`), więc plik siedzi w rootfs kontenera pod
+// `/root`, a nie w HOME harnessu. Ścieżka do korzenia zmienia się między
+// wersjami proot-distro — kod znał tylko starszy układ (`installed-rootfs/debian`),
+// więc na telefonie Kacpra (nowszy `containers/debian/rootfs`, plik OBECNY)
+// claude meldował się jako NIEZALOGOWANY. `prootRoots()` z attachments.ts zna
+// oba układy i jest tam dokładnie po to; nie powtarzamy tej wiedzy drugi raz.
+export function claudeCredentialPaths(
+  env: Record<string, string | undefined> = process.env,
+  prefixOverride?: string,
+): string[] {
+  const configDir = env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude");
+  return [
+    join(configDir, ".credentials.json"),
+    ...prootRoots(prefixOverride ?? env.PREFIX).map((root) => join(root, "root", ".claude", ".credentials.json")),
+  ];
+}
+
+// Klucz w środowisku to też zalogowanie — tak chodzi CLIProxyAPI i każdy
+// własny endpoint (`ANTHROPIC_BASE_URL`), gdzie żadnego `.credentials.json` nie ma.
+export const claudeIsAuthenticated = (env: Record<string, string | undefined> = process.env): boolean =>
+  claudeAuthState(env).authenticated;
+
+/**
+ * multibot: sama obecność `.credentials.json` nie znaczy „zalogowany". Telefon
+ * Kacpra 11.09.2026: plik JEST, ale `claudeAiOauth.expiresAt` = 0 — CLI
+ * próbowało odświeżyć OAuth, padło i wyzerowało datę; sonda mówiła „zalogowany",
+ * a każda tura kończyła się „Failed to authenticate". Data w przeszłości (albo 0)
+ * = `expired`: refresh token MOŻE jeszcze zadziałać, ale bot ma o tym powiedzieć
+ * PRZED turą, nie po. Brak pola = stary format, plik liczy się jak dotąd.
+ */
+export function claudeAuthState(
+  env: Record<string, string | undefined> = process.env,
+): { authenticated: boolean; reason?: "expired" | "missing" } {
+  // Liczy się to, co dostaje DZIECKO: `spawnWorker` zdejmuje ANTHROPIC_API_KEY
+  // ze środowiska CLI (klucz z powłoki nie ma logować Claude Code'a), więc
+  // klucz nie jest zalogowaniem; `ANTHROPIC_AUTH_TOKEN` (CLIProxyAPI) przechodzi.
+  if (env.ANTHROPIC_AUTH_TOKEN) return { authenticated: true };
+  const file = claudeCredentialPaths(env).find(existsSync);
+  if (!file) return { authenticated: false, reason: "missing" };
+  let oauth: { expiresAt?: unknown; refreshTokenExpiresAt?: unknown } | undefined;
+  try {
+    oauth = JSON.parse(readFileSync(file, "utf8"))?.claudeAiOauth;
+  } catch {
+    return { authenticated: true }; // nieczytelny plik: nie zgadujemy, CLI powie
+  }
+  // Wygasły ACCESS token (`expiresAt` w przeszłości, zwykle +6 h od logowania)
+  // to normalny stan między sesjami: CLI odświeża go na starcie tokenem
+  // odświeżającym i dopiero wtedy przepisuje plik. Martwe logowanie to
+  // `expiresAt` wyzerowane przez CLI po nieudanym odświeżeniu (telefon) albo
+  // wygasły REFRESH token. Wartości w ms (> 1e11); minuta luzu na zegar.
+  const expiresAt = oauth?.expiresAt;
+  const refreshExpiresAt = oauth?.refreshTokenExpiresAt;
+  const wiped = typeof expiresAt === "number" && expiresAt <= 0;
+  const refreshDead = typeof refreshExpiresAt === "number" && refreshExpiresAt > 1e11 && refreshExpiresAt <= Date.now() - 60_000;
+  if (wiped || refreshDead) return { authenticated: false, reason: "expired" };
+  return { authenticated: true };
+}
 
 export interface ClaudeConfig {
   cli: string;
@@ -65,29 +132,21 @@ const cliModel = (model: string | undefined) => {
   return canonicalModel(model);
 };
 
-// multibot: ciepła sesja odpowiada w ~1.7 s, zimny start CLI na telefonie pod
-// obciążeniem kosztował 83 s — o szybkości bota decyduje więc to, czy proces
-// jeszcze żyje, a nie jaki model i ile myśli. Stąd godzina bezczynności zamiast
-// dziesięciu minut. Telefon nie ma RAM-u na proces per wątek, więc liczbę
-// żywych workerów ogranicza LRU (reapWarmWorkers) — ciepły zostaje ten, z kim
-// użytkownik faktycznie rozmawia.
-// Godzina to dokładnie ten przypadek, na który skarżył się użytkownik („także po
-// godzinie ciszy"), więc okno idzie na pół doby. Nie kosztuje to niczego, bo
-// pamięć ogranicza już LRU niżej, a nie zegar: żywych procesów jest tyle samo,
-// tylko czekają na rozmowę dłużej. Zmierzone na s10e: tura po ciszy 70–72 s do
-// pierwszego tokena (dwa boty), ta sama tura na ciepłym workerze 4 s.
-const WORKER_IDLE_MS = Number(process.env.MULTIBOT_WORKER_IDLE_MS) || 12 * 60 * 60_000;
-// multibot: MULTIBOT_WARM_WORKERS=0 włącza tryb „każdy bot to ciepły worker" —
-// nie eksmitujemy nikogo i nie ubijamy nikogo z bezczynności, bo każdy bot ma
-// odpowiadać w kilka sekund także po dobie ciszy. Gdy zmiennej nie ma, zostaje
-// dawne 2: instalacje, które o nic nie prosiły, nie mają nagle trzymać
-// dziesięciu procesów CLI naraz. Czytane przy każdej turze, nie przy imporcie —
-// test podkręca wartość bez przeładowywania modułu.
-// UWAGA: server/index.ts parsuje tę samą zmienną tak samo (warmBots) — obie
-// strony muszą rozumieć 0 identycznie, inaczej rozgrzewamy dwa boty, a limitu
-// nie ma.
-const maxWarmWorkers = () =>
-  process.env.MULTIBOT_WARM_WORKERS ? Number(process.env.MULTIBOT_WARM_WORKERS) || 0 : 2;
+// multibot: bezczynny bot = zero procesów. Zmierzone na telefonie (Termux,
+// 5,4 GB): 19 botów trzymanych ciepło przez 12 h to 7+ procesów claude po
+// 50–225 MB i ~7% CPU każdy, a Android ubija wtedy cały Termux (LOW_MEMORY).
+// Po turze proces żyje jeszcze chwilę (kolejna wiadomość w tej samej rozmowie
+// zastaje ciepły CLI), potem schodzi. Sesja NIE ginie: worker zapisał
+// `session.started` → store.resumeCursors, a następna tura wstaje z
+// `--resume <sessionId>` (spawnWorker niżej).
+// Czytane przy każdej turze, nie przy imporcie — test podkręca wartość bez
+// przeładowywania modułu.
+const workerIdleMs = () => Number(process.env.MULTIBOT_WORKER_IDLE_MS) || 60_000;
+/** Żywe procesy claude w tym serwerze — /api/health. */
+let liveWorkers = 0;
+export const claudeWorkerCount = (): number => liveWorkers;
+/** Szacunek RSS jednego procesu claude (zmierzone 50–225 MB na telefonie). */
+const WORKER_ESTIMATE_BYTES = 250 * 1024 * 1024;
 
 // multibot (B): budżet na PIERWSZY znak życia procesu po wysłaniu tury — nie na
 // całą turę (długie tury są legalne i nie wolno ich ucinać). Ciepły worker
@@ -158,6 +217,8 @@ interface Ask {
 
 const DENY_TIMEOUT_NOTE =
   "MultiBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const NO_TURN_NOTE =
+  "MultiBot: this turn is already over, so nobody can approve this. Do not claim you did it — say plainly what is still missing.";
 const QUESTION_TIMEOUT_NOTE = "MultiBot: nobody answered in time. Use your best judgment and continue.";
 const QUESTION_DISMISS_NOTE = "MultiBot: the user closed the question without answering. Use your best judgment and continue.";
 
@@ -177,7 +238,7 @@ export function permissionSocketPath(threadId: string) {
   // pipe instead, same API on both ends. The pipe namespace is global and
   // flat (DATA_DIR does not isolate it), so the pid keeps concurrent
   // harnesses off each other's names.
-  if (process.platform === "win32") return `\\\\.\\pipe\\omb-perm-${process.pid}-${tag}`;
+  if (process.platform === "win32") return `\\\\.\\pipe\\multibot-perm-${process.pid}-${tag}`;
   return join(DATA_DIR, `perm-${tag}.sock`);
 }
 
@@ -311,7 +372,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const { instanceId, config } = input;
     const listeners = new Set<RuntimeEventListener>();
     type Broker = ReturnType<typeof createPermissionBroker>;
-    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean };
+    type Turn = { turnId: string; broker?: Broker; settled: boolean; sawStreamDelta: boolean; /** powód już zgłoszony jako runtime.error w tej turze */ failed?: string };
     type Worker = {
       child: ReturnType<typeof spawn>;
       signature: string;
@@ -327,9 +388,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       stderr: string;
       /** prompt systemowy, z którym ten proces wstał (--append-system-prompt) */
       system: string;
-      /** do LRU: monotoniczny licznik użycia. NIE zegar — dwie tury w tej samej
-       *  milisekundzie dałyby remis i eksmisję świeżo powołanego procesu. */
-      lastUsed: number;
       idleTimer?: ReturnType<typeof setTimeout>;
       onLine?: (line: string) => void;
       /** multibot (B): pierwszy znak życia z procesu — rozbraja watchdoga tury */
@@ -341,26 +399,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     // worker restart.
     const active = new Map<string, { stop: () => void; turnId: string; broker?: Broker }>();
     const workers = new Map<string, Worker>();
-    let useSeq = 0;
-    // multibot: ubijamy najdawniej używane BEZCZYNNE procesy, nigdy takiego z turą
-    // w locie. Bez limitu każdy wątek trzymałby własny CLI przez godzinę.
-    // `protect` to wątek, dla którego właśnie stawiamy proces — jego `current`
-    // jeszcze nie istnieje, więc bez tego wyjątku mógłby paść własną ofiarą.
-    const reapWarmWorkers = (protect: string) => {
-      const limit = maxWarmWorkers();
-      if (limit <= 0 || workers.size <= limit) return;
-      const idle = [...workers.entries()]
-        .filter(([key, w]) => !w.current && key !== protect)
-        .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-      for (const [key, victim] of idle) {
-        if (workers.size <= limit) break;
-        workers.delete(key);
-        if (victim.idleTimer) clearTimeout(victim.idleTimer);
-        victim.broker?.close();
-        killTree(victim.child);
-      }
-    };
-
     const emit = (event: RuntimeEvent) => {
       for (const l of [...listeners]) l(event);
     };
@@ -375,6 +413,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      // multibot: wygasły OAuth znany PRZED turą (plik z `expiresAt` 0 lub w
+      // przeszłości) — nie stawiamy CLI, żeby po 30 s zimnego startu usłyszeć
+      // to samo. Ta sama trójka zdarzeń, co przy padniętym procesie: index.ts
+      // parkuje bota na `needsAttention`, stawia banerkę i kartę logowania.
+      // Tylko `expired`: brak pliku zostawiamy CLI (klucz może przyjść inaczej).
+      // Rozgrzewka (`warmOnly`) nie jest turą — bez zdarzeń, jak dotąd; karta ma
+      // stanąć przy wiadomości człowieka, nie przy starcie serwera.
+      if (!(turn as SendTurnInput & { warmOnly?: boolean }).warmOnly && claudeAuthState().reason === "expired") {
+        const turnId = newId();
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Failed to authenticate: claude OAuth session expired. Sign in again to continue." });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "auth_expired", cost: null });
+        return { turnId };
+      }
       const policy = turnPolicy(threadId);
       const turnId = newId();
       const selectedModel = cliModel(turn.model);
@@ -390,6 +442,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // (Gmail, Supabase…), o które nikt go nie prosił i których nie
         // sprawdza żadna bramka uprawnień tego harnessu.
         "--strict-mcp-config",
+        // multibot: to samo dla USTAWIEŃ. Bez tego CLI wczytuje osobisty
+        // CLAUDE.md, skille, hooki i pluginy właściciela maszyny (E2E 10.09.2026
+        // na PC Kacpra: bot odpowiadał w jego „caveman mode", przedstawiał się
+        // jego nazwą, wyliczał 171 jego skilli zamiast jednego skilla z
+        // workspace'u i zaczynał turę 20 s dłużej). Tożsamość, pamięć i skille
+        // bota niesie prompt systemowy harnessu — nic z ~/.claude nie ma do niej
+        // wstępu. Na telefonie nic się nie zmienia: ~/.claude jest tam puste.
+        "--setting-sources", "",
       ];
       // Haiku has no adaptive-effort control in Claude Code.
       if (selectedModel !== "claude-haiku-4-5") args.push("--effort", requestedReasoning || "low");
@@ -434,6 +494,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // Odcinamy je, żeby model sięgnął po `mcp__agents__ask_user`, które
         // stawia w czacie prawdziwą kartę i czeka na człowieka.
         "AskUserQuestion",
+        // multibot: skille bota to skille WORKSPACE'U (prompt „# Reusable
+        // skills" + `list_skills`/`create_skill`). Wbudowane `Skill` Claude
+        // Code'a wnosi do prompta listę skilli SAMEGO CLI (code-review, loop,
+        // schedule…) i model odpowiadał nią na „jakie masz skille?", a skilla
+        // wgranego przez użytkownika „nie widział" (E2E 10.09.2026: 13 skilli
+        // CLI, „no greeting skill", mimo że był w prompcie). Bez tego
+        // narzędzia wylicza i STOSUJE skille z workspace'u.
+        "Skill",
         ...(policy ? [
           ...(policy.permissions.terminal === false ? ["Bash"] : []),
           ...(policy.permissions.file === false ? ["Read", "Edit", "Write", "NotebookEdit", "Glob", "Grep"] : []),
@@ -460,7 +528,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // ponownie użyty zamiast paść od razu na niezgodność podpisu.
       const warmOnly = (turn as SendTurnInput & { warmOnly?: boolean }).warmOnly === true;
 
-      const spawnWorker = (resume: string | null): Worker => {
+      const spawnWorker = async (resume: string | null): Promise<Worker> => {
+        await memoryGuard(WORKER_ESTIMATE_BYTES);
         // multibot (A1): Claude Code NIE ma wyścigu codexa — czeka na łączące się
         // serwery MCP (tool search / WaitForMcpServers), a awarię serwera zgłasza
         // Claude'owi zamiast cicho pominąć narzędzia. `MCP_TIMEOUT` to startup
@@ -478,10 +547,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         if (turn.system) launchArgs.push("--append-system-prompt", turn.system);
         const cli = cliSpawn(config.cli, launchArgs);
         const child = spawn(cli.command, cli.args, {
-          cwd: turn.cwd ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"],
+          cwd: turn.cwd ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
           windowsVerbatimArguments: cli.windowsVerbatimArguments, detached: true,
         });
-        const fresh: Worker = { child, signature, sessionId, needsReplay: resume === null, buffer: "", stderr: "", system: turn.system ?? "", lastUsed: ++useSeq };
+        const fresh: Worker = { child, signature, sessionId, needsReplay: resume === null, buffer: "", stderr: "", system: turn.system ?? "" };
+        liveWorkers++;
+        child.once("exit", () => { liveWorkers--; });
         workers.set(threadId, fresh);
         return fresh;
       };
@@ -495,12 +566,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       let spawnedWorker = false;
       if (!worker || worker.child.stdin?.destroyed) {
-        worker = spawnWorker(typeof turn.resumeCursor === "string" ? turn.resumeCursor : null);
+        worker = await spawnWorker(typeof turn.resumeCursor === "string" ? turn.resumeCursor : null);
         spawnedWorker = true;
-        reapWarmWorkers(threadId);
       }
       if (worker.idleTimer) clearTimeout(worker.idleTimer);
-      worker.lastUsed = ++useSeq;
       // multibot: prompt systemowy trafia do CLI raz, przy spawnie. Gdy zmienił
       // się między turami (bot coś zapamiętał, doszedł skill, zmieniła się
       // autonomia), dowozimy go tą turą zamiast stawiać proces od nowa.
@@ -517,11 +586,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // multibot: zegar bezczynności zbrojony w jednym miejscu — po turze i po
       // rozgrzewce, żeby proces postawiony „na zapas" też kiedyś zszedł.
       const armIdle = () => {
-        // W trybie bez limitu bezczynność nie ubija procesu: cały sens „każdy
-        // bot zawsze active" polega na tym, że bot po tygodniu ciszy odpowiada
-        // tak samo szybko jak w środku rozmowy. Pamięci pilnuje wtedy liczba
-        // botów, a nie zegar.
-        if (maxWarmWorkers() <= 0) return;
         const w = worker!;
         if (w.idleTimer) clearTimeout(w.idleTimer);
         w.idleTimer = setTimeout(() => {
@@ -530,7 +594,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             w.broker?.close();
             killTree(w.child);
           }
-        }, WORKER_IDLE_MS);
+        }, workerIdleMs());
         w.idleTimer.unref?.();
       };
 
@@ -560,10 +624,22 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return;
           }
           const activeTurn = worker?.current;
-          if (!activeTurn) return;
+          if (!activeTurn) {
+            // multibot: bez aktywnej tury karty NIE MA GDZIE postawić — a samo
+            // porzucenie prośby trzymało CLI na niej piętnaście minut
+            // (`DENY_TIMEOUT_NOTE` niżej). Zmierzone 11.09.2026 na żywym haiku:
+            // bot obiecał „wysyłam trzy pliki", zawołał `Write`, watchdog zdjął
+            // turę, a kolejne prośby (drugi `Write`, `PowerShell`) przepadły
+            // bez śladu — użytkownik nie zobaczył ani karty, ani plików, ani
+            // odmowy. Odpowiadamy od razu, żeby model wiedział i to napisał.
+            queueMicrotask(() => worker?.broker?.answer(ask.id, "deny", NO_TURN_NOTE));
+            return;
+          }
           emit({ ...base(threadId, activeTurn.turnId), type: "request.opened", requestId: ask.id,
             requestType: ask.kind, tool: ask.tool, summary: askSummary(ask),
             choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
+            ...(ask.input?.multiple === true ? { multiple: true } : {}),
+            ...(typeof ask.input?.detail === "string" && ask.input.detail.trim() ? { detail: ask.input.detail.trim().slice(0, 400) } : {}),
             ...(ask.kind === "permission" ? { approvalRule: remembered } : {}) });
         },
         onResolve: (resolved) => {
@@ -614,7 +690,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // A stale CLI reports "…or newer is required" as ordinary assistant
             // text; staleCliNotice starts `claude update` and says so.
             const text = staleCliNotice(firstText(msg.content));
-            if (text.trim()) {
+            // multibot: CLI 2.1.268 nie wychodzi z kodem 1 przy wygasłym OAuth
+            // — wstawia SYNTETYCZNY komunikat „Failed to authenticate: …" jako
+            // wiadomość asystenta (bez strumienia delt) i kończy `result` z
+            // `is_error`. Telefon Kacpra 11.09.2026 21:18: zdanie wylądowało
+            // w dymku bota. Rozpoznajemy WYŁĄCZNIE kształt CLI: tekst zaczyna
+            // się od „Failed to authenticate" i nic z niego nie popłynęło
+            // deltą — zwykła odpowiedź modelu o „401" czy „OAuth session
+            // expired" zostaje dymkiem (recenzja #182: 6/8 normalnych
+            // odpowiedzi łapało się na luźne `authFailure()`).
+            const cliAuthError = CLI_AUTH_ERROR.test(text) && !worker!.current!.sawStreamDelta;
+            if (cliAuthError && !worker!.current!.failed) {
+              worker!.current!.failed = text.trim();
+              emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(text.trim()).slice(0, 300) });
+            } else if (text.trim() && !cliAuthError) {
               // fallback delta for CLIs/paths that never streamed the block
               if (!worker!.current!.sawStreamDelta) {
                 emit({ ...base(threadId, worker!.current!.turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
@@ -644,9 +733,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               }
             }
             break;
-          case "result":
+          case "result": {
+            // multibot: `result.is_error` niesie PRAWDZIWY powód w `result`
+            // (albo w `errors`). Bez tego tura padała po cichu i index.ts
+            // dopisywał „model nic nie napisał" — mylące, gdy powodem jest
+            // wygasłe logowanie. Gdy CLI nie podało słowa, a plik poświadczeń
+            // zniknął, powód i tak jest znany: bot nie jest zalogowany.
+            if (o.is_error === true && !worker!.current!.failed) {
+              const reason = (typeof o.result === "string" ? o.result : Array.isArray(o.errors) ? o.errors.join("; ") : "").trim()
+                || (!claudeIsAuthenticated() ? "Failed to authenticate: claude is not logged in" : "");
+              if (reason) {
+                worker!.current!.failed = reason;
+                emit({ ...base(threadId, worker!.current!.turnId), type: "runtime.error", message: redactKeys(reason).slice(0, 300) });
+              }
+            }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
             break;
+          }
         }
       };
       worker.onLine = handleLine;
@@ -754,7 +857,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         firstEventTimer = setTimeout(onSilence, firstEventMs(freshSpawn));
         firstEventTimer.unref?.();
       };
-      function onSilence() {
+      async function onSilence() {
         firstEventTimer = undefined;
         if (current.settled) return;
         const dead = worker!;
@@ -779,7 +882,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         retried = true;
         // Sesja mogła już istnieć (worker odpowiadał wcześniej) — wznawiamy ją,
         // żeby powtórzona tura nie zgubiła kontekstu rozmowy.
-        worker = spawnWorker(dead.sessionId);
+        worker = await spawnWorker(dead.sessionId);
         worker.broker = inherited;
         worker.current = current;
         worker.onLine = handleLine;
@@ -803,19 +906,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           {
             timeout: 8000,
             env: { ...process.env, PATH: augmentedPath() },
+            windowsHide: true,
             windowsVerbatimArguments: cli.windowsVerbatimArguments,
           },
           (err, stdout) => resolve(err ? null : stdout.trim()),
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const termuxRoot = process.env.PREFIX
-        ? join(process.env.PREFIX, "var", "lib", "proot-distro", "installed-rootfs", "debian", "root")
-        : null;
-      const authenticated = [
-        join(homedir(), ".claude", ".credentials.json"),
-        ...(termuxRoot ? [join(termuxRoot, ".claude", ".credentials.json")] : []),
-      ].some(existsSync);
+      const authenticated = claudeIsAuthenticated();
       return { state: "available", version, authenticated };
     };
 
@@ -862,6 +960,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             {
               timeout: 60_000,
               env: { ...process.env, PATH: augmentedPath() },
+              windowsHide: true,
               windowsVerbatimArguments: cli.windowsVerbatimArguments,
             },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),

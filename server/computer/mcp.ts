@@ -11,18 +11,18 @@
 // stdout is the MCP channel — never console.log here.
 //
 // Env, injected by the harness:
-//   OMB_HARNESS_URL  base URL of the harness
-//   OMB_BOT_ID       the calling bot
-//   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
+//   MULTIBOT_HARNESS_URL  base URL of the harness
+//   MULTIBOT_BOT_ID       the calling bot
+//   MULTIBOT_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 import { resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 import { harnessRequest } from "../drivers/harness-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "https://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const HARNESS = process.env.MULTIBOT_HARNESS_URL ?? "https://127.0.0.1:8799";
+const BOT_ID = process.env.MULTIBOT_BOT_ID ?? "";
+const TOKEN = process.env.MULTIBOT_COMMS_TOKEN ?? "";
 
 export const TOOLS = [
   {

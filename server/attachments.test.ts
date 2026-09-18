@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AttachmentStore, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fetchRemoteFile, fileMime, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 
 const roots: string[] = [];
 const make = () => {
@@ -38,6 +38,62 @@ describe("resolveBotFile", () => {
   });
 });
 
+// Regresja (K6, zmierzone 11.09.2026 na zywym haiku): `send_file` bierze MIME
+// od modelu, model go pomijal, plik `red_square.png` ladowal w czacie jako
+// `application/octet-stream` i transkrypt pokazywal szary kafelek zamiast
+// obrazka. Bot mowil "wyslalem obrazek", a obrazka nie bylo widac.
+describe("fileMime", () => {
+  it("czyta MIME z rozszerzenia, gdy model go nie podal albo wrzucil worek", () => {
+    expect(fileMime("red_square.png", "application/octet-stream")).toBe("image/png");
+    expect(fileMime("red_square.PNG")).toBe("image/png");
+    expect(fileMime("notes.txt", "")).toBe("text/plain");
+    expect(fileMime("data.csv", "nonsense")).toBe("text/csv");
+  });
+
+  it("sensowna deklaracja modelu wygrywa nad rozszerzeniem", () => {
+    expect(fileMime("notes.txt", "text/markdown")).toBe("text/markdown");
+    expect(fileMime("chart.png", "image/jpeg")).toBe("image/jpeg");
+  });
+
+  // Model wpisuje w to pole byle co, a od tego zalezy `<img>` kontra kafelek.
+  it("rozszerzenie obrazka bije deklaracje, ktora obrazkiem nie jest", () => {
+    expect(fileMime("chart.png", "text/plain")).toBe("image/png");
+    expect(fileMime("chart.png", "binary/octet-stream")).toBe("image/png");
+  });
+
+  // Tresc AKTYWNA nie powstaje ze zgadywania po nazwie: nazwa przychodzi od
+  // modelu, a `text/html` z trasy pobrania biegl na originie aplikacji.
+  it("nie zgaduje typow wykonywalnych z nazwy pliku", () => {
+    for (const name of ["report.html", "page.htm", "logo.svg", "feed.xml"]) {
+      expect(fileMime(name)).toBe("application/octet-stream");
+    }
+    // Zadeklarowany jawnie przechodzi jak dotad — bramka jest wtedy
+    // `content-disposition` na trasie pobrania, nie to MIME.
+    expect(fileMime("report.html", "text/html")).toBe("text/html");
+  });
+
+  it("nieznane rozszerzenie zostaje workiem, jak dotad", () => {
+    expect(fileMime("dump.qqq")).toBe("application/octet-stream");
+    expect(fileMime("bez-rozszerzenia")).toBe("application/octet-stream");
+  });
+});
+
+describe("fetchRemoteFile", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("downloads a remote image and keeps its response MIME", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("image bytes", {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    })));
+
+    await expect(fetchRemoteFile("https://cdn.example/image.png")).resolves.toMatchObject({
+      mime: "image/png",
+      bytes: Buffer.from("image bytes"),
+    });
+  });
+});
+
 describe("attachment store", () => {
   it("persists metadata, enforces ownership and deletes files with bot", () => {
     const { root, store } = make();
@@ -47,6 +103,14 @@ describe("attachment store", () => {
     expect(new AttachmentStore(root).resolve("bot-a", file.id)).toMatchObject(file);
     store.deleteBot("bot-a");
     expect(existsSync(join(root, "bot-a"))).toBe(false);
+  });
+
+  it("zapisuje obrazek jako obrazek i mierzy go limitem obrazka, mimo worka od modelu", () => {
+    const { store } = make();
+    expect(store.add("bot", "chart.png", "application/octet-stream", Buffer.from("png")).mime).toBe("image/png");
+    // Limit idzie za wywnioskowanym MIME, nie za deklaracją: wcześniej obrazek
+    // podany jako octet-stream przechodził przez limit dokumentu (25 MB).
+    expect(() => store.add("bot", "huge.png", "application/octet-stream", Buffer.alloc(MAX_IMAGE_BYTES + 1))).toThrow(/8 MB/);
   });
 
   it("rejects traversal, duplicate ids, count and image size limits", () => {

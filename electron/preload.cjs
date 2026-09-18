@@ -50,7 +50,20 @@ contextBridge.exposeInMainWorld("ogb", {
    * obietnica zwykle ginie razem ze stroną — tak ma być.
    * Hasło jedzie tędy w jawnej postaci: NIGDY nie logować argumentów tego
    * wywołania ani nie przepisywać ich do żadnego stanu, który przeżyje ekran. */
-  joinHost: (url, serverName, serverPassword) => ipcRenderer.invoke("hosts:join", url, serverName, serverPassword),
+  joinHost: (url, serverName, serverPassword, remember) => ipcRenderer.invoke("hosts:join", url, serverName, serverPassword, remember),
+  /** „Zapamiętaj mnie". Pięć wartości leży ZASZYFROWANYCH kluczem systemowym w
+   * procesie głównym (electron/remember.mjs); tędy wraca wyłącznie to, co
+   * wolno napisać na przycisku — adres, nazwa serwera, nazwa profilu. */
+  rememberedLogin: () => ipcRenderer.invoke("remember:get"),
+  /** Jedno stuknięcie: proces główny robi natywnie join i logowanie profilu, po
+   * czym przeładowuje okno z gotową sesją. Jak `joinHost`, obietnica zwykle
+   * ginie razem ze stroną. */
+  signInRemembered: () => ipcRenderer.invoke("remember:signin"),
+  /** Druga połowa wpisu, po tym jak logowanie profilu na stronie się udało.
+   * Hasło jedzie tędy w jawnej postaci — nigdy nie logować argumentów. */
+  rememberProfile: (username, password) => ipcRenderer.invoke("remember:profile", username, password),
+  /** Kasuje zapamiętane logowanie. Jawna decyzja użytkownika („Zapomnij"). */
+  forgetRemembered: () => ipcRenderer.invoke("remember:forget"),
   /** Zapomina przypięty certyfikat hosta — jawna zgoda użytkownika po tym, jak
    * serwer wystawił sobie nowy. Bez tego „server certificate changed" nie ma
    * wyjścia, a z automatu byłoby to przypięcie tylko z nazwy. */

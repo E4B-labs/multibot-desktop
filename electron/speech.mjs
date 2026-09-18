@@ -23,13 +23,13 @@ function ensureBuilt() {
   const stale = !existsSync(BIN) || statSync(BIN).mtimeMs < statSync(SRC).mtimeMs;
   if (!stale) return;
   // Xcode CLT required; ~2s once, then cached until the source changes
-  execFileSync("swiftc", ["-O", SRC, "-o", BIN], { stdio: "pipe", timeout: 120_000 });
+  execFileSync("swiftc", ["-O", SRC, "-o", BIN], { stdio: "pipe", timeout: 120_000, windowsHide: true });
 }
 
 export function startSpeech(win) {
   stopSpeech();
   ensureBuilt();
-  const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   child = proc;
 
   let buf = "";

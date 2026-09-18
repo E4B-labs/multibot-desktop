@@ -8,8 +8,10 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 
 import { botSystemPrompt } from "./bot-prompt.ts";
+import { appendClientTiming, parseClientTiming, readClientTiming } from "./client-timing.ts";
 // multibot: autoweryfikacja — filtr na prośbach o zgodę, patrz server/auto-verify.ts.
 import { decideAction, normalizeAutoVerify, type AutoVerifyState } from "./auto-verify.ts";
 import { fleetStatusBlock } from "./fleet-status.ts";
@@ -20,7 +22,7 @@ import {
   type FleetEnvironment,
 } from "./fleet-environment.ts";
 import * as box from "./box.ts";
-import { AttachmentStore, MAX_FILE_BYTES, resolveBotFile } from "./attachments.ts";
+import { AttachmentStore, fetchRemoteFile, fileMime, INLINE_UNSAFE_MIME, MAX_FILE_BYTES, MAX_IMAGE_BYTES, resolveBotFile } from "./attachments.ts";
 import { adminOverview, recordTurnEvent } from "./admin.ts";
 import { mountAuth, requestActor } from "./auth.ts";
 import {
@@ -31,7 +33,7 @@ import {
 import { canBotContact, canManageBot, canReadBot } from "./acl.ts";
 import * as composio from "./composio.ts";
 // multibot (U28): powiadomienia push, gdy bot wchodzi w needsAttention.
-import { registerPushDevice, notifyPushDevices } from "./push.ts";
+import { registerPushDevice, notifyPushDevices, shouldNotify, allowCardPush, allowNotify, type PushKind } from "./push.ts";
 import {
   BUILT_IN_CLI_IDS,
   DEFAULT_INSTANCE_CONFIGS,
@@ -46,7 +48,11 @@ import {
 } from "./config.ts";
 import { newId, type ApprovalRuleCandidate, type RuntimeEvent } from "./contracts.ts";
 import { CLI_TOOLS, installCommandText } from "./cli-tools.ts";
+import { authFailure, cliToolIdFor, loginExpiredNote, loginExpiredTool, openLoginCard, openLoginCards } from "./auth-failure.ts";
+import { claudeAuthState, claudeWorkerCount } from "./drivers/claude.ts";
 import { lastToolUpdate, scheduleHarnessUpdates } from "./cli-update.ts";
+import { availableMemoryBytes, totalMemoryBytes } from "./mem.ts";
+import { turnGate } from "./turn-gate.ts";
 import { deviceInfo, deviceResources } from "./device.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -58,11 +64,15 @@ import {
   ensureComputer,
   resumeComputer,
   exec as computerExec,
+  readComputerFile,
+  holdComputer,
+  releaseComputerHold,
+  computerIdleStatus,
 } from "./hosted-computer.ts";
 import * as computerControl from "./computer-control.ts";
 // multibot: the browser half of the computer — CDP tools and the teach recorder,
 // back in the harness after the Python engine took them with it.
-import { computerTool, computerToolset } from "./computer/index.ts";
+import { computerTool, computerToolset, screenshot as localScreenshot } from "./computer/index.ts";
 import * as teach from "./computer/teach.ts";
 import { filterSearchResults, searchText, type SearchResult } from "./search.ts";
 import { promptWithReply, resolveReplyTarget } from "./replies.ts";
@@ -72,17 +82,20 @@ import { broadcastWs, mountEventsWs } from "./events-ws.ts";
 import { EventBus } from "./harness/bus.ts";
 // multibot (F7): własne serwery MCP użytkownika obok Composio
 import * as mcpConnectors from "./mcp-connectors.ts";
+import { probeMcp } from "./mcp-probe.ts";
 import * as googleWorkspace from "./google-workspace.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { HarnessRoutines, oneShotAt, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
+import { HarnessRoutines, routineTurnText, verifyWebhookSignature, type HarnessRoutine } from "./routines.ts";
+import { Reminders, SNOOZE_DEFAULT_MIN } from "./reminders.ts";
 import { GroupStore, groupMemberId, threadIdOfGroupMember } from "./group-store.ts";
 import { budgetLeft, isAcknowledgement, isDuplicateOfLast, RoomStore, ROOM_DONE_MARKER, type RoomRecord } from "./rooms.ts";
 import { GoalStore, GOAL_DONE_MARKER, goalThreadId, parseGoalCommand, type GoalRecord } from "./goals.ts";
 import { jobProgress, SetupJobs } from "./setup-jobs.ts";
 import { type TurnIntegrationsLike } from "./turn-tools.ts"; // multibot (A2): wyliczenie narzędzi tury w prompcie
-import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
+import { BOT_COLORS, BOT_SHAPES, defaultSelectionTarget, managedBotPatch, mentionedBots, Store, withoutLegacyGroupLeak, type BotRecord, type ConnectorTarget, type Message, type OptionCardData } from "./store.ts";
 import { CREDENTIAL_TARGETS, credentialConfigPatch, isCredentialTargetId, type CredentialTargetId } from "./credential-request.ts";
 import { inspectorEvents, recordInspectorEvent, replayInspectorEvents } from "./inspector.ts";
+import { isContextCompactionNotice } from "./provider-notice.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { canUseIntegration, clearTurnPolicy, rememberApprovalRule, setTurnPolicy, toolsetAllowed, turnPolicy } from "./turn-policy.ts";
 import { webMcpIntegration } from "./drivers/web-proxy.ts";
@@ -94,28 +107,31 @@ import { ensureTlsMaterial } from "./tls-cert.ts";
 import { currentReport, initNetAddress, isPrivateIPv4, noteReachedHost, pinAddress, refreshAddress, unmapPort } from "./net-address.ts";
 import { onionSuppressed, startTor, torBinary, torEnabled, TOR_INGRESS_PORT, type Tor } from "./tor.ts";
 
-const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
+// multibot: id konektorów, dla których trwa właśnie „testuj połączenie".
+// Sonda stdio odpala prawdziwy proces na maks. 15 s — jedna naraz na konektor.
+const probesInFlight = new Set<string>();
+const PORT = Number(process.env.MULTIBOT_PORT || process.env.OGB_PORT || 8799);
 // `Number("eight")` is NaN and `server.listen(NaN)` quietly picks a RANDOM free
 // port — a server nobody can find, reported as running. And 8798 is the Tor
 // ingress: sharing it would put every direct client in the Tor rate-limit
 // bucket and, worse, make `isLoopbackRequest` false for the local browser.
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535 || PORT === TOR_INGRESS_PORT) {
-  console.error(`[multibot] OMB_PORT=${process.env.OMB_PORT ?? process.env.OGB_PORT ?? ""} is not usable — give a whole number from 1 to 65535, and not ${TOR_INGRESS_PORT} (that one belongs to the Tor ingress).`);
+  console.error(`[multibot] MULTIBOT_PORT=${process.env.MULTIBOT_PORT ?? process.env.OGB_PORT ?? ""} is not usable — give a whole number from 1 to 65535, and not ${TOR_INGRESS_PORT} (that one belongs to the Tor ingress).`);
   process.exit(1);
 }
-const HOST = process.env.OMB_HOST?.trim() || "127.0.0.1";
+const HOST = process.env.MULTIBOT_HOST?.trim() || "127.0.0.1";
 const LOOPBACK_HOST = new Set(["127.0.0.1", "::1", "localhost"]).has(HOST.toLowerCase());
 // TLS jest ZAWSZE, poza jednym świadomym wyjątkiem: reverse proxy, które samo
 // kończy HTTPS i rozmawia z harnessem po loopbacku (docs/REMOTE-ACCESS.md).
-const TLS_OFF = /^(0|off|false|no)$/i.test(process.env.OMB_TLS?.trim() ?? "");
+const TLS_OFF = /^(0|off|false|no)$/i.test(process.env.MULTIBOT_TLS?.trim() ?? "");
 const SCHEME = TLS_OFF ? "http" : "https";
-const PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "");
+const PUBLIC_URL = process.env.MULTIBOT_PUBLIC_URL?.trim().replace(/\/+$/, "");
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE = !LOOPBACK_HOST;
 
 /** What to print as "the address". A server bound to one interface is only
  * reachable there, so advertising some other NIC would be a lie; only a
- * wildcard bind gets to pick. `OMB_PUBLIC_URL` still wins — someone who put a
+ * wildcard bind gets to pick. `MULTIBOT_PUBLIC_URL` still wins — someone who put a
  * real domain in front knows better than any discovery. */
 function primaryAddress(port: number): string {
   if (PUBLIC_URL) return PUBLIC_URL;
@@ -167,7 +183,7 @@ function relayHost(): string | null {
 // see `onionSuppressed`; that check also decides whether the built UI is served.
 const ONION_SUPPRESSED = onionSuppressed(LOOPBACK_HOST, TLS_OFF);
 const TOR_POSSIBLE = !ONION_SUPPRESSED && torEnabled() && torBinary() !== null;
-const STATIC_DIR = process.env.OMB_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
+const STATIC_DIR = process.env.MULTIBOT_STATIC_DIR || (REMOTE || relayHost() || TOR_POSSIBLE ? join(ROOT, "dist") : null);
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -203,12 +219,12 @@ ensureDirs();
 // Materiał TLS PO `ensureDirs` (migracja starego katalogu danych sprawdza, czy
 // DATA_DIR jeszcze nie istnieje) i PRZED serwerem, bo `createServer` chce go
 // od razu. `tls.crt` jest publiczny, `tls.key` ma 0600.
-// `OMB_TLS=off` ma jedno zastosowanie: reverse proxy kończące TLS u siebie i
+// `MULTIBOT_TLS=off` ma jedno zastosowanie: reverse proxy kończące TLS u siebie i
 // rozmawiające z harnessem po pętli zwrotnej. Na adresie widocznym w sieci
 // znaczyłoby to hasła i sesje gołym tekstem — dlatego nie ostrzeżenie, tylko
 // odmowa startu: serwer, który cicho poszedł bez TLS-a, jest gorszy niż żaden.
 if (TLS_OFF && !LOOPBACK_HOST) {
-  console.error(`[multibot] OMB_TLS=off wolno użyć TYLKO na pętli zwrotnej, a OMB_HOST=${HOST}. Ustaw OMB_HOST=127.0.0.1 (za reverse proxy) albo zdejmij OMB_TLS.`);
+  console.error(`[multibot] MULTIBOT_TLS=off wolno użyć TYLKO na pętli zwrotnej, a MULTIBOT_HOST=${HOST}. Ustaw MULTIBOT_HOST=127.0.0.1 (za reverse proxy) albo zdejmij MULTIBOT_TLS.`);
   process.exit(1);
 }
 const TLS = TLS_OFF ? null : ensureTlsMaterial(DATA_DIR);
@@ -240,7 +256,7 @@ initNetAddress({
     if (report.current) identity.updateSetupAddress(report.current);
     const owner = identity.members().find((member) => member.role === "owner");
     if (owner && report.current) {
-      void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId]).catch(() => {});
+      void notifyPushDevices("MultiBot server", `Server address is now ${report.current}`, undefined, { kind: "notify" }, [owner.userId], "default").catch(() => {});
     }
   },
 });
@@ -294,12 +310,12 @@ const COMMS_TOKEN = randomBytes(24).toString("hex");
 // meant to see, and nothing in the UI counts against it.
 const DEFAULT_COLLAB_MAX_MESSAGES = 200;
 function collabMaxMessages(): number {
-  const raw = Number(process.env.OMB_COLLAB_MAX_MESSAGES);
+  const raw = Number(process.env.MULTIBOT_COLLAB_MAX_MESSAGES);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_COLLAB_MAX_MESSAGES;
 }
 const DEFAULT_COLLAB_MAX_MS = 2 * 60 * 60_000;
 function collabMaxMs(): number {
-  const raw = Number(process.env.OMB_COLLAB_MAX_MS);
+  const raw = Number(process.env.MULTIBOT_COLLAB_MAX_MS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_COLLAB_MAX_MS;
 }
 /** "Room only for task": a user @mention opens a collaboration room only when
@@ -310,19 +326,30 @@ const TASK_HINTS =
 // wiarygodniejsza) połowa `chainDepth` w `store.ts`. Upstream ufa `depth` z env
 // proxy, co działa, dopóki proxy startuje raz na turę (claude/ACP); bot silnika
 const activeCommsDepth = new Map<string, number>();
-// multibot: boty, których tura trzyma slot z OMB_MAX_PARALLEL_TURNS. Slot
+// multibot: boty, których tura trzyma slot z MULTIBOT_MAX_PARALLEL_TURNS. Slot
 // bierze tylko tura główna (nieizolowana, depth 0) — tura zagnieżdżona czekałaby
 // na slot trzymany przez własnego wołającego.
 const gatedTurnBots = new Set<string>();
-/** Koniec tury (udany, błędny, przerwany, ubity watchdogiem) oddaje slot. */
+/** Koniec tury (udany, błędny, przerwany, ubity watchdogiem) oddaje slot ORAZ
+ *  gasi znacznik „bot pracuje na komputerze" (poziom Status — ikona w nagłówku
+ *  czatu). Jedno miejsce dla obu, bo koniec tury jest ten sam: `turn.completed`,
+ *  `runtime.error`, przerwanie i watchdog wołają tę funkcję. */
 function releaseTurnSlot(botId: string): void {
-  if (!gatedTurnBots.delete(botId)) return;
-  broadcast({ kind: "computer-queue", ...computerControl.releaseAgent(botId) });
+  // Tura ZAGNIEŻDŻONA (comms depth > 0) kończy się na tym samym wątku co tura
+  // zewnętrzna, która dalej trwa — gaszenie znacznika na jej końcu zgasiłoby
+  // ikonę w środku roboty. Slot i tak bierze wyłącznie tura główna (`gated`).
+  const nested = (activeCommsDepth.get(botId) ?? 0) > 0;
+  const wasActing = !nested && computerControl.setAgentActing(botId, false);
+  const hadSlot = gatedTurnBots.delete(botId);
+  if (hadSlot) computerControl.releaseAgent(botId);
+  // The idle clock of the computer starts ticking only once the turn is over.
+  if (!nested) releaseComputerHold(botId);
+  if (wasActing || hadSlot) broadcast({ kind: "computer-queue", ...computerControl.control() });
 }
 // multibot (U1): prywatny Store nie zna izolowanych wątków grupy, ale ich
 // zużycie nadal należy do konkretnego bota.
 const isolatedTurnBots = new Map<string, string>();
-// watchdog: busy stuck >70s -> auto clear (provider zawiesił się, brak turn.completed)
+// watchdog: busy stuck >70s -> interrupt the provider (provider went silent)
 const busyWatchdog = new Map<string, ReturnType<typeof setTimeout>>();
 /**
  * Zbrojenie (i przezbrajanie) watchdoga: brak `turn.completed` przez 70 s
@@ -333,7 +360,7 @@ const busyWatchdog = new Map<string, ReturnType<typeof setTimeout>>();
 /** 70 s of a provider saying nothing means the provider is gone. Overridable
  * only so tests can reach the teardown without waiting out the real ceiling. */
 function busyWatchdogMs(): number {
-  const raw = Number(process.env.OMB_BUSY_WATCHDOG_MS);
+  const raw = Number(process.env.MULTIBOT_BUSY_WATCHDOG_MS);
   return Number.isFinite(raw) && raw >= 500 ? Math.floor(raw) : 70_000;
 }
 
@@ -343,21 +370,29 @@ function armBusyWatchdog(botId: string): void {
   const wd = setTimeout(() => {
     const b = store.bot(botId);
     if (b?.busy) {
-      console.warn(`[multibot] watchdog: ${botId} busy ${busyWatchdogMs()}ms no completed, force clear`);
+      console.warn(`[multibot] watchdog: ${botId} busy ${busyWatchdogMs()}ms no completed, interrupting provider`);
+      const instance = registry.get(b.modelSelection.instanceId);
+      void instance?.adapter.interruptTurn(b.threadId).catch((error) =>
+        console.warn(`[multibot] watchdog interrupt failed for ${botId}:`, error instanceof Error ? error.message : error),
+      );
       store.patchBot(botId, { busy: false });
-      activeCommsDepth.delete(botId);
       busyWatchdog.delete(botId);
-      // Ta sama rozbiórka co przy `runtime.error`: bez niej znacznik peer
-      // przeżywał turę i NASTĘPNA, niezwiązana tura odsyłała swój tekst
-      // wczorajszemu nadawcy, a kolejka stała bez drenażu.
+      // Posprzątaj metadane i historię od razu, ale zostaw `activeCommsDepth`
+      // oraz slot do `turn.completed`: driver nadal ma `active[threadId]`.
+      // Inaczej drain uruchomiłby następną turę za wcześnie i dostał dokładnie
+      // „a turn is already running on this thread”.
       peerTurn.delete(botId);
       groupTurn.get(botId)?.done(""); // wiszący dostawca nie trzyma czatu grupy
+      forgetSettledGroupTurn(botId);
       turnAssistantText.delete(b.threadId);
       turnUsedTool.delete(b.threadId);
+      turnPushedVisible.delete(b.threadId);
       turnUserText.delete(b.threadId);
-      releaseTurnSlot(botId); // zawieszony dostawca nie trzyma slotu całej floty
+      // multibot: turę ubił watchdog, nie model — spóźnione `turn.completed`
+      // nie ma zostawiać znacznika „bot nic nie napisał" ani pushować końca.
+      harnessRoutines.settleRun(botId, { reason: "watchdog" });
+      turnOrigin.delete(botId);
       broadcast({ kind: "bot", bot: store.bot(botId) });
-      drainQueuedUserMessages(botId);
     }
   }, busyWatchdogMs());
   wd.unref?.();
@@ -379,9 +414,9 @@ function proxyIntegration(proxy: string, botId: string) {
     args: [proxy],
     env: {
       ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `${SCHEME}://127.0.0.1:${PORT}`,
-      OMB_BOT_ID: botId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
+      MULTIBOT_HARNESS_URL: `${SCHEME}://127.0.0.1:${PORT}`,
+      MULTIBOT_BOT_ID: botId,
+      MULTIBOT_COMMS_TOKEN: COMMS_TOKEN,
     },
   };
 }
@@ -512,8 +547,10 @@ const IDLE_ROUNDS_LIMIT = 30;
 
 /** What a CLIENT may see of a thread. Peer envelopes and the answers a bot
  * writes to a colleague live on the thread for the transcript replay only;
- * the chat shows a room chip instead. */
-const chatMessages = (threadId: string) => store.messagesFor(threadId).filter((m) => !m.hidden);
+ * the chat shows a room chip instead. A GROUP turn shows nothing at all — a
+ * private thread is the user and this one bot, never the group's traffic. */
+const chatMessages = (threadId: string) =>
+  withoutLegacyGroupLeak(store.messagesFor(threadId)).filter((m) => !m.hidden);
 
 /**
  * Clickable "X texted Y" / "Y replied" pill on a bot's own thread, pointing at
@@ -527,6 +564,10 @@ function postRoomChip(
   room: RoomRecord,
   chip?: { from: string; to?: string; event: "texted" | "received" | "replied" },
 ) {
+  // A group room is the user's own chat and has a row of its own. Nothing that
+  // happens inside it — not a member's turn, not a handoff between two members
+  // — leaves a mark in anybody's private chat.
+  if (room.groupId) return;
   const owner = store.bot(threadBotId);
   if (!owner) return;
   const message = store.appendMessage(owner.threadId, {
@@ -539,7 +580,6 @@ function postRoomChip(
       ownerBotId: chip?.from ?? threadBotId,
       status: room.status,
       ...(chip ? { event: chip.event } : {}),
-      ...(room.groupId ? { groupId: room.groupId } : {}),
     },
   });
   broadcast({ kind: "message", threadId: owner.threadId, message });
@@ -563,31 +603,9 @@ function stripMentions(text: string, tagged: Array<{ name: string }>): string {
   return out.trim() || text;
 }
 
-/** Settled room, rendered as text a bot can read in its own chat turn. */
-function roomSummary(roomId: string): string {
-  const final = rooms.get(roomId);
-  return final && final.transcript.length
-    ? final.transcript.map((m) => `${store.bot(m.from)?.name ?? m.from}: ${m.text}`).join("\n\n")
-    : "(the collaboration produced no result)";
-}
-
-/** Tell the bot that opened a room how it ended. */
-function reportRoom(roomId: string, status: string, reason = ""): void {
-  const room = rooms.get(roomId);
-  const owner = room && store.bot(room.ownerBotId);
-  if (!room || !owner) return;
-  const report = store.appendMessage(owner.threadId, {
-    role: "bot",
-    kind: "text",
-    text: `Room "${room.name}" finished (${status})${reason ? ` — ${reason}` : ""}.\n\n${roomSummary(roomId)}`,
-  });
-  broadcast({ kind: "message", threadId: owner.threadId, message: report });
-}
-
-/** Settle a room and report it back to the bot that opened it. Every way a
- * conversation can end — [TASK COMPLETE], spent budget, spent clock — comes
- * through here, so the owner always learns how it went exactly once. */
-function closeRoom(roomId: string, status: "done" | "failed", reason = ""): void {
+/** Settle a room. The directional room chip is the user-facing completion
+ * status; the room transcript remains available by opening that chip. */
+function closeRoom(roomId: string, status: "done" | "failed"): void {
   const room = rooms.get(roomId);
   if (!room || room.status !== "running") return;
   rooms.setStatus(roomId, status);
@@ -596,7 +614,16 @@ function closeRoom(roomId: string, status: "done" | "failed", reason = ""): void
   rooms.setPending(roomId, null); // a closed room owes nobody a turn after a restart
   const settled = rooms.get(roomId);
   if (settled) broadcast({ kind: "room", room: settled });
-  if (!room.groupId) reportRoom(roomId, status, reason);
+}
+
+/** Hand a room's turn debt over — and TELL the clients. `pendingTo` is the only
+ * signal that covers the gap between one bot finishing and the next one
+ * starting: in that gap NEITHER side is `busy`, so without a frame every client
+ * reads a live bot-to-bot exchange as "nobody is doing anything" and the mascot
+ * above the composer blinks out in the middle of the conversation. */
+function setRoomPending(roomId: string, to: string | null): void {
+  const room = rooms.setPending(roomId, to);
+  if (room) broadcast({ kind: "room", room });
 }
 
 /** The wall clock only ever fired when somebody tried to send. A conversation
@@ -609,7 +636,7 @@ function sweepExpiredRooms(): void {
     // is nobody's "collaboration result" to report into a private thread.
     if (room.status !== "running" || room.groupId || room.createdAt > cutoff) continue;
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
   }
 }
 
@@ -631,7 +658,7 @@ function resumeRecoveredRooms(): void {
     const last = room.transcript.at(-1);
     const stale = Date.now() - (last?.at ?? room.createdAt) >= collabMaxMs();
     if (!room.pendingTo || !last || stale || budgetLeft(room, max) <= 0) {
-      closeRoom(roomId, "failed", "the server restarted mid-conversation");
+      closeRoom(roomId, "failed");
       continue;
     }
     const to = room.pendingTo;
@@ -639,7 +666,7 @@ function resumeRecoveredRooms(): void {
       .then((delivery) => {
         // A recipient that is gone (deleted bot, revoked permission) can never
         // take that turn: settle the room instead of leaving it open forever.
-        if (delivery.status === "refused") closeRoom(roomId, "failed", "the server restarted mid-conversation");
+        if (delivery.status === "refused") closeRoom(roomId, "failed");
       })
       .catch((error) =>
         console.warn(`[multibot] resuming room ${roomId} failed:`, error instanceof Error ? error.message : error),
@@ -690,10 +717,6 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 const workspace = new WorkspaceStore();
 const attachments = new AttachmentStore();
-// multibot: bot→user file sending. Files the bot creates via the agents MCP
-// `send_file` tool land here, keyed by thread, and ride the bot's next chat
-// message (see the item.completed / assistant_text handler below).
-const pendingBotAttachments = new Map<string, ReturnType<AttachmentStore["add"]>[]>();
 // multibot 0.1.44: wiadomości wysłane w trakcie tury bota. Zamiast 409 każda
 // ląduje w wątku i w kolejce; koniec tury odpala drain — bot dostaje je wszystkie
 // naraz i odpowiada JEDNĄ odpowiedzią na wszystko.
@@ -755,9 +778,28 @@ interface GroupAnswer {
    * finishes next was not answering us, so its text is not the group answer —
    * exactly the `PeerAnswer.deferred` rule, for the same reason. */
   deferred: boolean;
+  /** The group stopped WAITING for this answer — silence, or the per-member
+   * ceiling ran out — but the provider may still be writing. The entry lives on
+   * until the turn really ends, or that late text would surface in the member's
+   * private chat, which is the one thing this whole path exists to prevent. */
+  settled?: boolean;
   done: (text: string) => void;
 }
 const groupTurn = new Map<string, GroupAnswer>();
+/** This bot's running turn belongs to a GROUP: everything it produces goes to
+ * the group ledger and nothing of it to the member's private chat — not the
+ * envelope, not the reply, not a tool pill, not a screenshot. `deferred` means
+ * the turn now running is a private one the envelope merely queued behind, and
+ * a turn the user also wrote into is partly his: both stay visible. */
+const isGroupOnlyTurn = (botId: string, threadId: string): boolean => {
+  const entry = groupTurn.get(botId);
+  return !!entry && !entry.deferred && !turnUserText.has(threadId);
+};
+/** Drop a group turn whose answer is already settled. Called from the four
+ * places that tear a turn down, because `settled` alone must not outlive it. */
+const forgetSettledGroupTurn = (botId: string) => {
+  if (groupTurn.get(botId)?.settled) groupTurn.delete(botId);
+};
 /** Last text each sender→recipient pair carried inside a room. Repeating it
  * verbatim is a loop, not a contribution. Keyed per pair so a fan-out to a
  * group (same text, several recipients) is not mistaken for one. */
@@ -768,7 +810,7 @@ const sentPeerText = new Map<string, string>();
 const budgetCooldown = new Map<string, number>();
 const DEFAULT_COLLAB_COOLDOWN_MS = 10 * 60_000;
 function collabCooldownMs(): number {
-  const raw = Number(process.env.OMB_COLLAB_COOLDOWN_MS);
+  const raw = Number(process.env.MULTIBOT_COLLAB_COOLDOWN_MS);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_COLLAB_COOLDOWN_MS;
 }
 const pairKey = (a: string, b: string) => [a, b].sort().join("|");
@@ -797,11 +839,18 @@ const turnAssistantText = new Map<string, string[]>();
  * did something is answering with a result, however short — the ack brake must
  * not swallow it. Lives and dies with `turnAssistantText`. */
 const turnUsedTool = new Set<string>();
+/** Threads whose running turn touched the LOCAL computer (`mcp__computer__*`). */
+const turnUsedComputer = new Set<string>();
 /** Threads whose CURRENT turn carries text the HUMAN wrote — either it started
  * as a user turn, or the user steered a message into a running peer turn. Its
  * answer is for them, so it stays a visible bubble even when a colleague also
  * happens to be waiting on the same turn. */
 const turnUserText = new Set<string>();
+/** Threads whose current turn put at least one VISIBLE message in the chat.
+ * The unread dot is read off this at the end of the turn: a group turn, a peer
+ * turn or a turn that only said `[NO REPLY]` changes nothing the user can look
+ * at, and a dot pointing at an unchanged chat is worse than no dot. */
+const turnPushedVisible = new Set<string>();
 
 type PeerDelivery = "steered" | "queued" | "refused";
 
@@ -809,7 +858,7 @@ type PeerDelivery = "steered" | "queued" | "refused";
 const ONBOARDING_FIRST_TURN =
   "Before anything else: check what is already connected. List your connectors, tools and whether you have a computer, then tell the user in two or three sentences what you can do right now, and ask only for the access you are actually missing.";
 /** Off inside vitest and wherever a harness needs bots that stay quiet. */
-const onboardingTurnEnabled = () => !process.env.VITEST && process.env.OMB_ONBOARDING_TURN !== "0";
+const onboardingTurnEnabled = () => !process.env.VITEST && process.env.MULTIBOT_ONBOARDING_TURN !== "0";
 
 /** Polish is the only second language MultiBot ships texts in, so telling the
  * two apart is all the peer protocol needs: the envelope carries "Reply in X"
@@ -838,7 +887,7 @@ function conversationLanguage(fromBotId: string, text: string): "Polish" | "Engl
  * Brackets and newlines come out; the id below the name stays authoritative. */
 function peerEnvelope(from: BotRecord, text: string, language: string): string {
   const name = from.name.replace(/[[\]\r\n]+/g, " ").trim().slice(0, 120) || from.id;
-  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn: answer them, or reply with exactly [NO REPLY] once you have what you need and have nothing new to add. Do not thank, confirm or restate - this conversation ends by silence, not by a closing message. Reply in ${language}.]\n\n${text}`;
+  return `[Message from @${name} (bot id: ${from.id}), another bot in this MultiBot workspace. This is a real turn. Every message from a peer must get a reply: answer it now, even if it is only "hej". Do not use [NO REPLY] or [TASK COMPLETE] in response to a peer message. Do not thank, confirm or restate - this conversation ends by silence, not by a closing message. Reply in ${language}.]\n\n${text}`;
 }
 
 /** Consecutive acknowledgements in a room. Two in a row means the two bots are
@@ -918,12 +967,12 @@ async function deliverPeerMessage(
   const max = collabMaxMessages();
   if (budgetLeft(room, max) <= 0) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
     return refuse("This conversation has run long enough - wrap up and report to the user. Do not retry.");
   }
   if (Date.now() - room.createdAt >= collabMaxMs()) {
     startBudgetCooldown(room.id);
-    closeRoom(room.id, "done", "");
+    closeRoom(room.id, "done");
     return refuse("This conversation ran out of time - wrap up and report to the user. Do not retry.");
   }
   const ledgerKey = `${room.id}|${fromBotId}|${toBotId}`;
@@ -977,7 +1026,7 @@ async function deliverPeerMessage(
     // conversation is over. Leaving the room open just parked it until the wall
     // clock swept it up hours later. A GROUP room is the user's own chat: two
     // polite members must never close the room the user is still writing into.
-    if (!room.groupId && (streak >= 2 || room.bot_ids.length <= 2)) closeRoom(room.id, "done", "");
+    if (!room.groupId && (streak >= 2 || room.bot_ids.length <= 2)) closeRoom(room.id, "done");
     return refuse("An acknowledgement is not a reply. It was recorded; do not send another one.");
   }
   ackStreak.delete(room.id);
@@ -1007,14 +1056,14 @@ async function deliverPeerMessage(
   peerTurn.set(toBotId, [...(peerTurn.get(toBotId) ?? []), answer]);
   // Persisted BEFORE delivery: a crash between here and the recipient's turn
   // is exactly the case boot-time resume has to repair.
-  rooms.setPending(room.id, toBotId);
+  setRoomPending(room.id, toBotId);
   const status = await deliverToActiveTurnOrQueue(toBotId, envelope, "bot", { attachments: [], origin: "bot" });
   // Steering puts the text INSIDE the running turn, so that turn does answer
   // it — and its `startTurn` is long past, so clear the debt here or a restart
   // would deliver a message the bot has already read.
   if (status === "steered") {
     answer.deferred = false;
-    rooms.setPending(room.id, null);
+    setRoomPending(room.id, null);
   }
   return { status, roomId: room.id, note: "" };
 }
@@ -1053,7 +1102,7 @@ async function routePeerReply(
   // ending dressed up as a failure. A group room is the user's own chat and
   // never closes on a member's silence.
   if (!visible || visible === NO_REPLY_MARKER) {
-    if (room && !room.groupId) closeRoom(peer.roomId, "done", "");
+    if (room && !room.groupId) closeRoom(peer.roomId, "done");
     return;
   }
   // A bot whose delegation was off for this turn does not get to answer a peer
@@ -1075,6 +1124,10 @@ async function routePeerReply(
     if (author) {
       const kept = store.appendMessage(author.threadId, { role: "bot", kind: "text", text: visible });
       broadcast({ kind: "message", threadId: author.threadId, message: kept });
+      // This runs AFTER `turn.completed` settled the dot on "nothing visible".
+      // The bubble it just put back is visible, so the dot has to come back too.
+      store.patchBot(botId, { unread: true });
+      broadcast({ kind: "bot", bot: store.bot(botId) });
     }
   }
 }
@@ -1113,14 +1166,21 @@ async function askGroupMember(target: BotRecord, answer: Omit<GroupAnswer, "done
   // One group turn per bot at a time. Two groups sharing a member would share
   // the single slot, and the second would collect the first one's text.
   if (groupTurn.has(target.id)) return "";
-  const bubble = store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope });
-  broadcast({ kind: "message", threadId: target.threadId, message: bubble });
+  // STORED, never SHOWN — exactly like a peer envelope. The transcript replay
+  // walks the thread, so the bot has to keep reading what the group asked it;
+  // the user's private chat with this bot is not where the group's traffic
+  // belongs, and a raw envelope bubble there is what it looked like before.
+  store.appendMessage(target.threadId, { role: "user", kind: "text", text: envelope, hidden: true });
   return await new Promise<string>((resolve) => {
     let settled = false;
     const finish = (text: string) => {
       if (settled) return;
       settled = true;
-      if (groupTurn.get(target.id)?.done === finish) groupTurn.delete(target.id);
+      // MARKED, not deleted: the 4-minute ceiling below stops the group waiting
+      // for this member, it does not make the provider stop writing. Deleting
+      // here put that late text back in the private chat.
+      const entry = groupTurn.get(target.id);
+      if (entry?.done === finish) entry.settled = true;
       resolve(text);
     };
     // A turn already running has not read this envelope, so its completion is
@@ -1155,9 +1215,6 @@ async function runGroupChat(
     if (handedOver.has(target.id)) continue;
     const current = rooms.get(room.id);
     if (!current || current.status !== "running" || budgetLeft(current, max) <= 0) break;
-    // The trace the owner asked for: a clickable pill in the member's own chat
-    // saying it was pulled into this group, one per member per group turn.
-    postRoomChip(target.id, current);
     const raw = await askGroupMember(target, { group, roomId: room.id, members }, groupEnvelope(group.name, roster, current));
     const visible = raw.replace(DONE_MARKER_AT_END, "").trim();
     if (!visible || visible === NO_REPLY_MARKER) continue;
@@ -1182,13 +1239,13 @@ async function runGroupChat(
 
 /**
  * multibot: okno sklejania. Kilka zdań wysłanych szybko pod rząd to JEDNA tura
- * i JEDNA odpowiedź — tura rusza dopiero, gdy przez `OMB_TURN_DEBOUNCE_MS` nic
+ * i JEDNA odpowiedź — tura rusza dopiero, gdy przez `MULTIBOT_TURN_DEBOUNCE_MS` nic
  * nowego nie przyszło. W wątku każda wiadomość zostaje osobną bańką; sklejony
  * jest wyłącznie prompt lecący do drivera.
  */
 const DEFAULT_TURN_DEBOUNCE_MS = 1500;
 const turnDebounceMs = () => {
-  const raw = Number(process.env.OMB_TURN_DEBOUNCE_MS);
+  const raw = Number(process.env.MULTIBOT_TURN_DEBOUNCE_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_TURN_DEBOUNCE_MS;
 };
 const turnDebounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1209,7 +1266,9 @@ function queueUserTurn(botId: string, turnText: string, opts: QueuedTurnOptions)
   // kompozytor blokuje się od razu i nie ma sekundy, w której czat wygląda,
   // jakby wiadomość przepadła.
   if (!store.bot(botId)?.busy) {
-    store.patchBot(botId, { busy: true, unread: false });
+    // Only a HUMAN opening the chat marks it read. A group envelope or a peer
+    // message arriving used to clear the dot on an answer the user never saw.
+    store.patchBot(botId, opts.origin === "bot" ? { busy: true } : { busy: true, unread: false });
     broadcast({ kind: "bot", bot: store.bot(botId) });
   }
   const previous = queuedTurnOptions.get(botId);
@@ -1288,6 +1347,7 @@ function drainQueuedUserMessages(botId: string) {
     queuedUserMessages.take(botId);
     queuedTurnOptions.delete(botId);
     groupTurn.get(botId)?.done("");
+    forgetSettledGroupTurn(botId);
     return;
   }
   // Tura już chodzi: nic nie zabieramy z kolejki, jej koniec zawoła nas znowu.
@@ -1311,6 +1371,7 @@ function drainQueuedUserMessages(botId: string) {
     // Tura nie ruszyła (bot zniknął, dostawca padł) — `busy` już zgasło wyżej,
     // ale UI wciąż widzi zapalone z chwili przyjęcia wiadomości.
     groupTurn.get(botId)?.done("");
+    forgetSettledGroupTurn(botId);
     broadcast({ kind: "bot", bot: store.bot(botId) });
   });
 }
@@ -1429,13 +1490,32 @@ function eventVisible(payload: unknown, actor: IdentityActor | null): boolean {
     return bot ? canReadBot(bot, actor) : true;
   }
   // multibot: banerka niesie tytuł i treść od bota — prywatny bot nie może jej
-  // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`).
-  if (event.kind === "notify") return canReadBot(botFor(event.botId), actor);
+  // rozesłać całemu workspace'owi. Ten sam zasięg co push (`pushForBot`), a
+  // `only` zawęża dalej: przypomnienie członka zespołu na współdzielonym bocie
+  // budzi TYLKO jego pulpit, nie cały zespół.
+  if (event.kind === "notify") {
+    if (Array.isArray(event.only) && !(actor && event.only.includes(actor.userId))) return false;
+    return canReadBot(botFor(event.botId), actor);
+  }
+  // Ten sam zasięg: prośba o odświeżenie logowania dotyczy KONKRETNEGO bota.
+  if (event.kind === "auth-expired") return canReadBot(botFor(event.botId), actor);
   if (event.kind === "screen" || event.kind === "workspace" || event.kind === "computer") {
     if (event.kind === "screen") return canReadBot(botFor(event.botId), actor);
     return event.kind === "workspace" && event.botId === undefined
       ? Boolean(actor)
       : canReadBot(botFor(event.botId), actor);
+  }
+  // Stan dzierżawy komputera niesie ID BOTÓW (`agentActing`, `agentOwner`,
+  // `agentQueue`) — prywatny bot nie ma się przez to wysypać całemu zespołowi.
+  // Ramka bez żadnego id (czyli „nikt nie pracuje") jedzie do każdego
+  // zalogowanego: to ona gasi ikonę na końcu tury.
+  if (event.kind === "computer-queue") {
+    const named = [
+      ...(Array.isArray(event.agentActing) ? event.agentActing : []),
+      ...(Array.isArray(event.agentQueue) ? event.agentQueue : []),
+      ...(typeof event.agentOwner === "string" ? [event.agentOwner] : []),
+    ];
+    return named.length === 0 ? Boolean(actor) : named.every((id) => canReadBot(botFor(id), actor));
   }
   if (event.kind === "goal") {
     const bot = store.botByThread(String(event.goal?.ownerThread ?? ""));
@@ -1488,7 +1568,10 @@ fleetEnvironmentTimer.unref?.();
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
-const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+// requestId -> gdzie leży karta. Wątek idzie razem z wiadomością, bo `ask_user`
+// z tury izolowanej (grupa, pokój) siedzi na CUDZYM wątku, a `POST /respond`
+// zna tylko wątek bota.
+const askMessageByRequest = new Map<string, { threadId: string; messageId: string }>();
 const approvalRuleByRequest = new Map<string, ApprovalRuleCandidate>();
 // multibot: pytania zadane przez bota narzędziem `ask_user`. Wcześniej takie
 // pytanie niósł WYŁĄCZNIE broker uprawnień claude'a — a ten montuje się tylko
@@ -1516,12 +1599,18 @@ const USER_ASK_DISMISS_NOTE = "MultiBot: the user closed the question without an
 // JEDNO miejsce wysyłki powiadomień: sprawdza przełącznik bota, tytułem jest
 // nazwa bota, a `data.botId` pozwala aplikacji otworzyć po tapnięciu właśnie
 // tego bota. Wysyłka nigdy nie przerywa obsługi zdarzenia.
-type PushKind = "question" | "handoff" | "approval" | "started" | "finished" | "failed" | "attention" | "reminder" | "notify";
-function pushForBot(botId: string, kind: PushKind, body: string): void {
+function pushForBot(botId: string, kind: PushKind, body: string, only?: string[]): void {
   const bot = store.bot(botId);
   // `=== false` a nie `!`: boty zapisane zanim pole istniało nie mają go w JSON
   if (!bot || bot.notifications === false) return;
-  const audience = bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined;
+  // JEDYNA bramka „czy to w ogóle powiadomienie" — patrz `shouldNotify`
+  if (!shouldNotify(kind)) return;
+  // Karta zostaje w czacie ZAWSZE (dołożył ją wołający); tu odpada tylko
+  // powtórzony brzęczyk o tym samym — patrz `allowCardPush`.
+  if (!allowCardPush(botId, kind)) return;
+  // `only` wygrywa nad widocznością bota: przypomnienie należy do KONKRETNEGO
+  // człowieka, także wtedy, gdy ustawił je bot widoczny dla całego zespołu.
+  const audience = only ?? (bot.visibility === "private" && bot.ownerId ? [bot.ownerId] : undefined);
   void notifyPushDevices(bot.name || "Bot", body.slice(0, 300) || "…", bot.id, { botId: bot.id, kind }, audience).catch(() => {});
 }
 
@@ -1529,12 +1618,23 @@ function pushForBot(botId: string, kind: PushKind, body: string): void {
  * i `notify_user`. Push leci na telefon, ramka SSE budzi powłokę na pulpicie
  * (Electron rysuje banerkę systemową). Nie zapisuje wiadomości w czacie: tekst
  * pisze sam bot w swojej turze. */
-function notifyUser(botId: string, title: string, body: string, kind: "reminder" | "notify"): void {
+function notifyUser(
+  botId: string,
+  title: string,
+  body: string,
+  kind: "reminder" | "notify",
+  options: { pushBody?: string; only?: string[] } = {},
+): void {
   // Wyciszony bot milczy na OBU drogach — push bramkuje `pushForBot`, banerkę
   // trzeba tu, bo `notifyFrame` zna tylko globalny przełącznik powłoki.
   if (store.bot(botId)?.notifications === false) return;
-  pushForBot(botId, kind, body || title);
-  broadcast({ kind: "notify", botId, title, body });
+  turnToldUser.add(botId);
+  // Banerka na pulpicie ma osobny nagłówek (nazwa bota + powód), a push tylko
+  // jedną linię pod nazwą bota — `pushBody` pozwala napisać ją inaczej, zamiast
+  // powtarzać nagłówek w treści.
+  pushForBot(botId, kind, options.pushBody ?? (body || title), options.only);
+  // `only` jedzie w ramce, żeby `eventVisible` doręczył banerkę tylko adresatowi
+  broadcast({ kind: "notify", botId, title, body, ...(options.only ? { only: options.only } : {}) });
 }
 
 /** Konektory, o których podłączenie bot może poprosić kartą (`request_connection`).
@@ -1563,45 +1663,45 @@ const toolkitLabel = (slug: string): string =>
 // (`warmBot`) omija `startTurn`, więc nie trafia do mapy i też nie pushuje.
 type TurnOrigin = "user" | "routine" | "bot";
 const turnOrigin = new Map<string, TurnOrigin>();
-const startedPushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-function cancelStartedPush(botId: string): void {
-  const timer = startedPushTimers.get(botId);
-  if (timer) clearTimeout(timer);
-  startedPushTimers.delete(botId);
-}
-/** Anty-zalew: bot, który odpowiedział w < 5 s, wysyła tylko „koniec". */
-function scheduleStartedPush(botId: string, body: string): void {
-  cancelStartedPush(botId);
-  const timer = setTimeout(() => {
-    startedPushTimers.delete(botId);
-    pushForBot(botId, "started", body);
-  }, 5_000);
-  timer.unref?.();
-  startedPushTimers.set(botId, timer);
-}
+/** Boty, które w tej turze odezwały się do człowieka INACZEJ niż tekstem:
+ *  banerką `notify_user` albo kartą (pytanie, zgoda, sekret, konektor). Taka
+ *  tura nie jest niema i nie dostaje znacznika „model nic nie napisał". */
+const turnToldUser = new Set<string>();
 function endTurnPush(botId: string, kind: "finished" | "failed", body: string): void {
   const origin = turnOrigin.get(botId);
-  turnOrigin.delete(botId);
-  cancelStartedPush(botId);
-  if (!origin || origin === "bot") return;
+  if (!origin || origin === "bot") { turnOrigin.delete(botId); return; }
+  // Wynik przebiegu rutyny znamy DOPIERO tu: `dispatch` rutyny tylko kolejkuje
+  // turę, więc historia znała samo „w kolejce" (server/routines.ts). POD bramką
+  // i tylko dla tury rutyny: spóźnione `turn.completed` tury ubitej watchdogiem
+  // (ten czyści `turnOrigin`) nie ma prawa zamknąć wpisu NASTĘPNEGO przebiegu
+  // fałszywym „ok" — dokładnie jak reszta sprzątania końca tury.
+  if (origin === "routine") harnessRoutines.settleRun(botId, kind === "failed" ? body : null);
   pushForBot(botId, kind, body);
+  turnOrigin.delete(botId);
 }
 
 async function askOwnerAndWait(threadId: string, card: Omit<OptionCardData, "requestId">): Promise<string> {
   const requestId = newId();
   const message = store.appendMessage(threadId, { role: "bot", kind: "options", card: { ...card, requestId } });
+  askMessageByRequest.set(requestId, { threadId, messageId: message.id });
   broadcast({ kind: "message", threadId, message });
   // pytanie / przekazanie komputera idzie na telefon także z tury izolowanej
   // (grupa, pokój) — o odpowiedź prosi człowieka, nie drugiego bota
   const asker = store.botByThread(threadId) ?? store.bot(isolatedTurnBots.get(threadId) ?? "");
-  if (asker) pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.subtitle || card.title);
+  if (asker) {
+    turnToldUser.add(asker.id);
+    pushForBot(asker.id, card.kind === "computer-handoff" ? "handoff" : "question", card.title || card.subtitle);
+  }
   return new Promise<string>((resolve) => {
     const timer = setTimeout(() => {
       if (!pendingUserAsks.delete(requestId)) return;
       // karta bez odpowiedzi zostaje w czacie na zawsze i przyjmuje kliknięcia,
       // które nie mają już gdzie trafić — zamykamy ją
       const patched = store.patchMessage(threadId, message.id, { card: { ...message.card!, dismissed: true } });
-      if (patched) broadcast({ kind: "message", threadId, message: patched });
+      if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
+      // Bez tego wpis żyje do restartu serwera: kartę zamknął timeout, więc
+      // nikt już nie zawoła `/respond`, które normalnie zdejmuje go z mapy.
+      askMessageByRequest.delete(requestId);
       resolve(USER_ASK_TIMEOUT_NOTE);
     }, USER_ASK_TIMEOUT_MS);
     pendingUserAsks.set(requestId, (value) => {
@@ -1620,6 +1720,7 @@ async function askCredentialAndWait(bot: BotRecord, target: CredentialTargetId):
     secret: { target, ...meta, requestKey },
   });
   broadcast({ kind: "message", threadId: bot.threadId, message });
+  turnToldUser.add(bot.id);
   pushForBot(bot.id, "question", meta.label);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -1637,7 +1738,11 @@ const turnModelByThread = new Map<string, string>();
 
 bus.subscribe((event: RuntimeEvent) => {
   recordInspectorEvent(event);
-  broadcast({ kind: "runtime", event });
+  const hiddenProviderNotice =
+    (event.type === "content.delta" && event.streamKind === "assistant_text" && isContextCompactionNotice(event.delta))
+    || (event.type === "item.started" && event.itemType === "tool" && isContextCompactionNotice(event.title ?? ""))
+    || (event.type === "item.completed" && event.itemType === "assistant_text" && isContextCompactionNotice(event.text));
+  if (!hiddenProviderNotice) broadcast({ kind: "runtime", event });
   if (event.type === "turn.completed" || event.type === "runtime.error") {
     const gatedBotId = store.botByThread(event.threadId)?.id;
     if (gatedBotId) releaseTurnSlot(gatedBotId);
@@ -1649,9 +1754,38 @@ bus.subscribe((event: RuntimeEvent) => {
   recordTurnEvent(event);
   if (event.type === "turn.completed" || event.type === "runtime.error") isolatedTurnBots.delete(event.threadId);
   if (!bot) return;
+  // multibot: watchdog mierzy CISZĘ dostawcy, nie długość tury — tak jak mówi
+  // jego własny komentarz. Zbrojony był jednak tylko na starcie tury i po
+  // steeringu, więc KAŻDA tura dłuższa niż 70 s (czyli każda z narzędziami)
+  // traciła `busy` w środku roboty: bot wracał do wolnych, composer się
+  // odblokowywał, a maskotka nad paskiem gasła, mimo że dostawca dalej mielił.
+  // Każde zdarzenie z żywej tury przezbraja go od nowa; przezbrajamy tylko już
+  // uzbrojonego (tura, którą sami wystartowaliśmy), a końce tury zdejmują go
+  // niżej.
+  //
+  // Zbrojenie zaczyna się od `turn.started`, nie od przyjęcia wiadomości: przed
+  // startem tura czeka na slot (MULTIBOT_MAX_PARALLEL_TURNS), na komputer i na
+  // zimny start CLI (na telefonie pod obciążeniem zmierzone 83 s; driver daje
+  // na to 120 s). Zbrojony przy przyjęciu, watchdog gasił `busy` po 70 s ZANIM
+  // dostawca cokolwiek powiedział, kolejka drenowała następną turę w wątek, na
+  // którym pierwsza wciąż szła („a turn is already running on this thread"), a
+  // czat grupy dostawał puste odpowiedzi od trzech botów naraz (E2E 10.09.2026).
+  // Ciszę PRZED startem pilnują własne limity drivera (firstEventMs → runtime.error).
+  if (bot.busy && event.type === "turn.started") {
+    armBusyWatchdog(bot.id);
+  } else if (bot.busy && busyWatchdog.has(bot.id) && event.type !== "turn.completed" && event.type !== "runtime.error") {
+    armBusyWatchdog(bot.id);
+  }
+
+  if (hiddenProviderNotice) return;
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
+    // `unread` means "there is something new in this chat". After a group or
+    // peer turn there usually is not — the text went to a room — so the dot is
+    // decided by whether anything actually reached the user, not by what kind
+    // of turn it was.
+    turnPushedVisible.add(event.threadId);
     broadcast({ kind: "message", threadId: event.threadId, message });
     return message;
   };
@@ -1669,18 +1803,15 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
-        // multibot: attach any files the bot sent this turn (send_file) to the
-        // message so the user can download / open them from the chat.
-        const pending = pendingBotAttachments.get(event.threadId);
-        pendingBotAttachments.delete(event.threadId);
         const replyModel = turnModelByThread.get(event.threadId);
         turnModelByThread.delete(event.threadId);
         turnAssistantText.set(event.threadId, [...(turnAssistantText.get(event.threadId) ?? []), event.text]);
         // multibot: `[NO REPLY]` to sygnał protokołu bot↔bot ("nie mam nic do
         // dodania"), nie treść — do wątku nie trafia. Siatka bezpieczeństwa
         // peerów czyta `turnAssistantText` POWYŻEJ, więc dostaje sentinel dalej
-        // i dalej zamienia go na milczenie (routePeerReply). Załączniki wygrywają:
-        // tura, która wysłała plik, zostaje widoczna mimo sentinela.
+        // i dalej zamienia go na milczenie (routePeerReply). Pliki z `send_file`
+        // NIE jadą tą ścieżką: /api/internal/attachments utrwala je od razu jako
+        // własną wiadomość, więc tura bez tekstu asystenta ich nie gubi.
         //
         // A turn a COLLEAGUE started is hidden in the other sense: what the
         // bot writes there is addressed to that colleague, so it belongs in
@@ -1697,16 +1828,28 @@ bus.subscribe((event: RuntimeEvent) => {
         const answeringPeer = (peerTurn.get(bot.id) ?? []).some((entry) => !entry.deferred && !entry.replied)
           && !turnUserText.has(event.threadId)
           && canUseIntegration(bot.threadId, "delegation");
-        if ((event.text.trim() !== NO_REPLY_MARKER && !answeringPeer) || pending?.length) {
+        // A GROUP turn is the same story with no exclusions left: `runGroupChat`
+        // is waiting for this text and appends it to the group ledger, so it is
+        // never invisible, and delegation has no say — the reply does not travel
+        // through a peer. Kacper: the user writes in the group, the members work
+        // in the group, and the private chat stays user↔bot.
+        // ponytail: an answer whose room closed under it (budget, or the member
+        // ceiling) is dropped rather than shown, because that rule is absolute.
+        // Rescue it into the room the way `routePeerReply` does if a group ever
+        // loses answers often enough to notice.
+        const answeringGroup = isGroupOnlyTurn(bot.id, event.threadId);
+        const roomOnly = answeringPeer || answeringGroup;
+        if (event.text.trim() !== NO_REPLY_MARKER && !roomOnly) {
           pushMessage({
             role: "bot",
             kind: "text",
             text: event.text,
             ...(replyModel ? { model: replyModel } : {}),
-            ...(pending?.length ? { attachments: pending } : {}),
           });
-        } else if (answeringPeer) {
-          store.appendMessage(event.threadId, { role: "bot", kind: "text", text: event.text, hidden: true });
+        } else if (roomOnly) {
+          store.appendMessage(event.threadId, {
+            role: "bot", kind: "text", text: event.text, hidden: true,
+          });
         }
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
@@ -1724,6 +1867,22 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.started":
       if (event.itemType === "tool") {
         turnUsedTool.add(event.threadId);
+        if (event.title?.startsWith("mcp__computer__")) {
+          turnUsedComputer.add(event.threadId);
+          // Poziom Status: ikona komputera w nagłówku czatu zapala się, bo bot
+          // WŁAŚNIE klika, a nie dlatego, że ktoś otworzył panel. Gaśnie
+          // w `releaseTurnSlot` na końcu tury.
+          if (computerControl.setAgentActing(bot.id, true)) {
+            broadcast({ kind: "computer-queue", ...computerControl.control() });
+          }
+        }
+        // The WORK a member does for the group belongs to the group too: a row
+        // of "Read file" pills in a private chat that holds no group message is
+        // the same leak in a quieter shape. `turnUsedTool` above is bookkeeping
+        // and still records that a tool ran. (An error, a permission prompt or
+        // a question stays visible — those need a human, and the group ledger
+        // has nowhere to put them.)
+        if (isGroupOnlyTurn(bot.id, event.threadId)) break;
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
       }
@@ -1751,15 +1910,25 @@ bus.subscribe((event: RuntimeEvent) => {
         role: "bot",
         kind: "options",
           card: {
+            // multibot: TYTUŁEM pytania jest samo pytanie — nagłówek „Bot ma
+            // pytanie" zabierał wiersz, a treść lądowała pod spodem drobnym
+            // drukiem. Karty zgody zostają jak były: tytuł nazywa decyzję,
+            // pod nim jedzie opis akcji.
             title: autoAllow ? t("Zgoda automatyczna", "Auto-approved")
-              : permission ? t("Wymagana zgoda", "Approval needed") : t("Bot ma pytanie", "Your bot has a question"),
-            subtitle: autoNote ? `${event.summary}\n${autoNote}` : event.summary,
+              : permission ? t("Wymagana zgoda", "Approval needed") : event.summary,
+            subtitle: permission
+              ? (autoNote ? `${event.summary}\n${autoNote}` : event.summary)
+              : event.detail ?? "",
             options: permission ? ["Allow", "Deny", "Allow for all"] : event.choices ?? [],
             requestId: event.requestId,
+            // multibot: karta zgody NIE zwija się w pokwitowanie — jej podtytuł
+            // (co dokładnie zatwierdzono i jaką regułą) to ślad autoweryfikacji.
+            ...(permission ? { kind: "approval" as const } : {}),
+            ...(!permission && event.multiple && (event.choices?.length ?? 0) > 1 ? { multiple: true } : {}),
             ...(autoAllow ? { answered: "Allow" } : {}),
           },
       });
-      if (event.requestId) askMessageByRequest.set(event.requestId, message.id);
+      if (event.requestId) askMessageByRequest.set(event.requestId, { threadId: event.threadId, messageId: message.id });
       if (permission && event.requestId && event.approvalRule) approvalRuleByRequest.set(event.requestId, event.approvalRule);
       if (autoAllow) {
         // Dokładnie ta droga, którą idzie `POST /api/bots/:id/respond` dla
@@ -1776,23 +1945,36 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         break;
       }
+      turnToldUser.add(bot.id);
       pushForBot(bot.id, permission ? "approval" : "question",
         event.summary || (permission ? t("Bot prosi o zgodę.", "The bot needs approval.") : t("Bot ma pytanie.", "The bot has a question.")));
       break;
     }
     case "request.resolved": {
-      const messageId = event.requestId ? askMessageByRequest.get(event.requestId) : null;
+      const located = event.requestId ? askMessageByRequest.get(event.requestId) : null;
+      const messageId = located?.messageId ?? null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
         if (existing?.card && !existing.card.answered) {
+          // multibot: `answer` rozstrzygnięte po stronie dostawcy (jego własny
+          // timeout) nie niesie treści — karta i tak musi się domknąć, inaczej
+          // zostaje klikalna, a kliknięcie nie ma już gdzie trafić. `POST
+          // /respond` wpisuje prawdziwą odpowiedź WCZEŚNIEJ, więc tu wchodzimy
+          // tylko wtedy, gdy nikt jej nie wpisał.
           const patched = store.patchMessage(event.threadId, messageId, {
             card: {
               ...existing.card,
               answered: event.behavior === "always" ? "Allow for all"
                 : event.behavior === "allow" ? "Allow"
                   : event.behavior === "deny" ? "Deny"
-                    : event.behavior,
-              dismissed: event.source !== "user",
+                    : t("(brak odpowiedzi)", "(no answer)"),
+              // `answer` bez treści znaczy, że rozstrzygnął to DOSTAWCA (jego
+              // własny timeout pytania, jego droga zamknięcia) — nikt nie czeka
+              // na pokwitowanie czegoś, czego człowiek nie kliknął, a karta
+              // musi przestać przyjmować kliknięcia. Krzyżyk też zamyka.
+              dismissed: existing.card.dismissed === true
+                || event.source !== "user"
+                || !["allow", "always", "deny"].includes(event.behavior),
             },
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
@@ -1808,14 +1990,48 @@ bus.subscribe((event: RuntimeEvent) => {
       // nadawcy sprzed awarii.
       peerTurn.delete(bot.id);
       groupTurn.get(bot.id)?.done("");
+      forgetSettledGroupTurn(bot.id);
       turnAssistantText.delete(event.threadId);
       turnUsedTool.delete(event.threadId);
+      turnUsedComputer.delete(event.threadId);
       turnUserText.delete(event.threadId);
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
-      endTurnPush(bot.id, "failed", event.message.slice(0, 120));
+      // multibot: wygasłe logowanie do CLI to nie awaria kodu, tylko robota dla
+      // człowieka — JEDNO miejsce dla wszystkich driverów (server/auth-failure.ts).
+      // Bot parkuje na `needsAttention`, więc jedzie tą samą szyną co pytanie:
+      // push na telefon, banerka na pulpicie, wskaźnik w pasku bocznym.
+      const expired = authFailure(event.message);
+      // Harness, na którym stoi bot, jest źródłem prawdy: nazwa wyłowiona z
+      // tekstu bywa cudza (ogon stderr) i wysłałaby człowieka do złego okna.
+      const expiredTool = expired ? (cliToolIdFor(bot) ?? expired.tool) : null;
+      if (expiredTool) {
+        const note = loginExpiredNote(expiredTool);
+        const repeat = bot.needsAttention === note;
+        store.patchBot(bot.id, { needsAttention: note });
+        // `attention` przechodzi bramkę `shouldNotify` także w turze bot-bot:
+        // bez człowieka ta tura i każda następna padnie tak samo. Powtórka
+        // tej samej prośby już nie brzęczy.
+        if (!repeat) pushForBot(bot.id, "attention", t(`Logowanie do ${expiredTool} wygasło. Zaloguj się ponownie.`, note));
+        harnessRoutines.settleRun(bot.id, { reason: "login-expired" }); // ta gałąź omija `endTurnPush`
+        turnOrigin.delete(bot.id);
+        broadcast({ kind: "auth-expired", tool: expiredTool, botId: bot.id, message: note });
+        // multibot: karta w transkrypcie z przyciskiem „Odśwież logowanie" —
+        // banerka znika przy przełączeniu bota, karta zostaje tam, gdzie
+        // tura padła. Jedna otwarta karta na bota i narzędzie: powtórka nie
+        // dokłada drugiej. `text` = zdanie dla starych bundli (mobile bez
+        // renderera `login` pokaże dymek zamiast pustki).
+        if (!openLoginCard(store.messagesFor(bot.threadId), expiredTool)) {
+          pushMessage({ role: "bot", kind: "login", login: { tool: expiredTool }, text: note });
+        }
+      } else {
+        endTurnPush(bot.id, "failed", event.message.slice(0, 120));
+      }
       // watchdog: provider padl bez turn.completed -> zwolnij busy
       if (bot) {
-        store.patchBot(bot.id, { busy: false });
+        // The error pill above IS visible, so a failed turn leaves the dot on
+        // even when everything else it produced belonged to a room.
+        store.patchBot(bot.id, { busy: false, unread: turnPushedVisible.has(event.threadId) });
+        turnPushedVisible.delete(event.threadId);
         if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
         activeCommsDepth.delete(bot.id);
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
@@ -1832,11 +2048,25 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
+      const groupOnly = isGroupOnlyTurn(bot.id, event.threadId);
       const frame = stopScreenPoller(bot.id);
-      if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
-      store.patchBot(bot.id, { busy: false, unread: true });
+      if (frame && !groupOnly) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+      // The local computer has no poller (its live view is the VNC panel), so
+      // a turn that drove it left NOTHING in the chat — the screenshot went to
+      // the model only. One settled frame of the desktop the bot just used.
+      else if (!groupOnly && turnUsedComputer.has(event.threadId)) {
+        void localScreenshot()
+          .then((png) => pushMessage({ role: "bot", kind: "screen", png, mime: "image/jpeg" }))
+          .catch(() => { /* computer gone mid-turn — the reply still stands */ });
+      }
+      turnUsedComputer.delete(event.threadId);
+      // The dot follows what the user can actually SEE, not what kind of turn
+      // ran: a group turn that wrote nothing here leaves no dot, and a turn
+      // that carried both a group envelope and a private message still does.
+      store.patchBot(bot.id, { busy: false, unread: turnPushedVisible.has(event.threadId) });
+      turnPushedVisible.delete(event.threadId);
+      const groupHere = groupTurn.get(bot.id);
       if (busyWatchdog.has(bot.id)) { clearTimeout(busyWatchdog.get(bot.id)!); busyWatchdog.delete(bot.id); }
-      const lastReply = store.messagesFor(bot.threadId).filter((m) => m.role === "bot" && m.kind === "text" && m.text).at(-1)?.text ?? "";
       // Safety net for the whole bot↔bot design: a bot that was answering a
       // peer and did not call a peer tool itself still gets its prose routed
       // back. Without it the most natural thing a model does — just write the
@@ -1847,14 +2077,47 @@ bus.subscribe((event: RuntimeEvent) => {
       // bot's previous, unrelated answer to a bot that never asked for it.
       const saidThisTurn = (turnAssistantText.get(event.threadId) ?? []).join("\n").trim();
       turnAssistantText.delete(event.threadId);
+      // multibot: tura, która nie napisała ANI SŁOWA, znikała bez śladu —
+      // `busy` gasło, pasek maskotki wracał do spoczynku i w transkrypcie nie
+      // było nic. Zgłoszenie Kacpra 10.09.2026 (bot „Ogar", 16:23): model
+      // odpowiedział na `ask_user`, po czym oddał PUSTĄ odpowiedź końcową,
+      // więc `item.completed`/`assistant_text` nigdy nie przyszło. Dla
+      // człowieka to nie do odróżnienia od zgubionej wiadomości, więc cisza
+      // dostaje widoczny ślad. Tylko w turach, na które ktoś CZEKA: rozmowa
+      // bot↔bot milczy z projektu (`[NO REPLY]`).
+      const origin = turnOrigin.get(bot.id);
+      // Tura, która odezwała się INNĄ drogą, nie jest niema: `notify_user`
+      // budzi telefon banerką, a karta (pytanie, zgoda, sekret, konektor) stoi
+      // w czacie i sama mówi, na czym stanęło.
+      const toldUser = turnToldUser.delete(bot.id);
+      // Udana tura z odpowiedzią = logowanie działa; otwarta karta „logowanie
+      // wygasło" ma to pokazać, zamiast wisieć jako wieczna prośba.
+      if (event.ok && saidThisTurn) {
+        const tool = cliToolIdFor(bot);
+        if (tool) resolveLoginCards(event.threadId, tool);
+      }
+      // Tura nieudana (`ok: false`) bez zgłoszonego powodu to nadal cisza, ale
+      // nie podpisujemy jej „model nic nie napisał", jakby to była jego decyzja.
+      const silentNote = !saidThisTurn && !frame && !toldUser && origin === "user"
+        ? event.ok
+          ? t(
+            "(tura skończona bez odpowiedzi — model nic nie napisał; napisz „kontynuuj”, żeby wrócił do tematu)",
+            '(turn ended without an answer — the model wrote nothing; say "continue" to bring it back to the topic)',
+          )
+          : t(
+            `(tura przerwana błędem${event.stopReason ? ` — ${event.stopReason}` : ""}; napisz „kontynuuj”, żeby spróbować jeszcze raz)`,
+            `(turn failed${event.stopReason ? ` — ${event.stopReason}` : ""}; say "continue" to try again)`,
+          )
+        : "";
+      if (silentNote) pushMessage({ role: "bot", kind: "text", text: silentNote });
       turnUsedTool.delete(event.threadId);
       turnUserText.delete(event.threadId);
       // A group turn has no peer to answer: the loop that asked is waiting.
       // A turn that was ALREADY running when the envelope queued did not read
       // it, so it only clears the flag; the turn the drain starts answers.
-      const groupWaiting = groupTurn.get(bot.id);
-      if (groupWaiting?.deferred) groupWaiting.deferred = false;
-      else groupWaiting?.done(saidThisTurn);
+      if (groupHere?.deferred) groupHere.deferred = false;
+      else groupHere?.done(saidThisTurn);
+      forgetSettledGroupTurn(bot.id); // the turn is over; the marker must not outlive it
       const waiting = (peerTurn.get(bot.id) ?? []).filter((entry) => !entry.replied);
       // A message that queued behind THIS turn is read by the next one; it is
       // held over instead of being answered with text written before it landed.
@@ -1873,7 +2136,14 @@ bus.subscribe((event: RuntimeEvent) => {
           console.warn(`[multibot] peer reply from ${bot.id} failed:`, error instanceof Error ? error.message : error),
         );
       }
-      endTurnPush(bot.id, "finished", lastReply.slice(0, 120) || t("skończył pracę", "finished working"));
+      // multibot: treścią powiadomienia jest to, co bot powiedział W TEJ TURZE.
+      // `lastReply` chodzi po całym wątku, więc po niemej turze telefon
+      // pokazywał STARĄ odpowiedź, jakby przyszła nowa.
+      // multibot: treścią powiadomienia jest to, co bot powiedział W TEJ TURZE.
+      // `lastReply` chodził po całym wątku, więc po niemej turze telefon
+      // pokazywał STARĄ odpowiedź, jakby przyszła nowa; znacznik ciszy też nie
+      // jest wiadomością i nie ma po co budzić telefonu jego treścią.
+      endTurnPush(bot.id, "finished", saidThisTurn.slice(0, 120) || t("skończył pracę", "finished working"));
       clearTurnPolicy(bot.threadId);
       activeCommsDepth.delete(bot.id); // multibot (F9): tura skończona — licznik też
       turnModelByThread.delete(event.threadId); // multibot (F12): sprzątanie badge
@@ -1885,6 +2155,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // z nim zamiast odpalać turę na rekordzie, który za chwilę zniknie.
         stopScreenPoller(bot.id);
         harnessRoutines.deleteBot(bot.id);
+        reminders.deleteBot(bot.id);
         attachments.deleteBot(bot.id);
         workspace.deleteBot(bot.id);
         store.deleteBot(bot.id);
@@ -2339,13 +2610,11 @@ async function warmBot(botId: string): Promise<boolean> {
  * biją się na telefonie o RAM i CPU, więc szeregowo wychodzi szybciej niż
  * równolegle.
  *
- * MULTIBOT_WARM_WORKERS=0 znaczy „każdy bot to ciepły worker": rozgrzewamy
- * WSZYSTKIE boty, a driver nikogo nie eksmituje ani nie ubija z bezczynności.
- * Parsowanie musi się zgadzać z maxWarmWorkers() w drivers/claude.ts — inaczej
- * jedna strona zrozumiałaby 0 jako „dwa".
+ * Domyślnie WYŁĄCZONE (MULTIBOT_WARM_WORKERS niezadane lub 0): bezczynny bot
+ * to zero procesów, a rozgrzany worker i tak schodzi po WORKER_IDLE_MS.
+ * Wartość > 0 rozgrzewa tyle ostatnio używanych botów przy starcie.
  */
-const warmWorkerLimit = () =>
-  process.env.MULTIBOT_WARM_WORKERS ? Number(process.env.MULTIBOT_WARM_WORKERS) || 0 : 2;
+const warmWorkerLimit = () => Number(process.env.MULTIBOT_WARM_WORKERS) || 0;
 const warmColdStreak = new Map<string, number>();
 async function warmBots(): Promise<void> {
   const limit = warmWorkerLimit();
@@ -2353,7 +2622,8 @@ async function warmBots(): Promise<void> {
   const recent = store.bots
     .filter((b) => !b.hidden && !b.temporary)
     .sort((a, b) => lastAt(b) - lastAt(a));
-  for (const bot of limit > 0 ? recent.slice(0, limit) : recent) {
+  if (limit <= 0) return;
+  for (const bot of recent.slice(0, limit)) {
     // Bot, który pięć zamiatań z rzędu nie utrzymał procesu, jest odpuszczany:
     // to znaczy, że CLI jest u niego trwale zepsute, a nie że zabrakło pamięci
     // na chwilę — mielenie telefonu w kółko nic tu nie naprawi.
@@ -2421,12 +2691,12 @@ opts?: {
 
   const turnAttachments = opts?.attachments ?? [];
   // multibot: tury RÓŻNYCH botów chodzą równolegle. Jedyne, co je ogranicza, to
-  // liczba jednoczesnych tur (OMB_MAX_PARALLEL_TURNS) — nie kolejność. Tura
+  // liczba jednoczesnych tur (MULTIBOT_MAX_PARALLEL_TURNS) — nie kolejność. Tura
   // zagnieżdżona (izolowana albo delegowana, depth > 0) slotu nie bierze: jej
   // wołający właśnie jeden trzyma, więc czekałaby sama na siebie.
   // ponytail: tura peera to teraz zwykła tura głównego wątku, więc BIERZE slot
   // — rozmowa botów potrafi wygłodzić wiadomość człowieka przy małym
-  // OMB_MAX_PARALLEL_TURNS. Sufit świadomy: gdyby doskwierało, należy się
+  // MULTIBOT_MAX_PARALLEL_TURNS. Sufit świadomy: gdyby doskwierało, należy się
   // osobna pula slotów dla tur o origin "bot", nie zdejmowanie bramki.
   const gated = !isolated && commsDepth === 0;
   const userMessage = isolated || opts?.userMessagePosted ? null : store.appendMessage(bot.threadId, {
@@ -2445,7 +2715,7 @@ opts?: {
   // transcript: settled text turns only. Driverzy API-owi (grok) grają z niego
   // rozmowę co turę, drivery CLI (codex/claude) dostają go tylko wtedy, gdy
   // sesja dostawcy przepadła i trzeba odtworzyć rozmowę od zera. Dlatego CAŁY
-  // wątek, przycięty budżetem znaków (OMB_HISTORY_MAX_CHARS) zamiast sztywnym
+  // wątek, przycięty budżetem znaków (MULTIBOT_HISTORY_MAX_CHARS) zamiast sztywnym
   // „ostatnie 40" — po 40 wiadomościach bot zapominał początek rozmowy.
   const transcript = opts?.transcript ?? trimTranscript(
     store
@@ -2456,18 +2726,34 @@ opts?: {
   const promptUser = opts?.actor
     ? { uid: opts.actor.userId, name: opts.actor.displayName }
     : (() => {
-      const lastUser = store.messagesFor(bot.threadId).reverse().find((message) => message.role === "user" && message.userId);
+      // `findLast`, not `.reverse().find`: `messagesFor` hands back the LIVE
+      // cached array, so reversing it flipped that thread's order in memory for
+      // the rest of the process — every order-dependent read after this turn
+      // (and the JSON the clients are served) saw the transcript backwards.
+      const lastUser = store.messagesFor(bot.threadId).findLast((message) => message.role === "user" && message.userId);
       return lastUser?.userId ? { uid: lastUser.userId, name: lastUser.userName } : undefined;
     })();
 
 
-  // multibot (D7): kolejna tura usera JEST odpowiedzią na to, na co bot czekał
-  if (!isolated && bot.needsAttention != null) store.patchBot(bot.id, { needsAttention: null });
+  // multibot (D7): kolejna tura usera JEST odpowiedzią na to, na co bot czekał.
+  // Tylko USERA: rutyna co 5 minut gasiła prośbę o logowanie, po czym ta sama
+  // rutyna zastawała wygasły token i stawiała ją od nowa — dedup `repeat`
+  // nigdy nie widział powtórki, więc telefon brzęczał dwanaście razy na
+  // godzinę o tym samym (`allowNotify` pilnuje tylko `notify`).
+  if (!isolated && (opts?.origin ?? "user") === "user" && bot.needsAttention != null) {
+    store.patchBot(bot.id, { needsAttention: null });
+  }
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   if (!isolated) {
-    store.patchBot(bot.id, { busy: true, unread: false });
+    // Tura bot-bot znaczy się na rekordzie, bo powłoka rysuje banerkę „skończył"
+    // z przejścia `busy`, a nie z pusha — bez tego kolega piszący do kolegi
+    // wyskakuje na pulpicie. Nie kasujemy jej: następna tura nadpisze.
+    const botOrigin = (opts?.origin ?? "user") === "bot";
+    // As in `queueUserTurn`: a turn a COLLEAGUE or a group started does not mark
+    // the private chat read — the user has still not seen what is in it.
+    store.patchBot(bot.id, { busy: true, botTurn: botOrigin, ...(botOrigin ? {} : { unread: false }) });
     setTurnPolicy(bot.threadId, {
       autonomy: workspace.autonomy(bot.id).autonomy,
       access: workspace.access(bot.id).access,
@@ -2479,23 +2765,22 @@ opts?: {
     // running now, so a restart from here on is a dead turn, not a lost one.
     // Only OUR debt is cleared — the same room may still owe somebody else.
     for (const entry of peerTurn.get(bot.id) ?? []) {
-      if (rooms.get(entry.roomId)?.pendingTo === bot.id) rooms.setPending(entry.roomId, null);
+      if (rooms.get(entry.roomId)?.pendingTo === bot.id) setRoomPending(entry.roomId, null);
     }
     const origin: TurnOrigin = opts?.origin ?? "user";
     // Whatever a user- or routine-started turn answers, the user is owed the
     // bubble even if a colleague is waiting on the same turn (steering).
     if (origin !== "bot") turnUserText.add(bot.threadId);
     turnOrigin.set(bot.id, origin);
-    if (origin === "routine") scheduleStartedPush(bot.id, `rutyna ${opts?.routineName ?? ""} wystartowała`);
-    else if (origin === "user") scheduleStartedPush(bot.id, `zaczyna pracę: ${text.slice(0, 80)}`);
+    turnToldUser.delete(bot.id); // każda tura zaczyna od „jeszcze nic nie powiedział"
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
-    // watchdog 70s - jesli brak turn.completed (provider zawiesil sie) zwolnij busy
-    armBusyWatchdog(bot.id);
+    // Watchdog 70 s ciszy dostawcy zbroi się przy `turn.started` (handler
+    // zdarzeń) — nie tutaj, bo do startu tura potrafi czekać dłużej niż 70 s.
   }
 
   void (async () => {
     try {
-      // Slot na turę. Wolny (flota poniżej OMB_MAX_PARALLEL_TURNS) → rusza od
+      // Slot na turę. Wolny (flota poniżej MULTIBOT_MAX_PARALLEL_TURNS) → rusza od
       // razu, więc dwa boty pracują naprawdę równolegle.
       if (gated) {
         gatedTurnBots.add(bot.id);
@@ -2533,6 +2818,7 @@ opts?: {
         // reszta dostałaby w prompcie ofertę, której nie umie zamontować.
         if (computer && computer.state !== "error" && instance.adapter.capabilities.agentsMcp === true) {
           integrations.localComputer = localComputerIntegration(bot.id);
+          holdComputer(bot.id);
         }
       } catch (e) {
         console.warn(`[multibot] computer unavailable for ${bot.id}:`, e instanceof Error ? e.message : e);
@@ -2628,8 +2914,10 @@ opts?: {
         activeCommsDepth.delete(bot.id); // multibot (F9): tura padła — licznik też
         peerTurn.delete(bot.id);
         groupTurn.get(bot.id)?.done("");
+        forgetSettledGroupTurn(bot.id);
         turnAssistantText.delete(turnThreadId);
         turnUsedTool.delete(turnThreadId);
+        turnPushedVisible.delete(turnThreadId);
         turnUserText.delete(turnThreadId);
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
         drainQueuedUserMessages(bot.id);
@@ -2718,6 +3006,8 @@ function configStatusFor(actor: IdentityActor | null) {
       name: actor?.displayName ?? cfg.profile?.name ?? "",
       // ponytail: e-mail wciąż mieszka w config.json — `users.email` dokłada PR 2.
       email: cfg.profile?.email ?? "",
+      // zdjęcie profilowe konta (identity.db) — data URL albo null
+      avatar: actor?.avatar ?? null,
     },
     workspace: {
       id: cfg.workspace?.id ?? "default",
@@ -2774,6 +3064,9 @@ function groupVisible(group: { bot_ids: string[] }, actor: IdentityActor | null)
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  // Tury giną tu bez `turn.completed`, więc nikt już nie domknie przebiegów
+  // rutyn, które na nie czekały — inaczej wisiałyby `queued` do restartu.
+  harnessRoutines.abandonPendingRuns();
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
@@ -2795,12 +3088,36 @@ const setupJobs = new SetupJobs(join(DATA_DIR, "setup-jobs.json"), (job) =>
 // jako osobny, oznaczony blok — `routineTurnText` jest JEDNYM wspólnym
 // miejscem składania dla wszystkich ścieżek (webhook, tick, Run now).
 const harnessRoutines = new HarnessRoutines(join(DATA_DIR, "routines.json"), async (routine, payload) => {
-  // Rutyna z konkretną datą to przypomnienie: człowiek ma dostać banerkę i push
-  // w zaplanowanej chwili, a nie dopiero wtedy, gdy bot skończy myśleć.
-  // tytułem banerki jest sama treść przypomnienia — powtórzona w body dałaby
-  // „kawa / kawa"; push i tak bierze nazwę bota jako tytuł
-  if (oneShotAt(routine.schedule) !== null) notifyUser(routine.botId, routine.name, "", "reminder");
+  // Rutyna (także jednorazowa, z datą ISO) jest CICHA: to zaplanowana praca
+  // bota, nie prośba do człowieka. Gdy bot naprawdę czegoś chce, woła w swojej
+  // turze `notify_user`; przypomnienia dla człowieka to osobne rekordy
+  // (`Reminders` niżej) i tylko one brzęczą automatycznie.
   await startTurn(routine.botId, routineTurnText(routine.name, routine.prompt, payload), { origin: "routine", routineName: routine.name });
+});
+
+// multibot: przypomnienia — OSOBNY rekord obok rutyn (Kacper, 10.09.2026).
+// Odpalenie to dwie rzeczy i nic więcej: powiadomienie na telefon i pulpit
+// (niesie `botId`, więc stuknięcie otwiera czat tego bota) oraz pigułka
+// `reminder` w transkrypcie. Tury nie zaczynamy — przypomnienie ma przypomnieć,
+// a nie wydać tokeny na komentarz do samego siebie.
+const reminders = new Reminders(join(DATA_DIR, "reminders.json"), (reminder) => {
+  const bot = store.bot(reminder.botId);
+  // Banerka na pulpicie mówi, CO i OD KOGO — samo „kawa" nie mówi nic.
+  // Push ma nazwę bota w tytule, więc w treści zostaje sama treść.
+  notifyUser(
+    reminder.botId,
+    bot?.name ? `${t("Przypomnienie", "Reminder")} · ${bot.name}` : t("Przypomnienie", "Reminder"),
+    reminder.text,
+    "reminder",
+    { pushBody: reminder.text, only: reminder.userId ? [reminder.userId] : undefined },
+  );
+  appendBotEvent(reminder.botId, { type: "reminder", value: reminder.text });
+  // Czat, który otwiera stuknięcie w powiadomienie, ma być oznaczony jako
+  // nieprzeczytany — inaczej push prowadzi do rozmowy bez żadnego śladu.
+  const updated = store.patchBot(reminder.botId, { unread: true });
+  if (updated) broadcast({ kind: "bot", bot: updated });
+  broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+  console.log(`[reminders] fired ${reminder.id} (${reminder.botId}): ${reminder.text}`);
 });
 
 // ── multibot (webhook): publiczny inbound rutyn harnessu ──────────────
@@ -2955,6 +3272,35 @@ function validBaseUrl(value: string): boolean {
   }
 }
 
+/** multibot: `claude auth login` przerwane wychodzi z kodem 0 — „udany" job
+ * nie dowodzi logowania. Dla claude'a pytamy sondę pliku; inne CLI nie mają
+ * sondy i job pozostaje jedynym świadkiem. */
+const loginProbePasses = (toolId: string): boolean => toolId !== "claude" || claudeAuthState().authenticated;
+
+/** multibot: zdejmuje `needsAttention` z botów, które czekały na logowanie do
+ * tego narzędzia. Wołane po udanym `cli-login`; innych powodów czekania nie
+ * rusza, bo rozpoznaje własny prefiks. */
+function clearLoginExpired(toolId: string): void {
+  for (const bot of store.bots) {
+    if (loginExpiredTool(bot.needsAttention) !== toolId) continue;
+    store.patchBot(bot.id, { needsAttention: null });
+    broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    resolveLoginCards(bot.threadId, toolId);
+  }
+}
+
+/** multibot: logowanie do TEGO narzędzia znów działa (udany cli-login, udana
+ * tura z odpowiedzią) — jego otwarte karty w wątku przechodzą w „Zalogowano
+ * ponownie". */
+function resolveLoginCards(threadId: string, tool: string): void {
+  for (const message of openLoginCards(store.messagesFor(threadId), tool)) {
+    const patched = store.patchMessage(threadId, message.id, { login: { ...message.login!, signedIn: true } });
+    // `message.patch`, nie `message`: powłoka trzyma wiadomość o znanym id i
+    // zwykłą ramkę `message` pomija (messageAdded), więc karta by nie zgasła.
+    if (patched) broadcast({ kind: "message.patch", threadId, message: patched });
+  }
+}
+
 async function cliToolsStatus() {
   const described = await registry.describe();
   return CLI_TOOLS.map((tool) => {
@@ -3016,8 +3362,15 @@ async function deleteGroupRecord(id: string): Promise<{ found: boolean }> {
 
 async function deleteBotRecord(bot: BotRecord): Promise<void> {
   await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // Skasowany w trakcie pracy na komputerze bot nie dostanie już `turn.completed`,
+  // więc jego id zostałoby w znaczniku „pracuje" (i w kolejce slotów) na zawsze.
+  // Licznik tur zdejmujemy PRZED zwolnieniem: bota nie ma, więc nie ma też tury
+  // zewnętrznej, dla której `releaseTurnSlot` oszczędzałby znacznik.
+  activeCommsDepth.delete(bot.id);
+  releaseTurnSlot(bot.id);
   stopScreenPoller(bot.id);
   harnessRoutines.deleteBot(bot.id);
+  reminders.deleteBot(bot.id);
   attachments.deleteBot(bot.id);
   workspace.deleteBot(bot.id);
   store.deleteBot(bot.id);
@@ -3029,10 +3382,20 @@ async function deleteBotRecord(bot: BotRecord): Promise<void> {
   broadcast({ kind: "bot.deleted", botId: bot.id, visibility: bot.visibility, ownerId: bot.ownerId, allowedUserIds: bot.allowedUserIds });
 }
 
+// Ten sam limit stoi w src/lib/groupRow.ts — serwer nie może importować z src/
+// (tsconfig.server.build.json wypuszcza wyłącznie server/), więc są dwie stałe.
+const MAX_GROUP_MEMBERS = 12;
+
 // multibot: grupa mieszka w harnessie — rozmowa grupowa idzie przez
 // deliverPeerMessage/askBotAndWait, a skład i transkrypt trzyma groupStore.
 async function createGroupRecord(name: string, memberIds: string[], section?: string): Promise<{ status: number; body: unknown }> {
-  const group = groupStore.upsert({ name, bot_ids: memberIds, section });
+  // Bez dedupu ten sam bot policzyłby się do limitu wiele razy, a sidebar
+  // dostałby dwa wiersze awatara z tym samym kluczem Reacta.
+  const unique = [...new Set(memberIds)];
+  if (unique.length > MAX_GROUP_MEMBERS) {
+    return { status: 400, body: { error: `group has at most ${MAX_GROUP_MEMBERS} bots` } };
+  }
+  const group = groupStore.upsert({ name, bot_ids: unique, section });
   broadcast({ kind: "group", group });
   return { status: 201, body: group };
 }
@@ -3044,6 +3407,9 @@ async function addGroupMemberRecord(id: string, botId: string): Promise<{ status
   if (!group || !bot) return { status: 404, body: { error: "no such group or bot" } };
   const memberId = groupMemberId(bot.threadId);
   if (group.bot_ids.includes(memberId)) return { status: 200, body: group };
+  if (group.bot_ids.length >= MAX_GROUP_MEMBERS) {
+    return { status: 400, body: { error: `group has at most ${MAX_GROUP_MEMBERS} bots` } };
+  }
   const updated = groupStore.upsert({ id: group.id, name: group.name, bot_ids: [...group.bot_ids, memberId] });
   broadcast({ kind: "group", group: updated });
   return { status: 200, body: updated };
@@ -3068,7 +3434,7 @@ function readBody(req: IncomingMessage): Promise<any> {
 }
 
 function identityUser(actor: IdentityActor) {
-  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role, email: actor.email ?? null };
+  return { id: actor.userId, username: actor.username, displayName: actor.displayName, role: actor.role, email: actor.email ?? null, avatar: actor.avatar ?? null };
 }
 
 function identitySessionBody(session: CreatedSession & { recoveryCode?: string }, includeSessionToken = false) {
@@ -3242,7 +3608,7 @@ async function handleIdentityRoute(
       return identityHandled(res, status, { error: error instanceof IdentityError ? error.message : "invalid request" });
     }
   }
-  if (path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/")) {
+  if (path.startsWith("/api/auth/") || path.startsWith("/api/profile") || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/")) {
     if (!actor) return identityHandled(res, 401, { error: "unauthorized" });
     try {
       if (method === "POST" && path === "/api/auth/access-token") {
@@ -3276,6 +3642,23 @@ async function handleIdentityRoute(
       const sessionPath = path.match(/^\/api\/auth\/sessions\/([^/]+)$/);
       if (method === "DELETE" && sessionPath) {
         return identityHandled(res, identity.revokeSession(actor, decodeURIComponent(sessionPath[1])) ? 200 : 404, { ok: true });
+      }
+      // multibot: zdjęcie profilowe konta — jak /api/bots/:id/avatar, tylko na
+      // ZALOGOWANYM aktorze. Kontrakt (używa go też mobile):
+      //   POST {image:"data:image/…"} → 200 {user:{…, avatar}}; DELETE → 200, avatar null.
+      if (path === "/api/profile/avatar") {
+        if (method === "POST") {
+          const body = await readBody(req);
+          const image = String(body.image ?? "").trim();
+          if (!image) return identityHandled(res, 422, { error: "image required (data:image/* base64)" });
+          if (image.length > 700_000) return identityHandled(res, 413, { error: "avatar image too large (max ~500KB)" });
+          if (!image.startsWith("data:image/")) return identityHandled(res, 422, { error: "image must be data:image/* URL" });
+          return identityHandled(res, 200, { user: identityUser(identity.setAvatar(actor, image)) });
+        }
+        if (method === "DELETE") {
+          return identityHandled(res, 200, { user: identityUser(identity.setAvatar(actor, null)) });
+        }
+        return identityHandled(res, 405, { error: "method not allowed" });
       }
       if (method === "GET" && path === "/api/profile") return identityHandled(res, 200, { user: identityUser(actor) });
       if (method === "PATCH" && path === "/api/profile") {
@@ -3353,14 +3736,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
   const adminMutation = method !== "GET" && (
     path.startsWith("/api/models/custom/") ||
     path.startsWith("/api/cli-tools/") ||
-    path.startsWith("/api/progress/") ||
-    path.startsWith("/api/connectors/")
+    path.startsWith("/api/progress/")
   );
   if (adminMutation && actor?.role !== "owner") return json(res, 403, { error: "owner access required" });
   const langParam = url.searchParams.get("lang");
   if (langParam === "pl" || langParam === "en") uiLang = langParam;
   try {
-    const identityRoute = path.startsWith("/api/auth/") || path === "/api/profile" || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/");
+    const identityRoute = path.startsWith("/api/auth/") || path.startsWith("/api/profile") || path.startsWith("/api/server") || path.startsWith("/api/workspace") || path.startsWith("/api/admin/");
     if (isIdentityPublicRoute(method, path) || (actor && identityRoute)) {
       if (await handleIdentityRoute(req, res, path, method, actor)) return;
     }
@@ -3430,7 +3812,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       if (method === "POST" && path === "/api/internal/attachments") {
         // multibot: bot→user file sending. The agents MCP `send_file` tool POSTs
-        // here; we store the file and hold it for the bot's next chat message.
+        // here; we store the file and persist it as its own chat message at once.
         const body = await readBody(req);
         const botId = String(body.botId ?? "");
         const bot = store.bot(botId);
@@ -3438,16 +3820,91 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // Ścieżka jest drogą główną: bot pisze plik swoim narzędziem i podaje
         // gdzie leży, zamiast przepychać jego bajty base64-em przez własne
         // wyjście — tam ucinały się już przy trzydziestu kilobajtach.
-        const buf = body.path
-          ? readFileSync(resolveBotFile(String(body.path)))
-          : Buffer.from(String(body.content ?? ""), "base64");
+        //
+        // Plik może leżeć w DWÓCH światach: na hoście (CLI dostawcy chodzi obok
+        // harnessu) albo w kontenerze komputera bota (bot zrobił go narzędziami
+        // `computer_exec`). Najpierw host — a gdy tam go nie ma, czytamy z
+        // kontenera. Fallback jest wyłącznie kontenerowy (sandbox bota), więc
+        // nie otwiera odczytu dowolnych plików hosta.
         // Przy wysyłce po ścieżce nazwa pliku jest już znana — bot nie musi jej
         // powtarzać, a powtórzona bywała inna niż prawdziwa.
-        const fallbackName = body.path ? basename(String(body.path)) : "file";
-        const meta = attachments.add(botId, String(body.name ?? fallbackName), String(body.mime ?? "application/octet-stream"), buf);
-        const pending = pendingBotAttachments.get(bot.threadId) ?? [];
-        pending.push(meta);
-        pendingBotAttachments.set(bot.threadId, pending);
+        let fileName = String(body.name ?? "file");
+        if (!body.name && body.path) fileName = basename(String(body.path));
+        if (!body.name && body.url) {
+          try {
+            fileName = basename(new URL(String(body.url)).pathname) || "file";
+          } catch {
+            // fetchRemoteFile returns the user-facing validation error below.
+          }
+        }
+        // MIME z nazwy, gdy model go nie podał — patrz `fileMime`. Limit liczymy
+        // z TEGO, nie z deklaracji: obrazek zadeklarowany jako octet-stream
+        // przechodził przez limit dokumentu (25 MB) zamiast obrazka (8 MB).
+        let declaredMime = fileMime(fileName, body.mime as string | undefined);
+        const byteLimit = declaredMime.startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+        let buf: Buffer;
+        if (body.path) {
+          try {
+            buf = readFileSync(resolveBotFile(String(body.path)));
+          } catch (err) {
+            if ((err as { status?: number }).status !== 404) throw err;
+            buf = await readComputerFile(String(body.path), byteLimit);
+          }
+        } else if (body.url) {
+          const remote = await fetchRemoteFile(String(body.url), MAX_FILE_BYTES);
+          buf = remote.bytes;
+          if (!body.mime || String(body.mime).toLowerCase() === "application/octet-stream") {
+            declaredMime = fileMime(fileName, remote.mime);
+          }
+        } else {
+          buf = Buffer.from(String(body.content ?? ""), "base64");
+        }
+        const meta = attachments.add(botId, fileName, declaredMime, buf);
+        // Utrwalamy wiadomość z załącznikiem OD RAZU, w chwili sukcesu narzędzia.
+        // Wcześniej plik czekał na najbliższy `assistant_text` — a dostawca potrafi
+        // skończyć turę bez ani jednego kawałka tekstu (codex 10.09.2026) i plik
+        // znikał bez śladu, mimo że bot dostał "File sent to the chat".
+        //
+        // DOKĄD trafia wiadomość — tam, gdzie toczy się bieżąca tura bota,
+        // dokładnie tak, jak tekst tej tury (bd63f22 pisał bezwarunkowo do
+        // prywatnego czatu i plik z tury grupowej lądował poza grupą):
+        //  - tura izolowana (delegacja) → jej wątek, nie prywatny czat;
+        //  - tura grupowa → wpis w prywatnym wątku jest ukryty (jak tekst
+        //    grupowy), a grupa dostaje link do pliku w swoim ledgerze;
+        //  - zwykła tura → prywatny czat, widocznie.
+        const isolatedThreadId = [...isolatedTurnBots.entries()].find(([, id]) => id === bot.id)?.[0];
+        const groupEntry = groupTurn.get(bot.id);
+        const groupOnly = !isolatedThreadId && isGroupOnlyTurn(bot.id, bot.threadId);
+        const targetThreadId = isolatedThreadId ?? bot.threadId;
+        const message = store.appendMessage(targetThreadId, {
+          role: "bot",
+          kind: "text",
+          text: "",
+          attachments: [meta],
+          ...(groupOnly ? { hidden: true } : {}),
+        });
+        if (groupOnly && groupEntry) {
+          // Grupowy ledger zna tylko tekst (GroupMessage bez załączników — nie
+          // zmieniamy kształtu zapisanych danych), więc plik jedzie jako link
+          // do istniejącego endpointu pobierania; bajty i tak leżą w store.
+          const link = `📎 [${meta.name}](/api/bots/${bot.id}/attachments/${meta.id})`;
+          rooms.append(groupEntry.roomId, bot.id, link);
+          broadcast({ kind: "room", room: rooms.get(groupEntry.roomId) });
+          groupStore.append(groupEntry.group.id, { from: bot.id, text: link });
+          const currentGroup = groupStore.get(groupEntry.group.id);
+          if (currentGroup) broadcast({ kind: "group", group: currentGroup });
+        } else if (isolatedThreadId) {
+          broadcast({ kind: "message", threadId: targetThreadId, message });
+        } else {
+          // Kropka „nieprzeczytane" na koniec tury liczy się z tego zbioru —
+          // plik w czacie to coś nowego dla użytkownika, tak samo jak tekst.
+          turnPushedVisible.add(bot.threadId);
+          // Tura, która dostarczyła plik, odezwała się do człowieka: bez tego
+          // tura „tylko plik, zero tekstu" kończyła się fałszywą notką
+          // „model nic nie napisał" (silentNote w turn.completed).
+          turnToldUser.add(bot.id);
+          broadcast({ kind: "message", threadId: bot.threadId, message });
+        }
         return json(res, 201, meta);
       }
       if (method === "POST" && path === "/api/internal/agent-action") {
@@ -3460,10 +3917,29 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         const privateBot = caller.visibility === "private";
         const teamActions = new Set(["team.memory.list", "team.memory.graph", "team.memory.markdown.get", "team.memory.add"]);
         if (privateBot && teamActions.has(action)) return json(res, 404, { error: "team scope unavailable to private bot" });
-        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "groups.list", "device.info", "file.read"]);
+        const readOnlyActions = new Set(["profile.get", "memory.list", "memory.graph", "memory.markdown.get", "team.memory.list", "team.memory.graph", "team.memory.markdown.get", "mail.inbox", "skills.list", "routines.list", "reminders.list", "groups.list", "device.info", "file.read",
+          // `notify_user` nie jest władzą nad niczym — to celowa prośba o uwagę
+          // człowieka, więc działa też u bota tylko-do-odczytu (limituje ją
+          // `allowNotify`, nie profil dostępu).
+          "user.notify"]);
         if (access === "read-only" && !readOnlyActions.has(action)) return json(res, 403, { error: "read-only access" });
         const requireFull = () => {
-          if (access !== "full") throw Object.assign(new Error("Full Access required for this action"), { status: 403 });
+          // multibot (K6): sam komunikat „Full Access required" był dla modelu
+          // ślepym zaułkiem — bot oznajmiał użytkownikowi „jestem zablokowany"
+          // i kończył turę. Odmowa musi nazywać OBEJŚCIE i kto je włącza,
+          // wtedy bot robi swoje inaczej albo prosi o to konkretnie.
+          if (access !== "full") {
+            // Komputer radzimy tylko wtedy, gdy bot go w tej turze ma —
+            // odesłanie do `computer_exec` bota, który nie ma zamontowanego
+            // komputera, to drugi ślepy zaułek zamiast pierwszego.
+            const viaComputer = canUseIntegration(caller.threadId, "browser")
+              ? " Run it on your computer instead (computer_exec), or ask"
+              : " Ask";
+            throw Object.assign(
+              new Error(`Full Access required for ${action}; this bot is in the "${access}" access profile.${viaComputer} the user to switch this bot to Full Access with the access pill next to the message box.`),
+              { status: 403 },
+            );
+          }
         };
         // multibot: rutyny CUDZEGO bota. `bot_id` jest opcjonalne (brak = swoje),
         // a cudzy bot musi być widoczny dla wołającego — i, gdy wołający jest
@@ -3512,10 +3988,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const choices = Array.isArray(body.choices)
               ? body.choices.map((choice: unknown) => String(choice).trim()).filter(Boolean).slice(0, 5)
               : [];
+            // multibot: tytułem karty jest samo pytanie, `detail` idzie pod nim
+            // drobnym drukiem. `multiple` przełącza kartę na checkboxy —
+            // człowiek wybiera kilka odpowiedzi i zatwierdza jednym przyciskiem.
             const answer = await askOwnerAndWait(caller.threadId, {
-              title: t("Bot ma pytanie", "Your bot has a question"),
-              subtitle: question,
+              title: question.slice(0, 300),
+              subtitle: String(body.detail ?? "").trim().slice(0, 400),
               options: choices,
+              ...(body.multiple === true && choices.length > 1 ? { multiple: true } : {}),
             });
             return json(res, 200, { answer });
           }
@@ -3541,35 +4021,58 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const answer = await askCredentialAndWait(caller, target);
             return json(res, 200, { answer });
           }
-          // multibot: przypomnienie to rutyna z jednorazową datą (ISO), nie cron
-          // raz na rok. Prompt każe botowi POWIEDZIEĆ o tym w chwili odpalenia.
+          // multibot: przypomnienie to OSOBNY rekord, nie rutyna z datą
+          // (Kacper, 10.09.2026). Rutyna powtarza się; to odpala raz.
+          // NIE `requireFull()`: domyślny profil bota to „approval", a
+          // przypomnienie nie jest władzą — to notatka, o którą poprosił sam
+          // człowiek, plus powiadomienie do niego. Pod pełnym dostępem
+          // „przypomnij mi jutro o 9" nie działało na żadnym świeżym bocie.
           case "reminders.create": {
-            requireFull();
-            const text = String(body.text ?? "").trim().slice(0, 100);
-            const at = String(body.at ?? "").trim();
-            if (!text || !at) return json(res, 422, { error: "text and at required" });
             try {
-              const routine = harnessRoutines.create(fromBotId, {
-                name: text,
-                prompt: `Reminder for the user: ${text}. Tell them now, in one short line, and do the task if it is something you can do yourself.`,
-                schedule: at,
-              });
-              appendBotEvent(fromBotId, { type: "reminder-created", value: text });
-              broadcast({ kind: "workspace", botId: fromBotId, resource: "routines" });
-              return json(res, 201, routineView(fromBotId, routine));
+              // Właścicielem przypomnienia jest właściciel bota: to jego telefon
+              // ma zabrzęczeć, nie telefon całego zespołu. Bez właściciela
+              // (instalacja bez kont) zostaje stare zachowanie.
+              const reminder = reminders.create(fromBotId, { text: body.text, at: body.at, userId: caller.ownerId ?? undefined });
+              appendBotEvent(fromBotId, { type: "reminder-created", value: reminder.text });
+              broadcast({ kind: "workspace", botId: fromBotId, resource: "reminders" });
+              return json(res, 201, reminder);
             } catch (error) {
               return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
             }
           }
+          case "reminders.list": return json(res, 200, reminders.list(fromBotId));
+          case "reminders.delete": {
+            // Bot kasuje SWOJE przypomnienia. Bez tej bramki zgadnięty id
+            // zdejmowałby cudze — a przypomnienia nie są zasobem zespołu.
+            const target = reminders.get(String(body.id ?? ""));
+            if (!target || target.botId !== fromBotId) return json(res, 404, { error: "no such reminder" });
+            reminders.delete(target.id);
+            broadcast({ kind: "workspace", botId: fromBotId, resource: "reminders" });
+            return json(res, 200, { ok: true });
+          }
           // multibot: bot ma coś do POWIEDZENIA, nie o co zapytać — banerka i
-          // push zamiast karty, która wstrzymuje turę na cztery minuty.
+          // push zamiast karty, która wstrzymuje turę na cztery minuty. To
+          // JEDYNY push poza przypomnieniem, więc jest limitowany: jeden na
+          // bota na 10 minut, nadmiar sklejamy zamiast odmawiać (bot nie ma
+          // czego naprawiać — ma po prostu nie brzęczeć drugi raz).
           case "user.notify": {
-            const title = String(body.title ?? "").trim().slice(0, 120);
-            const text = String(body.body ?? "").trim().slice(0, 400);
-            if (!title) return json(res, 422, { error: "title required" });
-            notifyUser(fromBotId, title, text, "notify");
+            const reason = String(body.reason ?? "").trim().slice(0, 300);
+            if (!reason) return json(res, 422, { error: "reason required" });
+            const bot = store.bot(fromBotId);
+            const name = bot?.name || "Bot";
+            // Nieprzeczytane zapalamy ZAWSZE — także gdy push się sklei albo
+            // bot jest wyciszony. Inaczej drugie wołanie w oknie limitu gubi
+            // sygnał całkowicie, zamiast tylko nie brzęczeć.
             const updated = store.patchBot(fromBotId, { unread: true });
-            broadcast({ kind: "bot", bot: updated });
+            if (updated) broadcast({ kind: "bot", bot: updated });
+            // Wyciszony bot nie zużywa okna limitu: gdyby zużywał, odciszenie
+            // minutę później po cichu połykałoby pierwsze prawdziwe wołanie.
+            if (bot?.notifications === false) return json(res, 200, { ok: true, muted: true });
+            if (!allowNotify(fromBotId)) return json(res, 200, { ok: true, collapsed: true });
+            const wants = t("chce czegoś od Ciebie", "wants something from you");
+            // banerka: „Atlas chce czegoś od Ciebie" / powód
+            // push (tytułem jest nazwa bota): „Atlas" / „chce czegoś od Ciebie: powód"
+            notifyUser(fromBotId, `${name} ${wants}`, reason, "notify", { pushBody: `${wants}: ${reason}` });
             return json(res, 200, { ok: true });
           }
           // multibot: brak konektora to nie jest akapit prozy „wejdź w Plugins".
@@ -3598,6 +4101,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
               },
             });
             broadcast({ kind: "message", threadId: caller.threadId, message });
+            turnToldUser.add(fromBotId);
             return json(res, 200, { ok: true, connector, ...(toolkit ? { toolkit: asked.toLowerCase() } : {}) });
           }
           case "memory.list": return json(res, 200, workspace.facts(fromBotId, String(body.query ?? "")));
@@ -3799,7 +4303,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
             const command = String(body.command ?? "").trim();
             const args = Array.isArray(body.args) ? body.args.map(String) : [];
             if (!command) return json(res, 422, { error: "command required" });
-            const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun) => execFile(command, args, { cwd: String(body.cwd ?? ROOT), timeout: 120_000, maxBuffer: 2_000_000 }, (error, stdout, stderr) => resolveRun({ code: error ? (error as any).code ?? 1 : 0, stdout, stderr })));
+            const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun) => execFile(command, args, { cwd: String(body.cwd ?? ROOT), timeout: 120_000, maxBuffer: 2_000_000, windowsHide: true },(error, stdout, stderr) => resolveRun({ code: error ? (error as any).code ?? 1 : 0, stdout, stderr })));
             return json(res, 200, result);
           }
           default: return json(res, 404, { error: `unknown agent action: ${action}` });
@@ -3919,7 +4423,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         ? json(res, 200, { ok: true })
         : json(res, 404, { error: "no such group" });
     }
-    // multibot: zmiana nazwy grupy (port z OpenMausBot #343) — harnessowy
+    // multibot: zmiana nazwy grupy (port z upstreamu #343) — harnessowy
     // zapis jest źródłem dla UI, silnik dostaje PATCH best-effort.
     if (m && method === "PATCH") {
       const body = await readBody(req);
@@ -3977,7 +4481,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         // budget. A spent budget rotates the room instead of killing the chat.
         let room = rooms.forGroup(gid);
         if (room && budgetLeft(room, collabMaxMessages()) <= 0) {
-          closeRoom(room.id, "done", "");
+          closeRoom(room.id, "done");
           room = null;
         }
         room ??= rooms.create({
@@ -4078,9 +4582,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 405, { error: "method not allowed" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
+    if (m && method === "GET") {
+      // Pojedynczy bot z transkryptem — ten sam kształt co element listy
+      // /api/bots, żeby klient (mobile) nie musiał ściągać całej floty.
+      const bot = store.bot(m[1]);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { bot: { ...bot, messages: chatMessages(bot.threadId) } });
+    }
     if (m && method === "PATCH") {
       const body = await readBody(req);
-      // multibot: sekcja sidebaru (port z OpenMausBot #296) — null/"" czyści,
+      // multibot: sekcja sidebaru (port z upstreamu #296) — null/"" czyści,
       // inaczej trim i limit 60 znaków.
       if (body.section !== undefined) {
         if (body.section !== null && typeof body.section !== "string") {
@@ -4095,6 +4606,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       if (patch.fastMode !== undefined && typeof patch.fastMode !== "boolean") {
         return json(res, 400, { error: "fastMode must be boolean" });
+      }
+      // multibot: widoczność też przez ogólny PATCH — te same reguły co
+      // /sharing (walidacja wartości, prawo zarządzania, właściciel zostaje
+      // dopisany, żeby prywatny bot miał KOGO powiadamiać pushem).
+      if (body.visibility !== undefined) {
+        if (body.visibility !== "team" && body.visibility !== "private") {
+          return json(res, 422, { error: "visibility must be team or private" });
+        }
+        const target = store.bot(m[1]);
+        if (target && !canManageBot(target, actor)) return json(res, 403, { error: "bot owner access required" });
+        patch.visibility = body.visibility;
+        patch.ownerId = target?.ownerId ?? actor?.userId;
       }
       // multibot: kolor spoza allowlisty szedl dotad prosto do bazy i wracal do
       // klienta, ktory rysowal bota domyslna zielenia — bot z zapisanym
@@ -4183,7 +4706,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         res.writeHead(200, {
           "content-type": file.mime,
           "content-length": String(bytes.length),
-          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+          // multibot (K6): `inline` na treści aktywnej to skrypt na NASZYM
+          // originie, z tokenem w localStorage obok. MIME przychodzi od bota,
+          // więc HTML/SVG/XML oddajemy tylko jako pobranie — obrazki, PDF-y i
+          // teksty zostają inline, bo z tego żyje podgląd w transkrypcie.
+          "content-disposition": `${INLINE_UNSAFE_MIME.has(file.mime) ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
           "x-content-type-options": "nosniff",
           "cache-control": "private, max-age=31536000, immutable",
         });
@@ -4342,6 +4869,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           pendingUserAsks.delete(requestId);
           pending(option === "done" ? (note ? `user finished: ${note}` : "user finished") : "user skipped");
         }
+        // Karta przekazania komputera domyka się TĘDY, nie przez `/respond`,
+        // więc wpis trzeba zdjąć tutaj — inaczej mapa rośnie do restartu.
+        askMessageByRequest.delete(requestId);
         const settled = store.patchMessage(bot.threadId, m[2], {
           card: { ...existing.card, answered: option, dismissed: option === "skip" },
         });
@@ -4351,7 +4881,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const patched = store.patchMessage(bot.threadId, m[2], {
         card: {
           ...existing.card,
-          ...(body.answered !== undefined ? { answered: body.answered } : {}),
+          // multibot: pierwsza odpowiedź wygrywa — drugie otwarte okno nie
+          // przepisuje w transkrypcie tego, co człowiek wybrał w pierwszym.
+          ...(body.answered !== undefined && existing.card.answered === undefined ? { answered: body.answered } : {}),
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
         },
       });
@@ -4433,7 +4965,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       }
       // multibot: KAŻDA wiadomość idzie przez kolejkę — i ta wysłana w trakcie
       // tury (0.1.44: zamiast 409), i ta wysłana do wolnego bota. Bańka ląduje
-      // w wątku od razu, a tura rusza po oknie `OMB_TURN_DEBOUNCE_MS`, więc
+      // w wątku od razu, a tura rusza po oknie `MULTIBOT_TURN_DEBOUNCE_MS`, więc
       // trzy zdania wysłane pod rząd to JEDNA tura i JEDNA odpowiedź, nie trzy.
       const target = store.bot(m[1]);
       if (!target) return json(res, 404, { error: "no such bot" });
@@ -4481,13 +5013,50 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      // multibot: kartę domyka SERWER, nie klient. Wcześniej klient odsyłał
+      // odpowiedź i osobnym PATCH-em wpisywał ją do karty — dwa strzały bez
+      // kolejności, więc drugie otwarte okno widziało kartę wciąż klikalną,
+      // klient mobilny nie wpisywał nic, a nieudany PATCH zostawiał kartę
+      // ani otwartą, ani domkniętą. `delivered` znaczy dokładnie tyle: bot
+      // odpowiedź DOSTAŁ (obietnica `ask_user` rozwiązana albo dostawca ją
+      // przyjął), więc stawiamy je dopiero po tym fakcie.
+      const located = askMessageByRequest.get(String(body.requestId));
+      const patchCard = (patch: Partial<OptionCardData>) => {
+        if (!located) return;
+        const existing = store.messagesFor(located.threadId).find((msg) => msg.id === located.messageId);
+        if (!existing?.card) return;
+        const patched = store.patchMessage(located.threadId, located.messageId, { card: { ...existing.card, ...patch } });
+        if (patched) broadcast({ kind: "message.patch", threadId: located.threadId, message: patched });
+      };
+      // Odpowiedź wpisujemy PRZED oddaniem jej dostawcy: sterownik odpowiada
+      // własnym `request.resolved`, które zna tylko `behavior`, i bez tego
+      // wpisałoby w kartę „(brak odpowiedzi)" zamiast tego, co człowiek wybrał.
+      const cardBefore = located
+        ? store.messagesFor(located.threadId).find((msg) => msg.id === located.messageId)?.card
+        : undefined;
+      const settleCard = (answered: string, dismissed = false) => {
+        patchCard({ answered, ...(dismissed ? { dismissed: true } : {}) });
+        askMessageByRequest.delete(String(body.requestId));
+      };
+      /** Dostawca odmówił przyjęcia odpowiedzi — karta MUSI wrócić do stanu
+       *  pytania, inaczej w transkrypcie zostaje pokwitowanie czegoś, czego bot
+       *  nigdy nie dostał. Wpis wraca na mapę, bo człowiek spróbuje jeszcze raz. */
+      const unsettleCard = () => {
+        if (!located || !cardBefore) return;
+        const patched = store.patchMessage(located.threadId, located.messageId, { card: cardBefore });
+        if (patched) broadcast({ kind: "message.patch", threadId: located.threadId, message: patched });
+        askMessageByRequest.set(String(body.requestId), located);
+      };
       // multibot: pytanie z `ask_user` nie przechodzi przez drivera — czeka
       // tutaj. Rozstrzygamy je przed sięgnięciem po instancję, żeby chwilowo
       // niedostępny dostawca nie blokował odpowiedzi na własne pytanie bota.
       const pendingAsk = pendingUserAsks.get(String(body.requestId));
       if (pendingAsk) {
         pendingUserAsks.delete(String(body.requestId));
-        pendingAsk(String(body.message ?? "").trim() || USER_ASK_DISMISS_NOTE);
+        const answer = String(body.message ?? "").trim();
+        settleCard(answer || t("(zamknięte)", "(dismissed)"), body.dismiss === true || !answer);
+        pendingAsk(answer || USER_ASK_DISMISS_NOTE);
+        patchCard({ delivered: true }); // obietnica `ask_user` rozwiązana — bot ma odpowiedź
         return json(res, 200, { ok: true });
       }
       const instance = registry.get(bot.modelSelection.instanceId);
@@ -4502,10 +5071,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         rememberApprovalRule(bot.threadId, candidate);
         broadcast({ kind: "workspace", botId: bot.id, resource: "approval-rules" });
       }
-      await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
+      settleCard(
+        body.behavior === "always" ? "Allow for all"
+          : body.behavior === "allow" ? "Allow"
+            : body.behavior === "deny" ? "Deny"
+              : String(body.message ?? "").trim() || t("(brak odpowiedzi)", "(no answer)"),
+        body.dismiss === true,
+      );
+      try {
+        await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
+          behavior: body.behavior,
+          message: body.message,
+        });
+      } catch (error) {
+        unsettleCard();
+        throw error;
+      }
+      patchCard({ delivered: true }); // dostawca przyjął odpowiedź
       return json(res, 200, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
@@ -4518,9 +5100,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       activeCommsDepth.delete(bot.id);
       peerTurn.delete(bot.id); // przerwana tura nie odpisuje koledze
       groupTurn.get(bot.id)?.done("");
+      forgetSettledGroupTurn(bot.id);
       turnAssistantText.delete(bot.threadId);
       turnUsedTool.delete(bot.threadId);
+      turnPushedVisible.delete(bot.threadId);
       turnUserText.delete(bot.threadId);
+      // multibot: przerwanie to decyzja człowieka — brak tekstu w takiej turze
+      // nie jest ciszą modelu i nie dostaje znacznika ani powiadomienia.
+      harnessRoutines.settleRun(bot.id, { reason: "interrupted" });
+      turnOrigin.delete(bot.id);
       stopScreenPoller(bot.id);
       releaseTurnSlot(bot.id);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
@@ -4806,15 +5394,94 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, routineView(m[1], routine));
     }
 
+    // ── multibot: pomiar startu interfejsu ─────────────────────────────
+    // Jedna linia JSON na start, z każdego urządzenia — żeby dało się
+    // porównać "wolno się otwiera" na telefonie i z drugiego miasta bez
+    // zgadywania. Ten sam plik dla wszystkich aktorów, bo to diagnostyka
+    // instalacji, nie prywatna dana użytkownika.
+    if (path === "/api/client-timing" && method === "POST") {
+      const entry = parseClientTiming(await readBody(req));
+      if (!entry) return json(res, 400, { error: "bad client-timing payload" });
+      appendClientTiming(join(DATA_DIR, "client-timing.jsonl"), entry);
+      return json(res, 200, { ok: true });
+    }
+    if (path === "/api/client-timing" && method === "GET") {
+      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+      return json(res, 200, { entries: readClientTiming(join(DATA_DIR, "client-timing.jsonl"), limit) });
+    }
+
+    // ── multibot: przypomnienia (jednorazowe) ──────────────────────────
+    // Osobny zasób obok rutyn: własny plik, własny harmonogram, własna lista.
+    // Widoczność idzie po bocie — kto nie widzi bota, nie widzi jego
+    // przypomnień i nie może ich ruszyć.
+    // Cudze przypomnienie nie jest cudzą sprawą: widać wyłącznie swoje (albo
+    // bezpańskie, z instalacji bez kont), i tylko po botach, które widać.
+    const myReminder = (r: { botId: string; userId?: string }) =>
+      canReadBot(store.bot(r.botId), actor) && (r.userId == null || r.userId === actor?.userId);
+    if (path === "/api/reminders" && method === "GET") {
+      return json(res, 200, reminders.list().filter(myReminder));
+    }
+    if (path === "/api/reminders" && method === "POST") {
+      const body = await readBody(req);
+      const botId = String(body.botId ?? "");
+      const bot = store.bot(botId);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      try {
+        const reminder = reminders.create(botId, { text: body.text, at: body.at, userId: actor?.userId });
+        // ta sama pigułka co przy `create_reminder` bota — obie drogi zostawiają
+        // w transkrypcie ten sam ślad
+        appendBotEvent(botId, { type: "reminder-created", value: reminder.text });
+        broadcast({ kind: "workspace", botId, resource: "reminders" });
+        return json(res, 201, reminder);
+      } catch (error) {
+        return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    m = path.match(/^\/api\/reminders\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      const reminder = reminders.get(m[1]);
+      if (!reminder || !myReminder(reminder)) return json(res, 404, { error: "no such reminder" });
+      reminders.delete(reminder.id);
+      broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/reminders\/([\w-]+)\/snooze$/);
+    if (m && method === "POST") {
+      const reminder = reminders.get(m[1]);
+      if (!reminder || !myReminder(reminder)) return json(res, 404, { error: "no such reminder" });
+      const body = await readBody(req);
+      const minutes = body.minutes === undefined ? SNOOZE_DEFAULT_MIN : Number(body.minutes);
+      try {
+        // czytanie body oddaje pętlę zdarzeń — rekord mógł w tym czasie zniknąć
+        const moved = reminders.snooze(reminder.id, minutes);
+        if (!moved) return json(res, 404, { error: "no such reminder" });
+        broadcast({ kind: "workspace", botId: reminder.botId, resource: "reminders" });
+        return json(res, 200, moved);
+      } catch (error) {
+        return json(res, 422, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/reminders$/);
+    if (m && method === "GET") {
+      const bot = store.bot(m[1]);
+      if (!bot || !canReadBot(bot, actor)) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, reminders.list(m[1]).filter(myReminder));
+    }
+
     // identity handshake for the packaged app's port fallback: the forked
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
+      const mb = (n: number) => Math.round(n / 1024 / 1024);
       return json(res, 200, {
         app: "multibot",
         pid: process.pid,
         static: Boolean(STATIC_DIR),
-        service: process.env.OMB_SERVER_SERVICE === "1",
+        service: process.env.MULTIBOT_SERVER_SERVICE === "1",
+        mem: { availableMb: mb(availableMemoryBytes()), totalMb: mb(totalMemoryBytes()) },
+        load: os.loadavg()[0],
+        workers: claudeWorkerCount(),
+        activeTurns: turnGate.state().active.length,
       });
     }
 
@@ -4875,7 +5542,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { instances: await registry.describe() });
     }
 
-    // multibot: live team map (port z OpenMausBot, GET /api/team-map)
+    // multibot: live team map (port z upstreamu, GET /api/team-map)
     if (method === "GET" && path === "/api/team-map") {
       const collaborations = groupStore
         .list()
@@ -4889,7 +5556,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 200, { collaborations, queued: [], running: [] });
     }
 
-    // multibot: scout folderu → manifest zespołu (port z OpenMausBot #339)
+    // multibot: scout folderu → manifest zespołu (port z upstreamu #339)
     if (method === "GET" && path === "/api/teams/scout") {
       const cwd = url.searchParams.get("cwd") ?? "";
       if (!cwd || !isAbsolute(cwd)) return json(res, 400, { error: "cwd must be an absolute path" });
@@ -5050,6 +5717,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
         cwd: DATA_DIR,
         env: { TMP: temp, TEMP: temp },
       });
+      // multibot: udane logowanie gasi prośbę u KAŻDEGO bota na tym harnessie
+      // — inaczej banerka wisiałaby do następnej tury, już po naprawie.
+      if (job.status === "running") {
+        const off = setupJobs.subscribe(job.id, (next) => {
+          if (next.status === "running") return;
+          off();
+          if (next.status === "succeeded" && loginProbePasses(tool.id)) clearLoginExpired(tool.id);
+        });
+      } else if (job.status === "succeeded" && loginProbePasses(tool.id)) {
+        // spawn padł (albo skończył) synchronicznie — nie ma na co czekać
+        clearLoginExpired(tool.id);
+      }
       return json(res, 202, { id: job.id, job });
     }
     m = path.match(/^\/api\/progress\/([\w-]+)\/(input|stop)$/);
@@ -5186,6 +5865,57 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
       ];
       return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards: tagged });
     }
+    // multibot: „testuj połączenie" — jednorazowy handshake MCP. PRZED trasą
+    // `/custom/:id`, żeby `.../test` nigdy nie wpadł tam jako id konektora.
+    // Ciało to ten sam payload co PUT (`{name, transport}`), więc panel testuje
+    // SZKIC przed zapisem; bez `transport` testuje to, co już zapisane.
+    // Nieudana sonda to WYNIK, nie błąd HTTP — stąd 200 z `{ok:false}`.
+    m = path.match(/^\/api\/connectors\/custom\/([\w-]+)\/test$/);
+    if (m && method === "POST") {
+      const id = m[1];
+      // Bez `catch(() => ({}))`: zjedzony błąd ciała cicho przechodził na
+      // sondowanie ZAPISANEGO konektora, więc panel pokazywał zielone
+      // „połączono" dla wsadu, którego serwer nigdy nie sparsował.
+      let body: Record<string, unknown>;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return json(res, 400, { error: e instanceof Error ? e.message : "invalid body" });
+      }
+      let transport: mcpConnectors.McpConnector["transport"];
+      try {
+        const draft = body && typeof body === "object" && body.transport && typeof body.transport === "object";
+        const connector = draft
+          ? mcpConnectors.decodeConnector(id, body)
+          : mcpConnectors.connectors().find((c) => c.id === id);
+        if (!connector) return json(res, 404, { error: "no such connector" });
+        transport = connector.transport;
+      } catch (e) {
+        return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      // Jedna sonda na konektor naraz: każda sonda stdio to żywy proces na
+      // 15 s, a bez tej bramki N równoległych POST-ów to N procesów z jednego
+      // kliknięcia (na telefonie wystarczy kilka, żeby położyć harness).
+      if (probesInFlight.has(id)) return json(res, 429, { error: "a test for this connector is already running" });
+      probesInFlight.add(id);
+      const probe = await probeMcp(transport).finally(() => probesInFlight.delete(id));
+      if (!probe.ok) return json(res, 200, { ok: false, error: probe.error });
+      // Licznik na karcie katalogu bierze się STĄD, nie z sondy przy renderze —
+      // ale tylko wtedy, gdy zmierzony transport to DOKŁADNIE ten zapisany.
+      // Inaczej szkic z ciała HTTP podstawiłby liczbę pod konektor, którego
+      // nikt nigdy nie odpytał.
+      const stored = mcpConnectors.connectors().find((c) => c.id === id);
+      if (stored && mcpConnectors.sameTransport(stored.transport, transport)) {
+        mcpConnectors.recordProbe(id, probe.tools.length);
+        Object.assign(cfg, loadConfig());
+      }
+      return json(res, 200, {
+        ok: true,
+        tools: probe.tools,
+        count: probe.tools.length,
+        ...(probe.serverName ? { serverName: probe.serverName } : {}),
+      });
+    }
     // multibot (F7): rejestr własnych konektorów. Osobna ścieżka `/custom/`,
     // żeby nie mieszać się z `DELETE /api/connectors/:slug` Composio.
     m = path.match(/^\/api\/connectors\/custom\/([\w-]+)$/);
@@ -5266,7 +5996,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
           detail: "Docker is not reachable — the bot's computer needs it to run.",
         });
       }
-      return json(res, 200, { state: status.state, detail: status.detail, ...computerControl.control() });
+      return json(res, 200, { state: status.state, detail: status.detail, computer: computerIdleStatus(), ...computerControl.control() });
     }
 
     // The screen. HTTP here, WebSocket via mountVncUpgrade.
@@ -5313,7 +6043,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
-    // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
+    // everything, no dev proxy to die). MULTIBOT_STATIC_DIR is set by Electron.
     if ((method === "GET" || method === "HEAD") && !path.startsWith("/api/") && STATIC_DIR) {
       const root = resolve(STATIC_DIR);
       const requested = path === "/" ? "index.html" : decodeURIComponent(path).replace(/^[/\\]+/, "");
@@ -5475,6 +6205,10 @@ try {
 }
 server.listen(PORT, HOST, () => {
   console.log(`multibot server on ${SCHEME}://${HOST}:${PORT}`);
+  // multibot: zegar przypomnień rusza DOPIERO tu — drugi proces na tym samym
+  // katalogu danych (sonda portu z paczki, przypadkowy `node server/index.ts`)
+  // padnie wcześniej na EADDRINUSE i nie odpali cudzych przypomnień po raz drugi.
+  reminders.start();
   if (TLS_FINGERPRINT) console.log(`[multibot] tls fingerprint (sha256): ${TLS_FINGERPRINT}`);
   void reconcileComputers().catch((e) => console.warn("[multibot] computer reconcile failed:", e));
   // multibot (A2): rozgrzewka rusza PO podniesieniu HTTP i nie czeka na nic —
@@ -5489,20 +6223,12 @@ server.listen(PORT, HOST, () => {
   // never started. Anything still inside its budget and its clock is picked up
   // where it stopped; only the genuinely spent ones are written off.
   resumeRecoveredRooms();
-  // multibot: w trybie „każdy bot zawsze active" worker potrafi zniknąć bez
-  // naszego udziału — Android przy braku pamięci ubija bezczynne procesy (LMK),
-  // a wtedy bot cicho wraca do zimnego startu. Co minutę sprawdzamy więc, kto
-  // stracił proces, i stawiamy go z powrotem; warmBot jest idempotentny, więc
-  // ciepłe boty zamiatanie nic nie kosztuje. Przy limicie > 0 nie zamiatamy
-  // wcale — tam bezczynny worker MA prawo zejść i wskrzeszanie go co minutę
-  // wywróciłoby WORKER_IDLE_MS na każdej domyślnej instalacji.
-  if (warmWorkerLimit() <= 0) setInterval(() => void warmBots().catch(() => {}), 60_000).unref?.();
   // Never before `listen`: SSDP waits on a router that may never answer, and
   // nothing about the boot may depend on whether one does.
   void refreshAddress(PORT).catch(() => {});
   setInterval(() => void refreshAddress(PORT).catch(() => {}), 10 * 60_000).unref?.();
   // A stale CLI is a dead bot: the API rejects the turn outright. Keep every
-  // installed harness current in the background — OMB_AUTO_UPDATE=0 opts out.
+  // installed harness current in the background — MULTIBOT_AUTO_UPDATE=0 opts out.
   scheduleHarnessUpdates(async () =>
     (await registry.describe())
       .filter((i) => i.snapshot.state === "available")

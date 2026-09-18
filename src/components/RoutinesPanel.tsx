@@ -20,6 +20,7 @@ import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { buildSchedule, isKnownPreset, parseSchedule, PRESETS, type Preset } from "@/lib/routineSchedule";
+import { SidePanel } from "./ResizablePanel";
 
 // Własny helper zamiast `api` ze store: silnik zwraca błędy jako `{detail}`
 // (FastAPI), przelotka jako `{error}` — store'owy helper zgubiłby komunikat
@@ -42,7 +43,11 @@ interface Routine {
   prompt: string;
   enabled: boolean;
   trigger: { type: string; url: string; events: string[] } | null;
-  last_runs: Array<{ at: string; status?: string | null; error?: string | null }>;
+  /** `status`: queued | ok | error | unknown. `reason` to KOD porażki znanej
+   * harnessowi (server/routines.ts) — tłumaczymy go tutaj, żeby historia nie
+   * zamarzła w języku, jaki serwer miał w chwili awarii; `error` to surowy
+   * komunikat dostawcy. */
+  last_runs: Array<{ at: string; status?: string | null; error?: string | null; reason?: string | null }>;
   next_run_at: number | null;
 }
 
@@ -115,6 +120,57 @@ function nextRunLine(r: Routine, polish: boolean): string | null {
       : (polish ? "Jeszcze nie uruchomiono" : "Not run yet");
   }
   return `${polish ? "Następne uruchomienie" : "Next run"}: ${formatNextRun(r.next_run_at, polish)}`;
+}
+
+// Wynik przebiegu słowem, nie surowym kodem statusu. `queued` to stan
+// przejściowy (tura leci), `unknown` — harness zgasł w trakcie i nikt już tego
+// nie rozstrzygnie, więc myślnik zamiast wiecznego „w toku" (server/routines.ts).
+export function runLabel(status: string | null | undefined, polish: boolean): string {
+  if (status === "ok") return polish ? "Sukces" : "Success";
+  if (status === "error") return polish ? "Błąd" : "Failed";
+  if (status === "queued") return polish ? "W toku" : "Running";
+  return "—";
+}
+
+const RUN_DOT: Record<string, string> = { ok: "bg-success", error: "bg-danger" };
+
+const RUN_REASON: Record<string, [string, string]> = {
+  interrupted: ["Przerwane przez użytkownika", "Interrupted by the user"],
+  watchdog: ["Dostawca przestał odpowiadać", "The provider stopped responding"],
+  "login-expired": ["Logowanie do CLI wygasło", "The CLI login expired"],
+  "harness-stopped": ["Harness został zatrzymany", "The harness was stopped"],
+};
+
+/** Czym skończył się przebieg: nasz kod powodu po ludzku albo — gdy to padło
+ * po stronie dostawcy — jego własny komunikat. */
+export function runFailure(run: Routine["last_runs"][number], polish: boolean): string | null {
+  const known = run.reason ? RUN_REASON[run.reason] : undefined;
+  if (known) return polish ? known[0] : known[1];
+  return run.reason || run.error || null;
+}
+
+export function runTitle(run: Routine["last_runs"][number], polish: boolean): string {
+  const head = `${new Date(run.at).toLocaleString()} — ${runLabel(run.status, polish)}`;
+  const why = runFailure(run, polish);
+  return why ? `${head}: ${why}` : head;
+}
+
+/** Pasek kropek niesie znaczenie samym KOLOREM, więc czytnik ekranu dostaje
+ * jedno zdanie z podsumowaniem zamiast dziesięciu bezimiennych punktów.
+ * Szare kropki (`queued`, `unknown`, brak statusu) też są policzone — inaczej
+ * suma nie zgadzałaby się z tym, co widać. */
+export function runsSummary(runs: Routine["last_runs"], polish: boolean): string {
+  const ok = runs.filter((run) => run.status === "ok").length;
+  const failed = runs.filter((run) => run.status === "error").length;
+  const running = runs.filter((run) => run.status === "queued").length;
+  const unclear = runs.length - ok - failed - running;
+  const parts = polish
+    ? [`${ok} udanych`, `${failed} nieudanych`, running && `${running} w toku`, unclear && `${unclear} bez wyniku`]
+    : [`${ok} successful`, `${failed} failed`, running && `${running} running`, unclear && `${unclear} with no result`];
+  const body = parts.filter(Boolean).join(", ");
+  return polish
+    ? `Historia przebiegów: ${body} z ${runs.length}`
+    : `Run history: ${body} out of ${runs.length}`;
 }
 
 function RoutineForm({
@@ -361,17 +417,26 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
   };
 
 
+  // Wynik NA POCZĄTKU: przy domyślnej szerokości panelu ogon linii i tak się
+  // nie mieści, a to właśnie sukces/porażka są tu informacją. Pełne zdanie
+  // („Ostatnie uruchomienie …") zostaje w podpowiedzi.
   const lastRunLine = (r: Routine) => {
     const run = r.last_runs[0];
     if (!run) return polish ? "Brak uruchomień" : "No runs yet";
-    const when = new Date(run.at).toLocaleString();
-    return run.error
-      ? `${polish ? "Ostatnie uruchomienie" : "Last run"} ${when} — ${run.error}`
-      : `${polish ? "Ostatnie uruchomienie" : "Last run"} ${when}${run.status ? ` — ${run.status}` : ""}`;
+    return `${runLabel(run.status, polish)} · ${new Date(run.at).toLocaleString()}`;
+  };
+  const lastRunTitle = (r: Routine) => {
+    const run = r.last_runs[0];
+    return run ? `${polish ? "Ostatnie uruchomienie" : "Last run"} ${runTitle(run, polish)}` : lastRunLine(r);
   };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[360px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <SidePanel
+      storageKey="multibot.panelWidth.routines"
+      defaultWidth={360}
+      label={polish ? "Zmień szerokość panelu rutyn" : "Resize routines panel"}
+      className="border-l border-hairline/40"
+    >
       {/* Header */}
       <div data-shell-header className="flex items-center justify-between px-4 py-3">
         <span className="w-[52px]" />
@@ -393,6 +458,19 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
             <X size={18} />
           </button>
         </div>
+      </div>
+
+      {/* Dwie zakładki jednego slotu — rutyna powtarza się, przypomnienie odpala raz */}
+      <div className="flex gap-1 px-5 pb-3">
+        <button className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink" aria-current="page">
+          {polish ? "Rutyny" : "Routines"}
+        </button>
+        <button
+          onClick={() => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" })}
+          className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          {polish ? "Przypomnienia" : "Reminders"}
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 pb-5">
@@ -452,9 +530,36 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
                       {nextRunLine(r, polish) && (
                         <div className="mt-0.5 text-[12px] text-ink-secondary">{nextRunLine(r, polish)}</div>
                       )}
-                      <div className="mt-0.5 truncate text-[12px] text-ink-secondary" title={lastRunLine(r)}>
+                      {/* Historia sukcesów i porażek: kropka na przebieg
+                          (najnowszy z lewej) + wynik ostatniego. Do 0.5.45
+                          historia znała tylko „w kolejce" i „błąd", więc
+                          sukces nie istniał. */}
+                      <div className="mt-0.5 truncate text-[12px] text-ink-secondary" title={lastRunTitle(r)}>
                         {lastRunLine(r)}
                       </div>
+                      {r.last_runs.length > 0 && (
+                        <div
+                          className="mt-1 flex flex-wrap gap-[3px]"
+                          role="img"
+                          aria-label={runsSummary(r.last_runs.slice(0, 10), polish)}
+                        >
+                          {r.last_runs.slice(0, 10).map((run, i) => (
+                            <span
+                              key={`${run.at}-${i}`}
+                              title={runTitle(run, polish)}
+                              className={cn("size-1.5 rounded-full", RUN_DOT[run.status ?? ""] ?? "bg-raised-hover")}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {r.last_runs[0] && runFailure(r.last_runs[0], polish) && (
+                        <div
+                          className="mt-0.5 truncate text-[12px] text-danger"
+                          title={runFailure(r.last_runs[0], polish)!}
+                        >
+                          {runFailure(r.last_runs[0], polish)}
+                        </div>
+                      )}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
@@ -573,6 +678,6 @@ export function RoutinesPanel({ bot }: { bot: Bot }) {
           </div>
         )}
       </div>
-    </aside>
+    </SidePanel>
   );
 }

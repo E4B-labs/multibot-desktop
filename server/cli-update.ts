@@ -15,6 +15,8 @@ import { delimiter, join } from "node:path";
 
 import { CLI_TOOLS } from "./cli-tools.ts";
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
+import { availableMemoryBytes, memFloorBytes } from "./mem.ts";
+import { turnGate } from "./turn-gate.ts";
 
 /** The API's "your CLI is too old" text, as it reaches the chat verbatim. */
 export const STALE_CLI_RE = /version [\d.]+ or newer is required/i;
@@ -28,8 +30,8 @@ export interface CliUpdateResult {
 /** One run per tool per window: an update is a no-op once current, and a burst
  * of failing turns must not become a burst of installers. */
 const DEBOUNCE_MS = 10 * 60_000;
-const BOOT_DELAY_MS = 60_000;
-const EVERY_MS = 24 * 60 * 60_000;
+/** Retry spacing when the daily slot is busy (a turn in flight, memory low). */
+const BUSY_RETRY_MS = 10 * 60_000;
 const TIMEOUT_MS = 5 * 60_000;
 /** A launcher we wrote is a few hundred bytes; a real CLI entry point is not. */
 const SHIM_MAX_BYTES = 4096;
@@ -279,18 +281,51 @@ export function staleCliNotice(text: string): string {
   return `${text}\n\nMultiBot is updating Claude Code now, send the message again in a minute.`;
 }
 
-/** Boot + daily update of every installed harness, off under OMB_AUTO_UPDATE=0. */
+/** ms until the next local HH:MM (MULTIBOT_AUTO_UPDATE_AT, default 04:00). */
+export function msUntilDaily(now = new Date(), at = process.env.MULTIBOT_AUTO_UPDATE_AT || "04:00"): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(at);
+  const [hh, mm] = m ? [Number(m[1]), Number(m[2])] : [4, 0];
+  const next = new Date(now);
+  next.setHours(hh, mm, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+
+/** Something that must not share the phone with five npm installs right now. */
+export const updateBlocked = (): string | null => {
+  const turns = turnGate.state().active.length;
+  if (turns > 0) return `${turns} turn(s) active`;
+  const mb = Math.round(availableMemoryBytes() / 1024 / 1024);
+  if (availableMemoryBytes() < memFloorBytes()) return `${mb} MB available`;
+  return null;
+};
+
+/**
+ * Daily update of every installed harness at MULTIBOT_AUTO_UPDATE_AT (local,
+ * default 04:00); off under MULTIBOT_AUTO_UPDATE=0. Never at boot: measured on
+ * the phone, five npm runs right when the workers are coming up is exactly the
+ * moment memory is tightest. A busy slot is retried every 10 minutes.
+ */
 export function scheduleHarnessUpdates(installedTools: () => Promise<readonly string[]>): void {
-  if (process.env.OMB_AUTO_UPDATE === "0") return;
+  if (process.env.MULTIBOT_AUTO_UPDATE === "0") return;
   const tick = async () => {
+    const blocked = updateBlocked();
+    if (blocked) {
+      console.log(`[multibot] cli update postponed: ${blocked}`);
+      setTimeout(() => void tick(), BUSY_RETRY_MS).unref?.();
+      return;
+    }
     try {
       await updateAll(await installedTools());
     } catch {
       /* detection is best-effort; the next tick tries again */
     }
   };
-  // Never at import time: the boot must not wait on an installer, and the probe
-  // that says which CLIs exist only finishes after `listen`.
-  setTimeout(() => void tick(), BOOT_DELAY_MS).unref?.();
-  setInterval(() => void tick(), EVERY_MS).unref?.();
+  const arm = () => {
+    setTimeout(() => {
+      void tick();
+      arm();
+    }, msUntilDaily()).unref?.();
+  };
+  arm();
 }

@@ -14,10 +14,15 @@ const computerPanel = readFileSync(new URL("./ComputerPanel.tsx", import.meta.ur
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("skala prawego panelu i czatu", () => {
-  it("panel jest węższy niż był, a jego szerokość jest jedna", () => {
-    const widths = [...panel.matchAll(/w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
-    expect(widths.length).toBeGreaterThan(0);
+  it("panel jest węższy niż był, a jego szerokość startowa jest jedna", () => {
+    // Od 10.09 szerokość ciągnie się myszą (ResizablePanel), więc sztywnej
+    // klasy `w-[…px]` już nie ma — pilnujemy wartości, od której panel startuje.
+    const widths = [...panel.matchAll(/defaultWidth=\{(\d+)\}/g)].map((m) => Number(m[1]));
+    expect(widths.length).toBe(1);
     for (const width of widths) expect(width).toBeLessThanOrEqual(340);
+    // Sztywne piksele w środku panelu nadal obowiązuje ten sam sufit.
+    const hard = [...panel.matchAll(/w-\[(\d+)px\]/g)].map((m) => Number(m[1]));
+    for (const width of hard) expect(width).toBeLessThanOrEqual(340);
   });
 
   it("awatar otwiera zakładki Bot i Prześlij bez generatora", () => {
@@ -25,7 +30,7 @@ describe("skala prawego panelu i czatu", () => {
     expect(panel).toContain("aria-expanded={appearanceMode !== \"closed\"}");
     expect(panel).toContain('type AppearanceMode = "closed" | "bot" | "photo"');
     expect(panel).toContain("MASCOT_SHAPES.map");
-    expect(panel).toContain("MAUS_COLOR_NAMES.map");
+    expect(panel).toContain("BOT_COLOR_NAMES.map");
     expect(panel).toContain("Prześlij");
     expect(panel).not.toContain("Generate");
     expect(panel).not.toContain("Generuj");
@@ -34,10 +39,12 @@ describe("skala prawego panelu i czatu", () => {
     expect(panel).not.toContain("Zdjęcie zostanie przycięte do koła jak na Facebooku/GrokBot");
   });
 
-  it("filtr szukajki wie o rozwijanej karcie wyglądu", () => {
+  it("filtr szukajki wie o rozwijanej karcie wyglądu i o powrocie z Zużycia", () => {
     // Bez `appearanceMode` w zależnościach karta rozwinięta przy aktywnym
-    // szukaniu ominęłaby filtr i została na ekranie.
-    expect(panel).toContain("[query, appearanceMode]");
+    // szukaniu ominęłaby filtr i została na ekranie. `usageOpen` z tego samego
+    // powodu: powrót z panelu „Zużycie" montuje karty od nowa, więc bez
+    // przeliczenia wszystkie wracają widoczne mimo tekstu w szukajce.
+    expect(panel).toContain("[query, appearanceMode, usageOpen]");
   });
 
   it("nic w panelu nie jest już większe niż 14 px", () => {
@@ -56,7 +63,8 @@ describe("skala prawego panelu i czatu", () => {
     // nazwa modelu musi zostać w dymku, inaczej nie da się sprawdzić,
     // na czym bot pracuje, bez otwierania listy
     expect(picker).toContain("{!compact && <span");
-    expect(picker).toContain("aria-label={activeLabel || selection.model}");
+    // nazwa zostaje pierwsza, a brak logowania/CLI dokleja się za myślnikiem
+    expect(picker).toContain('aria-label={[activeLabel || selection.model, activeNote].filter(Boolean).join(" — ")}');
   });
 
   it("OpenCode ma jedną ikonę, grupy Go/Zen i formularz klucza", () => {
@@ -75,10 +83,12 @@ describe("skala prawego panelu i czatu", () => {
     // klucz przygasza wiersz, ale go nie blokuje — klik otwiera pole klucza
     expect(picker).toContain("wymaga wspólnego klucza OpenCode Go");
     expect(picker).toContain("<KeyRound size={12}");
-    expect(picker).toContain('!disabled && opts.needsKey && "opacity-60"');
-    // powód siedzi na całym wierszu: niedostępność albo brakujący klucz
-    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : opts.needsKey ? keyHint : undefined}");
-    expect(picker).toContain('role="img" aria-label={keyHint}');
+    // brakujący klucz ORAZ niezalogowany CLI przygaszają ten sam wiersz
+    expect(picker).toContain('!disabled && dimmed && "opacity-60"');
+    expect(picker).toContain('const dimmed = gate === "signin" || Boolean(opts.needsKey);');
+    // powód siedzi na całym wierszu: niedostępność, brak logowania albo brakujący klucz
+    expect(picker).toContain("title={disabled ? (instance.snapshot.reason ?? undefined) : hint}");
+    expect(picker).toContain('role="img" aria-label={hint}');
     // licznik grupy z jednostką, nie goła liczba
     expect(picker).toContain('{group.options.length} {polish ? "modeli" : "models"}');
   });

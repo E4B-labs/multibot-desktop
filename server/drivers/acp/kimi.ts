@@ -29,7 +29,7 @@ const support: AcpSupport = {
   pickAuthMethod: (methods) => methods.find((method) => typeof method.id === "string")?.id ?? null,
   authFailure: "continue",
   isAuthenticated: (env) =>
-    Boolean(env.KIMI_API_KEY || env.MOONSHOT_API_KEY) || existsSync(join(homedir(), ".kimi", "config.toml")),
+    Boolean(env.KIMI_API_KEY || env.MOONSHOT_API_KEY) || existsSync(join(env.HOME ?? homedir(), ".kimi", "config.toml")),
   buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
 };
 

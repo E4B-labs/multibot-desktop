@@ -72,10 +72,10 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
     chmodSync(FAKE_CODEX, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-autoverify-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "multibot-autoverify-test-"));
+    mkdirSync(join(home, ".multibot"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".multibot", "config.json"),
       JSON.stringify({
         instances: {
           grokPerm: {
@@ -95,15 +95,15 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
       }),
     );
 
-    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
       cwd: join(SERVER_DIR, ".."),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(PORT),
-        OMB_ONBOARDING_TURN: "0",
+        MULTIBOT_PORT: String(PORT),
+        MULTIBOT_ONBOARDING_TURN: "0",
         MULTIBOT_COMPUTER: "off",
         FAKE_CODEX_MODE: "question",
       },
@@ -237,7 +237,8 @@ describe("autoweryfikacja e2e (atrapa ACP prosząca o zgodę)", () => {
       expect((await api("POST", `/api/bots/${botId}/messages`, { text: "zdecyduj" })).status).toBe(202);
 
       const card = await waitForCard(botId);
-      expect(card.title).toBe("Your bot has a question");
+      // multibot: tytułem karty pytania jest samo pytanie
+      expect(card.title).toBe("Which database?");
       expect(card.answered).toBeUndefined();
       expect(card.options).toEqual(["Postgres", "SQLite"]);
 

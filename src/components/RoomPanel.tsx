@@ -7,8 +7,8 @@ import { Eye, Loader2, Users, X } from "lucide-react";
 import { useStore, formatTime, type Room } from "@/state/store";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { formatPeerEnvelope } from "@/lib/peerEnvelope";
-import { MausAvatar } from "./Avatar";
-import { stateForBot } from "@/lib/mascot";
+import { BotAvatar } from "./Avatar";
+import { staticAvatarProps } from "@/lib/mascot";
 import { authFetch } from "@/lib/auth";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
@@ -87,7 +87,9 @@ export function RoomPanel() {
             <div className="flex min-w-0 items-center gap-2">
               <span className="flex shrink-0 items-center -space-x-2">
                 {members.slice(0, 5).map((bot) => (
-                  <MausAvatar key={bot.id} color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={24} animated={false} />
+                  <span key={bot.id} className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
+                    <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={24} {...staticAvatarProps(bot)} />
+                  </span>
                 ))}
               </span>
               <span className="truncate text-[15px] font-semibold text-ink">
@@ -164,14 +166,22 @@ export function RoomPanel() {
                         title={polish ? `Otwórz czat ${nameOf(entry.from)}` : `Open ${nameOf(entry.from)}'s chat`}
                       >
                         {entryBot && (
-                          <MausAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape={entryBot.mascotShape} state={stateForBot(entryBot)} size={28} animated={false} />
+                          <span className="relative inline-flex shrink-0 rounded-full bg-app ring-2 ring-app">
+                            <BotAvatar color={entryBot.color} avatarUrl={entryBot.avatarUrl} shape="blob" size={28} {...staticAvatarProps(entryBot)} />
+                          </span>
                         )}
                         <span className="text-[12.5px] font-semibold text-accent">{nameOf(entry.from)}</span>
                       </button>
                       <span className="text-[11px] text-ink-secondary">{formatTime(entry.at)}</span>
                     </div>
-                    <div className="rounded-2xl rounded-tl-md bg-card px-3.5 py-2 text-[14px] leading-relaxed text-ink">
-                      <ChatMarkdown text={formatPeerEnvelope(entry.text)} />
+                    {/* multibot: ta sama wypowiedź bota ma wyglądać tak samo
+                        w czacie 1:1, w grupie i tutaj. Widok pokoju został
+                        przy rozmiarach panelu (`px-3.5 py-2 leading-relaxed`,
+                        markdown bez `compact`), więc pigułki wzmianek, tabele
+                        i bloki kodu były w nim większe niż te same pigułki
+                        w czacie. Wartości i flaga jak w ChatView/GroupPanel. */}
+                    <div className="rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
+                      <ChatMarkdown text={formatPeerEnvelope(entry.text)} compact />
                     </div>
                   </div>
                 </div>

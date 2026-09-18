@@ -25,7 +25,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-const run = promisify(execFile);
+const runRaw = promisify(execFile);
+// windowsHide: bez tego każde wywołanie docker/bash miga oknem konsoli na
+// Windowsie (no-op na innych platformach).
+const run = (file: string, args: string[], options: { timeout?: number; maxBuffer?: number } = {}) =>
+  runRaw(file, args, { windowsHide: true, ...options });
 
 /** Ports the image serves. cdp drives the browser over the DevTools protocol;
  *  novnc is the screen the user sees and takes over; api is cua's
@@ -170,6 +174,7 @@ const PORT_CACHE_MS = 5_000;
 const portCache = new Map<PortName, { port: number; at: number }>();
 
 export async function readPort(name: PortName): Promise<number | null> {
+  touchComputer();
   if (BACKEND === "native") return NATIVE_PORTS[name] || null;
   const hit = portCache.get(name);
   if (hit && Date.now() - hit.at < PORT_CACHE_MS) return hit.port;
@@ -264,18 +269,31 @@ export function ensureComputer(limits = DEFAULT_LIMITS): Promise<ComputerStatus>
 async function ensureNative(): Promise<ComputerStatus> {
   const ports = (await readPorts())!;
   // Already up? Then starting it again would be pointless work on a phone.
-  if (await probeReady(ports)) return { state: "ready", ports };
+  if (await probeReady(ports)) return markRunning({ state: "ready", ports });
   try {
     const { stderr } = await run("bash", [NATIVE_SCRIPT], { timeout: 120_000, maxBuffer: 8 << 20 });
     if (stderr?.trim()) console.warn("[multibot] native computer:", stderr.trim().slice(0, 200));
   } catch (e) {
     return { state: "error", detail: e instanceof Error ? e.message : String(e) };
   }
-  return { state: (await probeReady(ports)) ? "ready" : "provisioning", ports };
+  return markRunning({ state: (await probeReady(ports)) ? "ready" : "provisioning", ports });
+}
+
+/** Ports of the last computer that answered its CDP probe. A turn that finds the
+ *  browser still answering on them skips the docker round trip entirely —
+ *  on Windows every `docker …` is a `wsl` launch (measured 5.4 s for
+ *  `inspect` alone, plus one `port` call per published port), and it ran at the
+ *  start of EVERY turn, so each bot answer carried ~10 s of dead time. */
+let lastReadyPorts: Record<PortName, number> | null = null;
+/** Test hook: pretend a computer answered on these ports. */
+export function rememberReadyPorts(ports: Record<PortName, number> | null): void {
+  lastReadyPorts = ports;
 }
 
 async function ensureOnce(limits: ComputerLimits): Promise<ComputerStatus> {
   if (BACKEND === "native") return ensureNative();
+  if (lastReadyPorts && (await probeReady(lastReadyPorts))) return markRunning({ state: "ready", ports: lastReadyPorts });
+  lastReadyPorts = null;
   try {
     const running = await inspectRunning();
     if (running === null) {
@@ -298,7 +316,9 @@ async function ensureOnce(limits: ComputerLimits): Promise<ComputerStatus> {
 
   const ports = await readPorts();
   if (!ports) return { state: "provisioning", detail: "ports not published yet" };
-  return { state: (await probeReady(ports)) ? "ready" : "provisioning", ports };
+  const ready = await probeReady(ports);
+  if (ready) lastReadyPorts = ports;
+  return markRunning({ state: ready ? "ready" : "provisioning", ports });
 }
 
 /**
@@ -312,13 +332,19 @@ async function ensureOnce(limits: ComputerLimits): Promise<ComputerStatus> {
 export async function resumeComputer(): Promise<boolean> {
   if (BACKEND === "native") {
     const ports = await readPorts();
-    return Boolean(ports && (await probeReady(ports)));
+    const up = Boolean(ports && (await probeReady(ports)));
+    if (up) markRunning({ state: "ready" });
+    return up;
   }
   const running = await inspectRunning();
   if (running === null) return false; // never created — not our job here
-  if (running) return true;
+  if (running) {
+    markRunning({ state: "ready" });
+    return true;
+  }
   const started = await dockerOk(["start", CONTAINER_NAME], 120_000);
   forgetPorts();
+  if (started) markRunning({ state: "ready" });
   return started;
 }
 
@@ -333,6 +359,165 @@ export async function exec(command: string, timeoutMs = 60_000): Promise<string>
     return (stdout + (stderr ?? "")).trim();
   }
   return docker(["exec", CONTAINER_NAME, "bash", "-lc", command], timeoutMs);
+}
+
+/** How a command reaches the computer for `readComputerFile` — injectable so
+ *  tests can fake the container without a docker daemon. */
+export type ComputerCommandRunner = (argv: string[], timeoutMs: number, maxBuffer: number) => Promise<string>;
+
+const defaultRunner: ComputerCommandRunner = async (argv, timeoutMs, maxBuffer) => {
+  if (computersDisabled()) throw new Error("the bot computer is disabled in this process");
+  const { file, args } = dockerCommand(argv);
+  const { stdout } = await run(file, args, { timeout: timeoutMs, maxBuffer });
+  return stdout;
+};
+
+/**
+ * Read one file from INSIDE the computer container, size-capped.
+ *
+ * Fallback for bot→user file delivery: the agent writes its file with the
+ * computer tools, so the path it hands to `send_file` lives in the container's
+ * filesystem, not the host's — `resolveBotFile` cannot see it. Deliberately
+ * container-only: on the `native` backend the computer IS the host, so the
+ * direct host lookup already covered it, and re-running the read here would
+ * just be a second way to read arbitrary host files.
+ *
+ * Base64 over `docker exec` stdout is fine (unlike the box REST run-command
+ * channel, which corrupts binary output — see computer-proxy.ts).
+ */
+export async function readComputerFile(
+  path: string,
+  maxBytes: number,
+  runner: ComputerCommandRunner = defaultRunner,
+  backend: Backend = BACKEND,
+): Promise<Buffer> {
+  const raw = String(path ?? "").trim();
+  // Newlines/NUL would break the quoted shell command; a real path has neither.
+  if (!raw || /[\r\n\0]/.test(raw)) throw Object.assign(new Error("path required"), { status: 422 });
+  if (backend !== "docker") {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host; the computer fallback is container-only)`), { status: 404 });
+  }
+  const quoted = `'${raw.replace(/'/g, "'\\''")}'`;
+  let sizeOut = "";
+  try {
+    sizeOut = await runner(["exec", CONTAINER_NAME, "bash", "-lc", `stat -c %s -- ${quoted}`], 30_000, 1 << 20);
+  } catch {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host and not on the bot computer)`), { status: 404 });
+  }
+  const size = Number(sizeOut.trim());
+  if (!Number.isFinite(size) || size <= 0) {
+    throw Object.assign(new Error(`no such file: ${raw} (not on the host and not on the bot computer)`), { status: 404 });
+  }
+  if (size > maxBytes) {
+    throw Object.assign(new Error(`file exceeds ${Math.floor(maxBytes / 1024 / 1024)} MB limit`), { status: 413 });
+  }
+  // base64 inflates 4/3 — budget for that plus slack, never less than the cap.
+  const stdout = await runner(
+    ["exec", CONTAINER_NAME, "bash", "-lc", `base64 -w0 -- ${quoted}`],
+    120_000,
+    Math.ceil(maxBytes * 1.5) + (1 << 20),
+  );
+  const buf = Buffer.from(stdout.trim(), "base64");
+  if (!buf.length) throw Object.assign(new Error(`no such file: ${raw} (unreadable on the bot computer)`), { status: 404 });
+  return buf;
+}
+
+// ── computer on demand ─────────────────────────────────────────────────
+// Measured on the production phone: the native backend left a whole XFCE
+// desktop (Xvnc, xfce4-session and its daemons, chromium, websockify) running
+// for good on 5.4 GB of RAM while no bot touched it. So the computer sleeps
+// after MULTIBOT_COMPUTER_IDLE_MS without use, and the next use — a turn, a
+// tool call, the panel — brings it back through the very same `ensureComputer`.
+//
+// "Use" is anything that resolves a port (`readPort`: every CDP call and every
+// screen-proxy request) or ensures the computer (turn start, panel poll). A
+// turn that mounted the computer tools HOLDS it for its whole duration, so a
+// bot thinking for six minutes between two clicks never loses its browser.
+
+export const IDLE_MS = Math.max(0, Number(process.env.MULTIBOT_COMPUTER_IDLE_MS ?? 300_000)) || 0;
+
+const idle = {
+  lastUse: 0,
+  running: false,
+  holds: new Map<string, number>(), // key -> refcount (two turns of one bot may overlap)
+  timer: null as ReturnType<typeof setTimeout> | null,
+  /** Test seam: what "stop" does. */
+  stop: stopComputer as () => Promise<void>,
+};
+
+function markRunning<T extends ComputerStatus>(status: T): T {
+  if (status.state === "ready" || status.state === "provisioning") {
+    idle.running = true;
+    touchComputer();
+  }
+  return status;
+}
+
+function armIdleTimer(): void {
+  if (idle.timer) clearTimeout(idle.timer);
+  idle.timer = null;
+  if (!IDLE_MS || !idle.running) return;
+  const wait = Math.max(0, idle.lastUse + IDLE_MS - Date.now());
+  idle.timer = setTimeout(() => {
+    idle.timer = null;
+    if (!idle.running) return;
+    // A turn still holds it: the clock restarts once the turn is over.
+    if (idle.holds.size > 0) idle.lastUse = Date.now();
+    if (Date.now() - idle.lastUse < IDLE_MS) return armIdleTimer();
+    idle.running = false;
+    void idle.stop().catch((e) => console.warn("[multibot] computer idle stop:", e instanceof Error ? e.message : e));
+  }, wait);
+  idle.timer.unref?.();
+}
+
+/** Any use of the computer: resets the idle clock. */
+export function touchComputer(): void {
+  idle.lastUse = Date.now();
+  armIdleTimer();
+}
+
+/** A turn with the computer tools mounted keeps it awake until `releaseComputerHold`. */
+export function holdComputer(key: string): void {
+  idle.holds.set(key, (idle.holds.get(key) ?? 0) + 1);
+  touchComputer();
+}
+
+export function releaseComputerHold(key: string): void {
+  const n = idle.holds.get(key);
+  if (n === undefined) return;
+  if (n > 1) idle.holds.set(key, n - 1);
+  else idle.holds.delete(key);
+  touchComputer();
+}
+
+/** What the panel shows: `running: false` reads as "komputer uśpiony". */
+export function computerIdleStatus(): { running: boolean; idleMs: number } {
+  return { running: idle.running, idleMs: IDLE_MS };
+}
+
+/**
+ * Put the computer to sleep. Native: `computer-native.sh stop` kills exactly
+ * the pids the start script recorded. Docker: `docker stop` — `ensureComputer`
+ * already knows how to `docker start` a stopped container, so waking is free.
+ */
+export async function stopComputer(): Promise<void> {
+  idle.running = false;
+  if (idle.timer) clearTimeout(idle.timer);
+  idle.timer = null;
+  lastReadyPorts = null;
+  forgetPorts();
+  if (computersDisabled()) return;
+  if (BACKEND === "native") {
+    await run("bash", [NATIVE_SCRIPT, "stop"], { timeout: 60_000, maxBuffer: 1 << 20 });
+    return;
+  }
+  await docker(["stop", CONTAINER_NAME], 60_000);
+}
+
+/** Test seam — fake timers plus a recorded stop, no desktop involved. */
+export function _idleForTests(stop?: () => Promise<void>): typeof idle {
+  if (stop) idle.stop = stop;
+  return idle;
 }
 
 /**

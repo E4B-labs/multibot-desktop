@@ -80,7 +80,7 @@ describe("pinRequest", () => {
 // go openssl w katalogu tymczasowym, a bez openssl test się pomija.
 const openssl = (() => {
   try {
-    execFileSync("openssl", ["version"], { stdio: "ignore" });
+    execFileSync("openssl", ["version"], { stdio: "ignore", windowsHide: true });
     return true;
   } catch {
     return false;
@@ -92,7 +92,7 @@ describe.skipIf(!openssl)("przypięcie na żywym TLS", () => {
     const dir = mkdtempSync(join(tmpdir(), "multibot-tls-"));
     execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
       "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"), "-days", "2", "-nodes",
-      "-subj", "/CN=MultiBot test"], { stdio: "ignore" });
+      "-subj", "/CN=MultiBot test"], { stdio: "ignore", windowsHide: true });
     const seen = [];
     const server = createSecureServer(
       { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) },

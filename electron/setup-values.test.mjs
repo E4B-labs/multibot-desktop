@@ -70,10 +70,10 @@ describe("setupValuesFrom", () => {
 });
 
 describe("setupFilePath", () => {
-  it("idzie za OMB_DATA_DIR, tak samo jak server/config.ts", () => {
-    expect(setupFilePath({ OMB_DATA_DIR: "/data/mb" }, "/home/k")).toBe(path.join("/data/mb", "setup.json"));
-    expect(setupFilePath({}, "/home/k")).toBe(path.join("/home/k", ".openmausbot", "setup.json"));
-    expect(setupFilePath({ OMB_DATA_DIR: "   " }, "/home/k")).toBe(path.join("/home/k", ".openmausbot", "setup.json"));
+  it("idzie za MULTIBOT_DATA_DIR, tak samo jak server/config.ts", () => {
+    expect(setupFilePath({ MULTIBOT_DATA_DIR: "/data/mb" }, "/home/k")).toBe(path.join("/data/mb", "setup.json"));
+    expect(setupFilePath({}, "/home/k")).toBe(path.join("/home/k", ".multibot", "setup.json"));
+    expect(setupFilePath({ MULTIBOT_DATA_DIR: "   " }, "/home/k")).toBe(path.join("/home/k", ".multibot", "setup.json"));
   });
 });
 

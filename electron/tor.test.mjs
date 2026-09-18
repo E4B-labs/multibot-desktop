@@ -54,11 +54,11 @@ test("binarka: paczka na Windowsie, potem PATH, potem furtka dla dewelopera", ()
   );
   assert.equal(resolveTorBinary({ resourcesPath: "C:\\res", platform: "win32", env: { PATH: "C:\\bin" }, exists: exists([onPath]) }), onPath);
   assert.equal(
-    resolveTorBinary({ platform: "win32", env: { PATH: "C:\\bin", OMB_TOR_BIN: "D:\\tor\\tor.exe" }, exists: exists(["D:\\tor\\tor.exe"]) }),
+    resolveTorBinary({ platform: "win32", env: { PATH: "C:\\bin", MULTIBOT_TOR_BIN: "D:\\tor\\tor.exe" }, exists: exists(["D:\\tor\\tor.exe"]) }),
     "D:\\tor\\tor.exe",
   );
   // Wyłącznik z PLAN-TOR działa nawet wtedy, gdy binarka leży pod ręką.
-  assert.equal(resolveTorBinary({ platform: "win32", env: { OMB_TOR: "0", PATH: "C:\\bin" }, exists: exists([onPath]) }), null);
+  assert.equal(resolveTorBinary({ platform: "win32", env: { MULTIBOT_TOR: "0", PATH: "C:\\bin" }, exists: exists([onPath]) }), null);
 });
 
 test("bez tora na tym komputerze nie ma czego szukać — to jest ten jeden kod", () => {
@@ -66,16 +66,16 @@ test("bez tora na tym komputerze nie ma czego szukać — to jest ten jeden kod"
 });
 
 test("startTor bez binarki odpada od razu kodem tor_unavailable, a nie po 90 sekundach", async () => {
-  const before = process.env.OMB_TOR;
-  process.env.OMB_TOR = "0";
+  const before = process.env.MULTIBOT_TOR;
+  process.env.MULTIBOT_TOR = "0";
   try {
     await assert.rejects(() => startTor({ dataDir: null }), (err) => err.code === TOR_UNAVAILABLE);
     // Nieudany start NIE zostaje na całe życie procesu: kto doinstaluje tora,
     // ma prawo spróbować jeszcze raz bez restartu aplikacji.
     await assert.rejects(() => startTor(), (err) => err.code === TOR_UNAVAILABLE);
   } finally {
-    if (before === undefined) delete process.env.OMB_TOR;
-    else process.env.OMB_TOR = before;
+    if (before === undefined) delete process.env.MULTIBOT_TOR;
+    else process.env.MULTIBOT_TOR = before;
   }
 });
 

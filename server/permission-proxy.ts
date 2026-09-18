@@ -103,11 +103,19 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        question: { type: "string", description: "The question, with enough context to answer at a glance" },
+        question: { type: "string", description: "The question itself, short — it is the title of the card the human sees" },
         choices: {
           type: "array",
           items: { type: "string" },
           description: "Optional 2-5 suggested answers, shown as one-tap buttons",
+        },
+        multiple: {
+          type: "boolean",
+          description: "Set `multiple: true` whenever more than one of the choices can be right at the same time (days, features, files); leave it out only when the answers are mutually exclusive. Choice labels must not contain a comma, because the answer comes back as the chosen labels joined by commas.",
+        },
+        detail: {
+          type: "string",
+          description: "Optional background for the question, shown small under it. Keep it out of `question`.",
         },
       },
       required: ["question"],
@@ -146,7 +154,7 @@ async function handle(msg: any) {
       if (!socket) return resolve({ behavior: "deny", message: BROKER_DOWN });
       waiting.set(askId, resolve);
       const ask = isQuestion
-        ? { t: "ask", id: askId, kind: "question", tool: "ask_user", input: { question: args.question, choices: args.choices } }
+        ? { t: "ask", id: askId, kind: "question", tool: "ask_user", input: { question: args.question, choices: args.choices, multiple: args.multiple === true, detail: args.detail } }
         : { t: "ask", id: askId, tool: args.tool_name, input: args.input, suggestions };
       try {
         socket.write(JSON.stringify(ask) + "\n");

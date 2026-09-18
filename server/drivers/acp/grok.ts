@@ -43,7 +43,7 @@ const support: AcpSupport = {
   // an unauthenticated CLI is a user action, not something to paper over.
   pickAuthMethod: (methods) => (methods.some((m) => m.id === "cached_token") ? "cached_token" : null),
   authFailure: "fail",
-  isAuthenticated: () => existsSync(join(homedir(), ".grok", "auth.json")),
+  isAuthenticated: (env) => existsSync(join(env.HOME ?? homedir(), ".grok", "auth.json")),
 
   // `--append-system-prompt`/`--rules` are accepted by the CLI but do NOT
   // reach the agent-stdio system prompt (verified against 1.0.0), so the

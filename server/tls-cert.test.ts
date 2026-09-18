@@ -83,7 +83,7 @@ describe("candidateIps", () => {
 });
 
 describe("ensureTlsMaterial", () => {
-  const dir = () => mkdtempSync(join(tmpdir(), "omb-tls-"));
+  const dir = () => mkdtempSync(join(tmpdir(), "multibot-tls-"));
 
   it("wystawia materiał przy pierwszym boocie i zapisuje klucz prywatnie", () => {
     const dataDir = dir();

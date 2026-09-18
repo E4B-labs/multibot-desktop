@@ -19,7 +19,7 @@ describe("OpenCode ACP driver", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-acp-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-opencode-acp-"));
   });
 
   afterEach(async () => {

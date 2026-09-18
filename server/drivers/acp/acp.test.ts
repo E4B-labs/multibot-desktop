@@ -21,7 +21,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 // multibot (G3): new ACP harnesses ride the same fake-CLI contract.
 import { KimiAgentDriver, kimiAcpArgs } from "./kimi.ts";
-import { QwenAgentDriver, qwenAcpArgs } from "./qwen.ts";
+import { QwenAgentDriver, qwenAcpArgs, qwenIsAuthenticated } from "./qwen.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -41,6 +41,14 @@ describe("ACP decodeConfig", () => {
     expect(QwenAgentDriver.decodeConfig(undefined)).toEqual({ cli: "qwen", fullAuto: false, workspace: undefined });
     expect(qwenAcpArgs()).toEqual(["--acp"]);
     expect(qwenAcpArgs("qwen3-coder-plus")).toEqual(["--acp", "--model", "qwen3-coder-plus"]);
+  });
+  it("qwen nie uznaje cudzego OPENAI_API_KEY za logowanie", () => {
+    // pusty katalog domowy: żadnego ~/.qwen, więc liczy się samo env
+    const home = mkdtempSync(join(tmpdir(), "mb-qwen-"));
+    expect(qwenIsAuthenticated({ OPENAI_API_KEY: "sk-cudze" }, home)).toBe(false);
+    expect(qwenIsAuthenticated({ QWEN_API_KEY: "sk-sp-x" }, home)).toBe(true);
+    expect(qwenIsAuthenticated({ DASHSCOPE_API_KEY: "sk-x" }, home)).toBe(true);
+    expect(qwenIsAuthenticated({}, home)).toBe(false);
   });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
@@ -68,7 +76,7 @@ describe("ACP turns (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-acp-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "multibot-acp-test-"));
   });
 
   afterEach(async () => {
@@ -91,10 +99,10 @@ describe("ACP turns (fake CLI)", () => {
       "turn.started",
       "session.started",
       "content.delta",
+      "item.completed", // assistant_text — the tool call after it closes the block
       "item.started", // tool tc-1
       "item.completed", // tool tc-1 done
       "thread.token-usage.updated",
-      "item.completed", // assistant_text (summed) on settle
       "turn.completed",
     ]);
     expect(recorder.events.every((e) => e.turnId === turnId && e.provider === "grokAgent")).toBe(true);
@@ -105,6 +113,28 @@ describe("ACP turns (fake CLI)", () => {
     const done = recorder.events.at(-1)!;
     expect(done).toMatchObject({ type: "turn.completed", ok: true });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
+  });
+
+  // Regression: every assistant text block of a multi-step turn is its own
+  // message. They used to fold into one growing bubble glued without a
+  // separator, and only the settle's single flush reached the transcript.
+  it("splits a multi-step turn into one assistant_text per block", async () => {
+    await create(GrokAgentDriver, "two-blocks");
+    await instance.adapter.sendTurn({ threadId: "t-two", text: "hi", model: "grok-4.6" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const texts = recorder.events
+      .filter((e) => e.type === "item.completed" && (e as any).itemType === "assistant_text")
+      .map((e) => (e as any).text);
+    expect(texts).toEqual(["hello from fake acp", "second block"]);
+    // the second block never carries the first one's text: the buffer resets
+    expect(texts[1]).not.toContain("hello");
+    // and the deltas add up to exactly what the two messages hold
+    const streamed = recorder.events
+      .filter((e) => e.type === "content.delta" && (e as any).streamKind === "assistant_text")
+      .map((e) => (e as any).delta)
+      .join("");
+    expect(streamed).toBe(texts.join(""));
   });
 
   it("passes ACP stdio flags and strips XAI_API_KEY from the child env", async () => {

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 
 const run = (args) => {
   process.stdout.write(`[kimi-install] $ uv ${args.join(" ")}\n`);
-  const result = spawnSync("uv", args, { stdio: "inherit", shell: false });
+  const result = spawnSync("uv", args, { stdio: "inherit", shell: false, windowsHide: true });
   return result.error ? 1 : result.status ?? 1;
 };
 

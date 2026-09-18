@@ -6,21 +6,29 @@ import { ArrowLeft, FileDown, Loader2, Plus, Trash2 } from "lucide-react";
 // ich części na kliknięcie (suwaki jeżdżą, strzałki się kręcą, klucz dokręca).
 import { RefreshTabIcon, ShieldTabIcon, SlidersTabIcon, WrenchTabIcon } from "./SettingsTabIcons";
 import { AdminPanel } from "./AdminPanel";
+import { ErrorBoundary } from "./ErrorBoundary";
 // multibot: piąta kopia tej samej linii (App.tsx, ChatView.tsx, Onboarding.tsx,
 // Sidebar.tsx). Tu decyduje o jednym: czy pokazać przełącznik akceleracji.
 const isElectron = navigator.userAgent.includes("Electron");
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
+import { fetchUpdateLog, pageNumbers, type UpdateLogError, type UpdateLogPage } from "@/lib/updateLog";
 import { cn } from "@/lib/cn";
 import { authFetch, clearAuthToken } from "@/lib/auth";
+import { canRemember, forgetRemembered } from "@/lib/shell";
 import { languageLabel, setLanguage, useLanguage, type Language } from "@/lib/language";
 import { SkinPicker } from "./SkinPicker";
+import { copyText } from "@/lib/shell";
 import { MicrophoneRow } from "./MicrophoneRow";
 import { BotSettingsCard } from "./BotSettingsCard";
+import { Skeleton, Spinner } from "./Loading";
 import { applyMotionMode, readMotionMode, type MotionMode } from "@/lib/motion";
 import { readDesktopNotifications, requestBrowserNotifications, setDesktopNotifications } from "@/lib/notifications";
+import { formatStartupReport, getStartupReport, onStartupReady, type StartupReport } from "@/lib/startupTiming";
+
+type ClientTimingEntry = StartupReport;
 
 const slug = (value: string) =>
   value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
@@ -106,6 +114,58 @@ function DiagnosticsRow() {
   );
 }
 
+// multibot: "opens very slowly" na telefonie i z drugiego miasta — bez
+// liczb to zgadywanie. Sekcja pokazuje własny start (z performance.timing)
+// i starty innych urządzeń zebrane na serwerze w client-timing.jsonl.
+function StartupTimingSection() {
+  const polish = useLanguage() === "pl";
+  const [report, setReport] = useState(getStartupReport());
+  const [others, setOthers] = useState<ClientTimingEntry[]>([]);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => onStartupReady(setReport), []);
+  useEffect(() => {
+    let alive = true;
+    api("/api/client-timing?limit=20").then((body) => alive && setOthers(body.entries ?? [])).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const copy = () => {
+    if (!report) return;
+    void copyText(formatStartupReport(report)).then((ok) => ok && (setCopied(true), setTimeout(() => setCopied(false), 1500)));
+  };
+  return (
+    <div className="mt-4 rounded-xl bg-card p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[15px] font-medium text-ink">{polish ? "Start aplikacji" : "App startup"}</div>
+        {report && (
+          <button type="button" onClick={copy} className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover">
+            {copied ? (polish ? "Skopiowano" : "Copied") : polish ? "Kopiuj" : "Copy"}
+          </button>
+        )}
+      </div>
+      {!report && <div className="mt-3 flex items-center gap-2 text-[12.5px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{polish ? "Trwa pomiar…" : "Measuring…"}</div>}
+      {report && (
+        <div className="mt-3 font-mono text-[11.5px] leading-relaxed text-ink-secondary">
+          <div className="text-ink">{report.totalMs} ms <span className="text-ink-secondary">({report.fromCache ? (polish ? "z cache" : "cached") : (polish ? "z sieci" : "network")})</span></div>
+          <div className="truncate">{report.origin}</div>
+          {report.steps.map((step) => (
+            <div key={step.name} className="flex gap-2"><span className="w-14 shrink-0 text-right">{step.ms}</span><span className="truncate">{step.name}{step.durMs !== undefined ? ` (+${step.durMs})` : ""}</span></div>
+          ))}
+        </div>
+      )}
+      {others.length > 0 && (
+        <div className="mt-4 border-t border-hairline/30 pt-3">
+          <div className="text-[12px] font-medium text-ink-secondary">{polish ? "Ostatnie starty" : "Recent startups"}</div>
+          <div className="mt-2 flex flex-col gap-1 font-mono text-[11.5px] text-ink-secondary">
+            {others.map((entry, i) => (
+              <div key={i} className="flex gap-2 truncate"><span className="w-14 shrink-0 text-right">{entry.totalMs} ms</span><span className="truncate">{entry.origin || "?"}</span><span className="shrink-0 opacity-60">{entry.fromCache ? (polish ? "cache" : "cache") : ""}</span></div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** v2 profile: username is immutable; display name labels messages. */
 function ProfileFields() {
   const { state } = useStore();
@@ -145,6 +205,9 @@ export function AccountSessions() {
   const [account, setAccount] = useState<any>(null);
   const [sessions, setSessions] = useState<Array<{ id: string; deviceName: string; lastSeenAt: number }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const [forgot, setForgot] = useState(false);
+  const [leaving, setLeaving] = useState<"one" | "all" | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
 
   useEffect(() => {
     void Promise.all([api("/api/auth/me"), api("/api/auth/sessions")])
@@ -153,13 +216,19 @@ export function AccountSessions() {
   }, []);
 
   const logout = async (all: boolean) => {
+    if (leaving) return;
+    setLeaving(all ? "all" : "one");
     await authFetch(`/api/auth/logout${all ? "-all" : ""}`, { method: "POST" }).catch(() => {});
     clearAuthToken();
     window.location.reload();
   };
 
   const revoke = async (id: string) => {
-    if (!(await authFetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" })).ok) return;
+    if (revoking) return;
+    setRevoking(id);
+    const ok = (await authFetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null))?.ok;
+    setRevoking(null);
+    if (!ok) return;
     setSessions((current) => current.filter((session) => session.id !== id));
   };
 
@@ -167,11 +236,21 @@ export function AccountSessions() {
     <div className="mt-4 rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">{polish ? "Konto i sesje" : "Account & sessions"}</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">{polish ? "Każde urządzenie loguje się własną sesją. Tokeny techniczne nie są pokazywane." : "Each device has its own session. Technical tokens are never displayed."}</div>
+      {!account && !error && <div className="mt-3 space-y-2"><Skeleton className="h-9" /><Skeleton className="h-4 w-2/3" /><Skeleton className="h-4 w-1/2" /></div>}
       {account?.user && <div className="mt-3 rounded-lg bg-inset px-3 py-2 text-[13px] text-ink">{account.user.displayName} <span className="text-ink-secondary">· @{account.user.username} · {account.user.role}</span></div>}
-      {sessions.length > 0 && <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">{sessions.map((session) => <div key={session.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{session.deviceName}</span><button type="button" onClick={() => void revoke(session.id)} className="text-ink hover:text-danger">{polish ? "Unieważnij" : "Revoke"}</button></div>)}</div>}
+      {sessions.length > 0 && <div className="mt-3 space-y-1 text-[12px] text-ink-secondary">{sessions.map((session) => <div key={session.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{session.deviceName}</span><button type="button" disabled={revoking !== null} onClick={() => void revoke(session.id)} className="flex items-center gap-1 text-ink hover:text-danger disabled:opacity-50">{revoking === session.id && <Spinner size={12} />}{polish ? "Unieważnij" : "Revoke"}</button></div>)}</div>}
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" onClick={() => void logout(false)} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">{polish ? "Wyloguj" : "Log out"}</button>
-        <button type="button" onClick={() => void logout(true)} className="rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10">{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
+        {/* Wylogowanie NIE kasuje zapamiętanego logowania — po to ono jest.
+            Kasuje je wyłącznie ta jawna decyzja. Przycisk stoi zawsze, gdy jest
+            powłoka: „zapomnij" bez zapisanego wpisu nic nie robi, a pytanie
+            powłoki o to, czy coś ma, kosztowałoby okrążenie przez most. */}
+        {canRemember() && (
+          <button type="button" onClick={() => { forgetRemembered(); setForgot(true); }} className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
+            {forgot ? (polish ? "Zapomniane" : "Forgotten") : polish ? "Zapomnij zapisane logowanie" : "Forget saved sign-in"}
+          </button>
+        )}
+        <button type="button" disabled={leaving !== null} onClick={() => void logout(false)} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">{leaving === "one" && <Spinner size={13} />}{polish ? "Wyloguj" : "Log out"}</button>
+        <button type="button" disabled={leaving !== null} onClick={() => void logout(true)} className="flex items-center gap-1.5 rounded-lg border border-danger/40 px-3 py-2 text-[13px] text-danger hover:bg-danger/10 disabled:opacity-50">{leaving === "all" && <Spinner size={13} />}{polish ? "Wyloguj wszystkie urządzenia" : "Log out all devices"}</button>
       </div>
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
@@ -208,6 +287,7 @@ function CustomModels() {
   const [checking, setChecking] = useState<string | null>(null);
   const [checks, setChecks] = useState<Record<string, { reachable: boolean; tools: string; error?: string }>>({});
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const polish = useLanguage() === "pl";
   const inputClass =
     "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none";
@@ -218,7 +298,8 @@ function CustomModels() {
         const rows = Array.isArray(body) ? body : body.models ?? [];
         setModels(rows.map(readCustomModel).filter((item: CustomModel) => item.id));
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     reload();
@@ -282,6 +363,7 @@ function CustomModels() {
       <div className="mt-0.5 text-[13px] text-ink-secondary">
         {polish ? "Adres zgodny z OpenAI. Lokalne Ollama, vLLM i LM Studio nie wymagają klucza." : "OpenAI-compatible URL. Local Ollama, vLLM and LM Studio need no key."}
       </div>
+      {!loaded && <div className="mt-3 flex flex-col gap-2"><Skeleton className="h-[46px]" /><Skeleton className="h-[46px]" /></div>}
       {models.length > 0 && (
         <div className="mt-3 flex flex-col gap-2">
           {models.map((item) => (
@@ -349,7 +431,11 @@ function CustomModels() {
   );
 }
 
-function CommandLineTools() {
+// `cliLogin` = narzędzie wskazane przez banerkę „logowanie wygasło”. Prośbę
+// zużywa już ekran ustawień (żeby nie przeżyła nieudanego `/api/cli-tools`),
+// tu przyjeżdża zwykłym propem.
+function CommandLineTools({ cliLogin }: { cliLogin: string | null }) {
+  const requested = cliLogin;
   type CliRow = { id: string; displayName: string; enabled: boolean; detected: boolean; authenticated?: boolean; reason?: string; version?: string; installCommand?: string | null; loginCommand?: string | null; loginAvailable?: boolean; loginMode?: "stdin" | "device"; loginHint?: string };
   type LoginSession = { toolId: string; jobId: string; output: string[]; done: boolean; mode: "stdin" | "device"; error?: string };
   type InstallSession = { toolId: string; jobId: string; output: string[]; done: boolean; error?: string };
@@ -359,7 +445,24 @@ function CommandLineTools() {
   const [installJob, setInstallJob] = useState<InstallSession | null>(null);
   const [login, setLogin] = useState<LoginSession | null>(null);
   const [loading, setLoading] = useState(true);
+  // multibot: narzędzie bez interaktywnego logowania (`loginAvailable` false)
+  // — pokazujemy komendę do wklejenia w terminalu zamiast okna.
+  const [manualLogin, setManualLogin] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  // Wiersz komendy stoi w głębi długiego panelu — na telefonie trzeba go
+  // dowieźć na ekran, inaczej „Odśwież logowanie” wygląda na nic nie robiące.
+  const manualRef = useRef<HTMLDivElement>(null);
   const polish = useLanguage() === "pl";
+  // Instalacja i logowanie zmieniają `state`/`authenticated` w snapshotcie
+  // instancji, a picker modeli przygasza na tym niezalogowane CLI
+  // (lib/instanceGate.ts). Bez tego odświeżenia „niezalogowany" wisiałby
+  // w pickerze do najbliższej ramki `config`, reconnectu SSE albo
+  // 12-godzinnej ankiety klienta.
+  const { dispatch } = useStore();
+  const syncInstances = () =>
+    api("/api/instances")
+      .then(({ instances }) => dispatch({ type: "instances", instances }))
+      .catch(() => {});
   const deviceLogin = (() => {
     if (login?.mode !== "device") return null;
     const output = login.output.join("\n").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
@@ -370,7 +473,21 @@ function CommandLineTools() {
   })();
 
   useEffect(() => {
-    void api("/api/cli-tools").then(({ tools }) => setCli(tools)).catch(() => {}).finally(() => setLoading(false));
+    let alive = true;
+    void api("/api/cli-tools").then(({ tools }) => {
+      if (!alive) return;
+      const rows: CliRow[] = Array.isArray(tools) ? tools : [];
+      setCli(rows);
+      if (!requested) return;
+      // multibot: przyszliśmy z banerki „logowanie wygasło” — okno logowania
+      // tego narzędzia otwiera się samo, bez szukania go w liście.
+      const tool = rows.find((item) => item.id.toLowerCase() === requested.toLowerCase());
+      if (!tool) return;
+      if (tool.loginAvailable) void startLogin(tool);
+      else setManualLogin(tool.id);
+    }).catch(() => {}).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lista wczytuje się raz, przy montowaniu
   }, []);
 
   const toggle = (tool: CliRow) => {
@@ -406,8 +523,13 @@ function CommandLineTools() {
     }
   };
 
+  useEffect(() => {
+    if (manualLogin) manualRef.current?.scrollIntoView({ block: "center" });
+  }, [manualLogin]);
+
   const startLogin = async (tool: CliRow) => {
     if (login) return;
+    setManualLogin(null);
     try {
       const response = await api(`/api/cli-tools/${encodeURIComponent(tool.id)}/login`, { method: "POST" });
       const session: LoginSession = { toolId: tool.id, jobId: response.id, output: response.job?.output ?? [], done: false, mode: tool.loginMode ?? "stdin" };
@@ -415,6 +537,7 @@ function CommandLineTools() {
       await followLogin(response.id, tool.id);
       const refreshed = await api("/api/cli-tools").catch(() => ({ tools: [] }));
       setCli(refreshed.tools ?? []);
+      syncInstances();
     } catch (error) {
       setLogin((current) => current ? { ...current, done: true, error: error instanceof Error ? error.message : String(error) } : null);
     }
@@ -490,6 +613,7 @@ function CommandLineTools() {
       setInstalling(null);
       const refreshed = await api("/api/cli-tools").catch(() => ({ tools: [] }));
       setCli(refreshed.tools ?? []);
+      syncInstances();
     }
   };
 
@@ -538,6 +662,34 @@ function CommandLineTools() {
                 />
               </div>
             </div>
+            {manualLogin === item.id && (
+              <div ref={manualRef} className="mx-2 mb-2 rounded-lg bg-inset p-2 text-[11px] text-ink-secondary">
+                {item.loginCommand && (
+                  <>
+                    <div>{polish ? "Zaloguj się w terminalu:" : "Sign in from a terminal:"}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="min-w-0 flex-1 break-all text-ink">{item.loginCommand}</code>
+                      <button
+                        onClick={() => {
+                          // `copyText` ma zapasowe `execCommand` — panel bywa w WebView
+                          // bez bezpiecznego kontekstu, gdzie `clipboard` odrzuca zapis
+                          void copyText(item.loginCommand ?? "").then((ok) => {
+                            if (!ok) return;
+                            setCopied(item.id);
+                            setTimeout(() => setCopied((current) => (current === item.id ? null : current)), 1500);
+                          });
+                        }}
+                        className="shrink-0 rounded-md bg-raised px-2 py-1 text-[11px] text-ink hover:bg-raised-hover"
+                      >{copied === item.id ? (polish ? "Skopiowano" : "Copied") : (polish ? "Kopiuj" : "Copy")}</button>
+                    </div>
+                  </>
+                )}
+                {item.loginHint && <div className="mt-1">{item.loginHint}</div>}
+                {!item.loginCommand && !item.loginHint && (
+                  <div>{polish ? "To narzędzie nie ma osobnego logowania." : "This tool has no sign-in step."}</div>
+                )}
+              </div>
+            )}
             {installJob?.toolId === item.id && (
               <div className="mx-2 mb-2 rounded-lg bg-inset p-2">
                 <div className="mb-1 text-[11px] text-ink-secondary">
@@ -555,7 +707,7 @@ function CommandLineTools() {
       </div>
     </div>
     {login && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="presentation">
+      <div data-shell-overlay className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="presentation">
         <div
           role="dialog"
           aria-modal="true"
@@ -617,6 +769,124 @@ function CommandLineTools() {
       </div>
     )}
     </>
+  );
+}
+
+/** Historia zmian pod wierszem aktualizacji — dokładnie to samo, co pokazuje
+ *  aplikacja na telefonie (`webui/src/components/AppSettingsPanel.tsx` w
+ *  `E4B-labs/multibot-mobile`): commity z gałęzi `main`, dziesięć na stronę,
+ *  prosto z API GitHuba. Repozytorium jest RÓŻNE po obu stronach, a
+ *  `scripts/sync-webui.mjs` (skrypt stoi w repo MOBILNYM i ciągnie stąd) NIE
+ *  chroni tego pliku — nie ma go na liście `PHONE_OWNED`, więc leci przez
+ *  trójstronny merge. Jedynym zabezpieczeniem przed cichą podmianą repo są
+ *  strażniki na źródle po obu stronach: `webui/src/mobile-parity.test.ts`
+ *  tam, `AppSettingsPanel.test.ts` tutaj. */
+function UpdateLog({ repository, polish }: { repository: string; polish: boolean }) {
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState<UpdateLogPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  // Trzymamy SAM POWÓD, nie gotowe zdanie: przełączenie języka ma przetłumaczyć
+  // komunikat na miejscu, a nie odpytać GitHuba jeszcze raz (`polish` w liście
+  // zależności efektu robiło dokładnie to).
+  const [error, setError] = useState<{ retryAt?: number } | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    void fetchUpdateLog(repository, page, controller.signal)
+      .then(setResult)
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setError({ retryAt: (reason as UpdateLogError | undefined)?.retryAt });
+      })
+      // Przerwane żądanie NIE gasi kręcioła: sprzątanie starego efektu leci
+      // przed nowym, więc `finally` odrzuconej obietnicy zdejmowało `loading`
+      // już po tym, jak nowa strona je zapaliła — i przez moment widać było
+      // „Brak zmian na tej stronie" zamiast ładowania.
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [page, repository, retry]);
+
+  const current = result?.page === page ? result : null;
+  const totalPages = Math.max(page, result?.totalPages ?? 1);
+  const pages = pageNumbers(page, totalPages);
+  const errorText = !error
+    ? null
+    : error.retryAt
+      ? polish
+        ? `Limit zapytań GitHuba. Spróbuj po ${new Date(error.retryAt).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}.`
+        : `GitHub rate limit reached. Try again after ${new Date(error.retryAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}.`
+      : polish
+        ? "Nie można pobrać historii zmian."
+        : "Could not load update history.";
+
+  return (
+    <div data-update-log className="mt-4 rounded-xl bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[15px] font-medium text-ink">{polish ? "Historia zmian" : "Update log"}</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            {polish ? "Commity z głównej gałęzi projektu." : "Commits from the project main branch."}
+          </div>
+        </div>
+        <span className="shrink-0 text-[12px] text-ink-secondary">
+          {polish ? `Strona ${page} z ${totalPages}` : `Page ${page} of ${totalPages}`}
+        </span>
+      </div>
+
+      {loading && !current ? (
+        <div className="mt-4 text-[13px] text-ink-secondary">{polish ? "Ładowanie zmian…" : "Loading changes…"}</div>
+      ) : error && !current ? (
+        <div className="mt-4 flex items-center justify-between gap-3 text-[13px] text-danger">
+          <span>{errorText}</span>
+          <button type="button" onClick={() => setRetry((value) => value + 1)} className="shrink-0 rounded-lg bg-raised px-2.5 py-1.5 text-ink hover:bg-raised-hover">
+            {polish ? "Spróbuj ponownie" : "Retry"}
+          </button>
+        </div>
+      ) : current?.entries.length ? (
+        <div className="mt-3 divide-y divide-hairline/30">
+          {current.entries.map((entry) => (
+            <a key={entry.sha} href={entry.url} target="_blank" rel="noreferrer" className="flex items-start gap-3 py-3 first:pt-0 last:pb-0 hover:bg-raised/30">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium text-ink">{entry.message}</div>
+                <div className="mt-1 flex gap-2 text-[11px] text-ink-secondary">
+                  <span className="font-mono">{entry.shortSha}</span>
+                  <span aria-hidden>·</span>
+                  <time dateTime={entry.date}>{new Date(entry.date).toLocaleDateString(polish ? "pl-PL" : "en-US", { year: "numeric", month: "short", day: "numeric" })}</time>
+                </div>
+              </div>
+              <span aria-hidden className="shrink-0 text-ink-secondary">↗</span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 text-[13px] text-ink-secondary">{polish ? "Brak zmian na tej stronie." : "No changes on this page."}</div>
+      )}
+
+      {errorText && current && <div className="mt-3 text-[12px] text-danger">{errorText}</div>}
+      {totalPages > 1 && (
+        <nav aria-label={polish ? "Strony historii zmian" : "Update history pages"} className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-hairline/30 pt-3">
+          {pages.map((item, index) => item === "…" ? (
+            <span key={`ellipsis-${index}`} className="px-1 text-[13px] text-ink-secondary" aria-hidden>…</span>
+          ) : (
+            <button
+              key={item}
+              type="button"
+              aria-label={polish ? `Strona ${item}` : `Page ${item}`}
+              aria-current={item === page ? "page" : undefined}
+              onClick={() => setPage(item)}
+              className={cn("min-w-8 rounded-lg px-2 py-1.5 text-[13px] transition-colors", item === page ? "bg-accent text-white" : "bg-raised text-ink-secondary hover:bg-raised-hover hover:text-ink")}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
+      )}
+    </div>
   );
 }
 
@@ -868,10 +1138,25 @@ export function visibleSettingsTabs(role: SettingsRole): typeof settingsTabs[num
 }
 
 export function AppSettingsPanel() {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const language = useLanguage();
   const polish = language === "pl";
+  // multibot: przyjście z banerki „logowanie wygasło" otwiera od razu tę
+  // zakładkę, na której mieszka lista narzędzi CLI — inaczej prośba czekałaby
+  // niezauważona, bo `CommandLineTools` montuje się dopiero tutaj.
   const [tab, setTab] = useState<AppSettingsTab>("general");
+  // multibot: prośba „zaloguj to CLI” z banerki. Zużywamy ją TU i od razu
+  // (pusty `cliLogin` w akcji ją kasuje), a dalej niesie ją zwykły stan tego
+  // ekranu — inaczej nieudane `/api/cli-tools` zostawiłoby ją w store i
+  // porwałoby następne, niezwiązane wejście w ustawienia.
+  const [pendingCli, setPendingCli] = useState<string | null>(null);
+  const cliLogin = state.appSettingsCliLogin;
+  useEffect(() => {
+    if (!cliLogin) return;
+    setTab("other");
+    setPendingCli(cliLogin);
+    dispatch({ type: "toggleAppSettings", open: true });
+  }, [cliLogin, dispatch]);
   // multibot: licznik kliknięć w szynę sekcji. Sam `tab` nie wystarczy —
   // ponowne kliknięcie w już wybraną ikonę nie zmienia stanu, więc animacja
   // nie miałaby czego odtworzyć. Numer idzie do `key`, co przemontowuje
@@ -922,7 +1207,9 @@ export function AppSettingsPanel() {
           aria-label={polish ? "Sekcje ustawień" : "Settings sections"}
           className="flex w-[72px] shrink-0 flex-col items-center gap-2 border-r border-hairline/40 bg-panel px-2 py-5"
         >
-          {visibleTabs.map(({ id, Icon, pl, en }) => {
+          {settingsTabs.map(({ id, Icon, pl, en }) => {
+            // Admin needs /api/auth/me: hold its slot instead of popping in late.
+            if (id === "admin" && role !== "owner") return null;
             const label = polish ? pl : en;
             const active = tab === id;
             return (
@@ -964,6 +1251,7 @@ export function AppSettingsPanel() {
               <h2 className="text-[22px] font-semibold tracking-[-0.025em] text-ink">{polish ? currentTab.pl : currentTab.en}</h2>
               <p className="mt-1 text-[13px] text-ink-secondary">{polish ? currentTab.descriptionPl : currentTab.descriptionEn}</p>
             </div>
+            <ErrorBoundary key={tab}>
           {tab === "general" && (
             <>
               <div className="mt-2 flex items-center justify-between gap-4 rounded-xl bg-card p-4">
@@ -1043,7 +1331,10 @@ export function AppSettingsPanel() {
           {tab === "admin" && role === "owner" && <AdminPanel />}
 
           {tab === "update" && (
-            <UpdatesRow />
+            <>
+              <UpdatesRow />
+              <UpdateLog repository="E4B-labs/multibot-desktop" polish={polish} />
+            </>
           )}
 
           {tab === "other" && (
@@ -1051,12 +1342,14 @@ export function AppSettingsPanel() {
               {/* multibot: G1 — custom model catalog lives at app level, never per bot. */}
               <CustomModels />
               {/* multibot: G1 — CLI allowlist UI; provisioning actions land in G3. */}
-              <CommandLineTools />
+              <CommandLineTools cliLogin={pendingCli} />
 
               <MachineResources />
               <DiagnosticsRow />
+              <StartupTimingSection />
             </>
           )}
+            </ErrorBoundary>
           </div>
         </div>
       </div>

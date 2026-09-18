@@ -47,7 +47,7 @@ const support: AcpSupport = {
 
   isAuthenticated: (env) =>
     Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY) ||
-    existsSync(join(homedir(), ".gemini", "oauth_creds.json")),
+    existsSync(join(env.HOME ?? homedir(), ".gemini", "oauth_creds.json")),
 
   buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
 };

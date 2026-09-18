@@ -1,23 +1,26 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, ScanSearch, Search, Upload, Wand2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { ArrowDown, Bell, CalendarClock, Crosshair, File as FileIcon, Loader2, Monitor, Search, Upload, Wand2 } from "lucide-react";
 // multibot: wspólna pigułka zdarzenia i wspólna karta pliku
+import { Spinner } from "./Loading";
 import { EventChip } from "./EventChip";
 import { SkillRef } from "./SkillRef";
 import { AttachmentCard } from "./AttachmentCard";
-// multibot: lightbox załączników-obrazków (port z OpenMausBot #436)
+// multibot: lightbox załączników-obrazków (port z upstreamu #436)
 import { AttachmentPreviewDialog } from "./AttachmentPreview";
-// multibot: pasek szukania w transkrypcie (port z OpenMausBot #437)
+// multibot: pasek szukania w transkrypcie (port z upstreamu #437)
 import { ChatFindBar } from "./ChatFindBar";
-// multibot: flat replies — cytowanie wiadomości (port z OpenMausBot #437)
+import { useChatFind } from "@/lib/useChatFind";
+// multibot: flat replies — cytowanie wiadomości (port z upstreamu #437)
 import { ReplyQuote, replyTargetOf } from "./ReplyQuote";
 import { routineStartName, slashCommandLabel } from "@/lib/transcriptChips";
 import { useStore, type Bot, type Message } from "@/state/store";
 import { formatPeerEnvelope, parsePeerEnvelope } from "@/lib/peerEnvelope";
-import { PeerBadge } from "./PeerBadge";
+import { MentionText, PeerBadge } from "./PeerBadge";
 import { formatChatSessionTime, shouldStartChatSession } from "@/lib/chatSessions";
-import { MausAvatar } from "./Avatar";
-import { sidebarAvatarProps, stateForBot } from "@/lib/mascot";
+import { BotAvatar } from "./Avatar";
+import { BOT_COLORS, staticAvatarProps } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { CopyMessageButton } from "./CopyMessageButton";
 import { OptionCard } from "./OptionCard";
 import { ComputerHandoffCard } from "./ComputerHandoffCard";
 import { ConnectCard } from "./ConnectCard";
@@ -34,7 +37,11 @@ import { cn } from "@/lib/cn";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { authFetch } from "@/lib/auth";
+// multibot (K5): pobranie/podgląd pliku przez powłokę telefonu
+import { openFileViaShell } from "@/lib/nativeBridge";
 import { peerActivityGroupFor } from "@/lib/peerActivity";
+// multibot: wygasłe logowanie harnessu — banerka z przyciskiem naprawy
+import { AuthExpiredBanner, LoginExpiredCard } from "./AuthExpiredBanner";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -44,6 +51,10 @@ const USER_COLLAPSE_LINES = 8;
 function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<Message["attachments"]>[number] }) {
   const [url, setUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Ta sama ścieżka, z której bierzemy bloba. W powłoce telefonu idzie do
+  // mostu natywnego, bo tam ani `<a download>`, ani `window.open` na blobie
+  // nic nie robią (K5).
+  const path = `/api/bots/${botId}/attachments/${file.id}`;
   useEffect(() => {
     let active = true;
     let objectUrl = "";
@@ -69,7 +80,7 @@ function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<M
           <img src={url} alt={file.name} className="max-h-64 w-auto max-w-full rounded-xl object-contain" />
         </button>
         {previewOpen && (
-          <AttachmentPreviewDialog url={url} name={file.name} onClose={() => setPreviewOpen(false)} />
+          <AttachmentPreviewDialog url={url} name={file.name} path={path} mime={file.mime} onClose={() => setPreviewOpen(false)} />
         )}
       </>
     ) : <div className="h-24 w-40 animate-pulse rounded-xl bg-raised" />;
@@ -78,13 +89,16 @@ function MessageAttachment({ botId, file }: { botId: string; file: NonNullable<M
     <div className="flex items-center gap-2">
       {/* multibot: karta pliku wspólna dla załączników użytkownika i bota */}
       <div className="min-w-0 flex-1">
-        <AttachmentCard name={file.name} size={file.size} url={url} />
+        <AttachmentCard name={file.name} size={file.size} url={url} path={path} mime={file.mime} />
       </div>
       {file.mime === "text/html" && (
         <button
           type="button"
           disabled={!url}
-          onClick={() => url && window.open(url, "_blank", "noopener,noreferrer")}
+          onClick={() => {
+            if (openFileViaShell(path, file.name, file.mime)) return;
+            if (url) window.open(url, "_blank", "noopener,noreferrer");
+          }}
           className="shrink-0 rounded-xl bg-raised px-3 py-2 text-sm text-ink hover:bg-raised-hover disabled:opacity-40"
         >
           Otwórz
@@ -148,13 +162,29 @@ function Bubble({
     // data-mb-msg = kotwica dla find-in-chat
     <div
       data-mb-msg={message.id}
+      // multibot: seria dymków (iMessage) — reguły w styles.css, sekcja
+      // `[data-mb-side]`. O przynależności do serii decyduje SĄSIEDZTWO W DOM,
+      // nie indeks wiadomości: między dymkami stają pigułki zdarzeń, chipy
+      // pokoju, karty, podglądy ekranu, załącznik SKILL.md i separatory sesji
+      // — każde z nich przerywa serię i przerywa ją samym tym, że stoi
+      // pomiędzy. Dlatego nie ma tu mapy „ta wiadomość jest N-ta w serii":
+      // musiałaby powtórzyć całą logikę widoczności z pętli renderującej.
+      data-mb-side={user ? "user" : "bot"}
       className={cn(
         "group/msg flex w-full rounded-2xl transition-shadow",
         user ? "justify-end" : "justify-start",
         highlighted ? "ring-2 ring-accent/70" : "",
       )}
     >
+      {/* multibot: wiersz dymek+przyciski — rząd (TTS, kopiuj) stoi na PRAWO
+          od dymka, na tle czatu, wyrównany do jego dołu; pod dymkiem nie ma
+          już stopki, więc dymki bota niemal się stykają (gap-1 listy). Hover
+          dalej steruje `group/msg` na całym wierszu, więc przejazd myszą
+          dymek→przycisk niczego nie chowa. Sufit 90% liczy się dla całości
+          (dymek + przyciski), przyciski są `shrink-0`. */}
+      <div className="flex min-w-0 max-w-[90%] items-end gap-1">
       <div
+        data-mb-bubble=""
         className={cn(
           // multibot: dymek szeroki (90%) — poprzednie 35% było dla właściciela
           // za wąskie, 29.08 poprosił o niemal pełną szerokość kolumny czatu,
@@ -171,7 +201,8 @@ function Bubble({
           // `min-w-0` zdejmuje blokadę, `break-words` łamie sam token.
           // `overflow-wrap` dziedziczy się w dół, więc obejmuje też markdown;
           // bloki kodu zostają nietknięte, bo `white-space:pre` nie zawija.
-          "min-w-0 max-w-[90%] break-words rounded-2xl px-2 py-[5px] text-[14px] leading-[1.45]",
+          // multibot: `min-w-0 max-w-[90%]` przeniesione na wrapper wiersza wyżej
+          "min-w-0 break-words rounded-2xl px-2 py-[5px] text-[14px] leading-[1.45]",
           user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
           message.pending && "opacity-60",
         )}
@@ -193,10 +224,17 @@ function Bubble({
         {user ? (
           <>
             <div
+              // multibot: kotwica dla find-in-chat — walker po trafieniach
+              // schodzi tu i w `.chat-md`, czyli w treść dymka wraz z plakietką
+              // nadawcy, ale już nie w stopkę, badge modelu ani cytat
+              data-mb-body=""
               className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
             >
               {envelope && <PeerBadge name={envelope.from} />}
-              {body}
+              {/* multibot K2: wzmianka zostaje pigułką także po wysłaniu —
+                  composer pokazuje ją w trakcie pisania, dymek użytkownika
+                  dotąd wracał do surowego „@Imię". Patrz MentionText. */}
+              <MentionText text={body} />
             </div>
             {/* multibot: skalowane tym samym wsp. co reszta treści dymka */}
             {collapsible && (
@@ -208,12 +246,18 @@ function Bubble({
         ) : (
           <ChatMarkdown text={text} compact />
         )}
-        {/* multibot: sterowanie hover zostaje w stopce dymka; czas sesji
-            renderuje się osobno między wiadomościami. */}
-        <div className={cn("mt-1 flex items-center gap-1.5 text-[10px] leading-none", user ? "justify-end" : "justify-start")}>
+      </div>
+      {/* multibot: przyciski obok dymka; czas sesji renderuje się osobno
+          między wiadomościami. U użytkownika rząd byłby pusty, więc nie
+          renderujemy go wcale. */}
+      {!user && (
+        <div className="flex shrink-0 items-center gap-1.5 text-[10px] leading-none">
           {/* multibot: TTS — see SpeakButton.tsx; renders null with no voice key */}
-          {!user && <SpeakButton text={text} />}
+          <SpeakButton text={text} />
+          {/* multibot: kopiowanie zrodla wiadomosci - patrz CopyMessageButton.tsx */}
+          <CopyMessageButton text={text} />
         </div>
+      )}
       </div>
     </div>
   );
@@ -231,11 +275,13 @@ function SessionSeparator({ at, polish }: { at: number; polish: boolean }) {
 function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   const { dispatch } = useStore();
   if (!message.event) return null;
-  // przypomnienie jest rutyną z jednorazową datą, więc prowadzi w to samo miejsce
-  const routineEvent = message.event.type === "routine-created" || message.event.type === "reminder-created";
+  // Rutyna prowadzi w panel rutyn; przypomnienie — ustawione i odpalone — w
+  // panel przypomnień (od 10.09.2026 to osobny rekord, nie rutyna z datą).
+  const routineEvent = message.event.type === "routine-created";
+  const reminderEvent = message.event.type === "reminder-created" || message.event.type === "reminder";
   const labels = polish
-    ? { renamed: "Zmieniono nazwę na", "skill-created": "Utworzono umiejętność", "routine-created": "Utworzono rutynę", "reminder-created": "Przypomnienie", "goal-progress": "Cel" }
-    : { renamed: "Renamed to", "skill-created": "Created skill", "routine-created": "Created routine", "reminder-created": "Reminder", "goal-progress": "Goal" };
+    ? { renamed: "Zmieniono nazwę na", "skill-created": "Utworzono umiejętność", "routine-created": "Utworzono rutynę", "reminder-created": "Przypomnienie", reminder: "Przypomnienie", "goal-progress": "Cel" }
+    : { renamed: "Renamed to", "skill-created": "Created skill", "routine-created": "Created routine", "reminder-created": "Reminder", reminder: "Reminder", "goal-progress": "Goal" };
   // multibot: wspólna pigułka zamiast własnego markupu — patrz EventChip.tsx.
   // Rutyna dostaje ikonę zegara, zmiana nazwy zostaje czystym tekstem.
   // skill-created → wyśrodkowany SkillRef: ta sama nazwa, ten sam kolor i ten
@@ -250,68 +296,122 @@ function EventPill({ message, polish }: { message: Message; polish: boolean }) {
   return (
     <EventChip
       icon={
-        message.event.type === "routine-created" ? <CalendarClock size={13} />
-          : message.event.type === "reminder-created" ? <Bell size={13} />
+        routineEvent ? <CalendarClock size={13} />
+          : reminderEvent ? <Bell size={13} />
             : message.event.type === "goal-progress" ? <Crosshair size={13} /> : undefined
       }
       label={labels[message.event.type]}
       value={message.event.value}
-      onClick={routineEvent ? () => dispatch({ type: "toggleRoutines", open: true }) : undefined}
-      title={routineEvent ? "Otwórz rutyny / Open routines" : undefined}
+      onClick={
+        routineEvent
+          ? () => dispatch({ type: "toggleRoutines", open: true })
+          : reminderEvent
+            ? () => dispatch({ type: "toggleRoutines", open: true, tab: "reminders" })
+            : undefined
+      }
+      title={
+        routineEvent
+          ? "Otwórz rutyny / Open routines"
+          : reminderEvent
+            ? "Otwórz przypomnienia / Open reminders"
+            : undefined
+      }
     />
   );
 }
 
 /** Pulls the full transcript and swaps the chat for the read-only room view. */
 function openRoom(roomId: string, dispatch: ReturnType<typeof useStore>["dispatch"]) {
-  void authFetch(`/api/rooms/${encodeURIComponent(roomId)}`)
+  return authFetch(`/api/rooms/${encodeURIComponent(roomId)}`)
     .then((r) => (r.ok ? r.json() : null))
     .then((full) => full && dispatch({ type: "toggleRoom", room: full }));
 }
 
 /** A bot-to-bot card is a door, not a drawer: tapping it swaps the chat for the
  * room's read-only transcript (see RoomPanel). Between 07.09 and this fix the
- * card only expanded downwards into a member list and the room was unreachable. */
+ * card only expanded downwards into a member list and the room was unreachable.
+ * The peer's chip inside the sentence is a second door: it opens that bot's own
+ * chat instead of the room. */
 function PeerActivity({ messages, currentBotId }: { messages: Message[]; currentBotId: string }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
+  const [opening, setOpening] = useState(false);
   const first = messages[0];
   const room = first?.room;
   if (!room?.event) return null;
   const sent = room.event === "texted" && room.ownerBotId === currentBotId;
   const actor = state.bots.find((bot) => bot.id === room.ownerBotId);
-  const peerIds = [...new Set(messages.flatMap((message) => message.room?.bot_ids ?? []).filter((id) => id !== room.ownerBotId))];
+  const peerIds = [...new Set(messages.flatMap((message) => message.room?.bot_ids ?? []).filter((id) => id !== room.ownerBotId && id !== currentBotId))];
   const peers = peerIds.map((id) => state.bots.find((bot) => bot.id === id)).filter((bot): bot is Bot => Boolean(bot));
-  const names = peers.map((bot) => botDisplayName(bot, polish ? "pl" : "en"));
-  const actorName = actor ? botDisplayName(actor, polish ? "pl" : "en") : room.ownerBotId;
-  const label = sent
-    ? peers.length === 1
-      ? (polish ? `Napisano do ${names[0] ?? room.bot_ids[1] ?? "agenta"}` : `Messaged ${names[0] ?? room.bot_ids[1] ?? "agent"}`)
-      : (polish ? `Napisano do ${peers.length} agentów` : `Messaged ${peers.length} agents`)
-    : (polish ? `Wiadomość od ${actorName}` : `Message from ${actorName}`);
-  const status = state.rooms.find((candidate) => candidate.id === room.id)?.status ?? room.status;
-  const statusLabel = status === "done" ? (polish ? "Ukończone" : "Completed") : status === "failed" ? (polish ? "Błąd" : "Failed") : (polish ? "W toku" : "Working");
-  const avatars = sent ? [actor, ...peers] : [actor];
-  const content = (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="flex shrink-0 -space-x-1">
-        {avatars.filter((bot): bot is Bot => Boolean(bot)).slice(0, 3).map((bot) => (
-          <MausAvatar key={bot.id} color={bot.color} avatarUrl={bot.avatarUrl} shape={bot.mascotShape} state={stateForBot(bot)} size={20} animated={false} />
-        ))}
+  const chip = (bot: Bot | undefined, fallback: string) => {
+    if (!bot) return <span className="truncate">{fallback}</span>;
+    const name = botDisplayName(bot, polish ? "pl" : "en");
+    // multibot: nigdy nie pokazujemy awatara bota, którego czat jest właśnie
+    // otwarty; bot ukryty nie ma wiersza w pasku, więc też nie jest linkiem.
+    if (bot.id === currentBotId || bot.hidden) return <span className="truncate">{name}</span>;
+    const activate = (event: MouseEvent | ReactKeyboardEvent) => {
+      if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatch({ type: "select", id: bot.id });
+    };
+    return (
+      <span
+        role="link"
+        tabIndex={0}
+        title={polish ? "Otwórz czat z tym botem" : "Open this bot's chat"}
+        onClick={activate}
+        onKeyDown={activate}
+        // multibot: `bot.color` to NAZWA z allowlisty, nie kolor CSS — bez
+        // BOT_COLORS obwódka brałaby słowo kluczowe CSS (`green` = #008000).
+        // `--bot-ink` to kolor bota dociągnięty w połowie do atramentu skórki: sam
+        // hex tonie i na jasnych skórkach (yellow, white), i na ciemnych (black).
+        // 50/50 w oklab trzyma odcień, a najgorszy kontrast na wypełnieniu to
+        // 3,3:1 (lagoon/white) dla całej allowlisty w czterech skórkach.
+        style={{
+          "--bot": BOT_COLORS[bot.color] ?? BOT_COLORS.green,
+          "--bot-ink": "color-mix(in oklab, var(--bot) 50%, var(--color-ink))",
+        } as CSSProperties}
+        className="inline-flex items-center gap-1 rounded-full min-w-0 px-1.5 py-0.5 text-[var(--bot-ink)] [box-shadow:0_0_0_1px_var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_18%,var(--color-app))] hover:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:bg-[color-mix(in_oklab,var(--bot)_32%,var(--color-app))] focus-visible:outline focus-visible:outline-1 focus-visible:outline-focus focus-visible:outline-offset-1 transition-[background-color] duration-150"
+      >
+        <BotAvatar color={bot.color} avatarUrl={bot.avatarUrl} shape="blob" size={20} {...staticAvatarProps(bot)} />
+        <span className="truncate">{name}</span>
       </span>
-      <span className="truncate">{label}</span>
+    );
+  };
+  const visiblePeers = peers.slice(0, 3);
+  const extraPeers = peers.length - visiblePeers.length;
+  // multibot: opis to jeden rząd flexa, nie zdanie z chipami wklejonymi w tekst.
+  // Chip jest `inline-flex`, więc w toku tekstu bierze linię bazową z awatara i
+  // tekst obok siada 2,2 px niżej (zmierzone) — `items-center` to kasuje.
+  // `p-1 -m-1` daje `overflow-hidden` zapas na stałą obwódkę chipa (1 px) i na
+  // obwódkę fokusu (1 px + 1 px offsetu) — razem 3 px z 4 px zapasu.
+  const content = (
+    <span className="flex min-w-0 items-center gap-1 overflow-hidden p-1 -m-1">
+      <span className="shrink-0">{sent ? (polish ? "Napisano do" : "Messaged") : (polish ? "Wiadomość od" : "Message from")}</span>
+      {sent
+        ? visiblePeers.length
+          ? visiblePeers.map((bot) => <Fragment key={bot.id}>{chip(bot, bot.id)}</Fragment>)
+          : <span className="truncate">{room.bot_ids[1] ?? (polish ? "agenta" : "agent")}</span>
+        : chip(actor, room.ownerBotId)}
+      {sent && extraPeers > 0 && <span className="shrink-0">{`+${extraPeers}`}</span>}
     </span>
   );
   return (
     <div className="flex w-full justify-center">
       <button
         type="button"
-        onClick={() => openRoom(room.id, dispatch)}
+        onClick={() => {
+          setOpening(true);
+          void openRoom(room.id, dispatch).finally(() => setOpening(false));
+        }}
+        disabled={opening}
+        aria-busy={opening}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
-        className="mx-auto flex max-w-full cursor-pointer items-center gap-2 rounded-2xl border border-hairline/40 bg-panel px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        className="flex w-full min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md py-1 text-[13px] text-ink-secondary transition-[color,outline-color,transform] duration-150 hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-ink/25 focus-visible:outline-offset-2 active:scale-[0.97] active:text-ink disabled:cursor-wait disabled:scale-[0.98] disabled:text-ink"
       >
         {content}
-        <span className="shrink-0 text-[12px]">{statusLabel}</span>
+        {opening && <Spinner size={13} className="shrink-0" />}
       </button>
     </div>
   );
@@ -322,9 +422,11 @@ function PeerActivity({ messages, currentBotId }: { messages: Message[]; current
 function RoomChip({ message }: { message: Message }) {
   const { state, dispatch } = useStore();
   const polish = useLanguage() === "pl";
+  const [opening, setOpening] = useState(false);
   const room = message.room;
   if (!room) return null;
   const pill = "flex max-w-full items-center gap-1.5 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink";
+  const groupPill = "flex max-w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-raised hover:text-ink active:bg-raised-hover focus-visible:bg-raised focus-visible:text-ink focus-visible:outline-none";
   // A group turn mirrors ONE room shared by every member, so "X texted Y, Z"
   // read as nonsense in a member's private thread: name the group instead and
   // lead back to the group chat, not the room ledger.
@@ -334,13 +436,16 @@ function RoomChip({ message }: { message: Message }) {
       <div className="flex justify-center">
         <button
           onClick={() => {
+            setOpening(true);
             void authFetch(`/api/groups/${encodeURIComponent(groupId)}`)
               .then((r) => (r.ok ? r.json() : null))
-              .then((group) => group && dispatch({ type: "toggleGroup", group }));
+              .then((group) => group && dispatch({ type: "toggleGroup", group }))
+              .finally(() => setOpening(false));
           }}
-          className={pill}
+          className={groupPill}
           title={polish ? "Otwórz czat grupowy" : "Open group chat"}
         >
+          {opening && <Spinner size={13} />}
           <span>{polish ? "Rozmowa w grupie" : "Group chat:"}</span>
           <span className="truncate font-medium text-ink">{room.name}</span>
         </button>
@@ -355,13 +460,17 @@ function RoomChip({ message }: { message: Message }) {
   return (
     <div className="flex justify-center">
       <button
-        onClick={() => openRoom(room.id, dispatch)}
+        onClick={() => {
+          setOpening(true);
+          void openRoom(room.id, dispatch).finally(() => setOpening(false));
+        }}
         className={pill}
         title={polish ? "Otwórz pokój współpracy (tylko do odczytu)" : "Open collaboration room (read-only)"}
       >
+        {opening && <Spinner size={13} />}
         <span className="flex items-center gap-1 font-medium text-ink">
           {owner && (
-            <MausAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape={owner.mascotShape} state={stateForBot(owner)} size={18} animated={false} />
+            <BotAvatar color={owner.color} avatarUrl={owner.avatarUrl} shape="blob" size={18} {...staticAvatarProps(owner)} />
           )}
           {owner ? botDisplayName(owner, polish ? "pl" : "en") : room.ownerBotId}
         </span>
@@ -370,7 +479,7 @@ function RoomChip({ message }: { message: Message }) {
         </span>
         {peers.map((peer) => (
           <span key={peer.id} className="flex items-center gap-1 font-medium text-ink">
-            <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={stateForBot(peer)} size={18} animated={false} />
+            <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape="blob" size={18} {...staticAvatarProps(peer)} />
             {botDisplayName(peer, polish ? "pl" : "en")}
           </span>
         ))}
@@ -406,12 +515,19 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
 
 function StreamingBubble({ text }: { text: string }) {
   return (
-    <div className="flex w-full justify-start">
+    // multibot: dymek strumienia dokleja się do serii bota tak samo jak gotowy
+    // (patrz styles.css `[data-mb-side]`) — inaczej ostatni dymek odskakiwałby
+    // w chwili, gdy strumień się kończy i Bubble go podmienia.
+    <div className="flex w-full justify-start" data-mb-side="bot">
       {/* multibot: ten sam rozmiar co Bubble — inaczej tekst „skakałby" po
-          zakończeniu strumienia */}
-      <div className="min-w-0 max-w-[90%] break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
+          zakończeniu strumienia; wrapper-wiersz identyczny jak w Bubble
+          (bez przycisków), żeby sufit szerokości liczył się w tym samym
+          miejscu. */}
+      <div className="flex min-w-0 max-w-[90%] items-end gap-1">
+      <div data-mb-bubble="" className="min-w-0 break-words rounded-2xl bg-card px-2 py-[5px] text-[14px] leading-[1.45] text-ink">
         <ChatMarkdown text={text} streaming compact />
         <span className="ml-0.5 inline-block h-[13px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
+      </div>
       </div>
     </div>
   );
@@ -444,10 +560,39 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
-  // multibot: awatar w naglowku czatu trzyma sie tej samej zasady co pasek
-  // boczny i wiersz grupy — stoi nieruchomo ZAWSZE, takze gdy bot pracuje.
-  // Jedyny animowany bot w aplikacji siedzi na pasku nad composerem.
-  const headerAvatar = sidebarAvatarProps(bot);
+  // multibot (poziom Status): bot TERAZ klika na wspólnym komputerze. Nie to
+  // samo co otwarty panel — ikona ma świecić, bo maszyna pracuje, a nie dlatego,
+  // że ktoś ją sobie podejrzał. Serwer nadaje to ramką `computer-queue`.
+  const computerActing = state.computerActing.includes(bot.id);
+  // multibot: awatar w naglowku czatu stoi nieruchomo ZAWSZE, takze gdy bot
+  // pracuje — jedynym animowanym sygnalem tury w widoku czatu jest pasek nad
+  // composerem (roster ma wlasna regule: `sidebarAvatarProps`).
+  const headerAvatar = staticAvatarProps(bot);
+  // Jeden przycisk na obie powłoki: w przeglądarce stoi w rzędzie ikon zawsze,
+  // na pulpicie (gdzie akcje siedzą pod „⋮") pokazuje się TYLKO wtedy, gdy bot
+  // pracuje na komputerze — inaczej status byłby schowany w zwiniętym menu.
+  const computerLabel = computerActing
+    ? polish ? "Bot pracuje na komputerze" : "The bot is using the computer"
+    : polish ? "Komputer bota" : "Bot's computer";
+  const computerButton = (
+    <button
+      onClick={() => dispatch({ type: "toggleComputer" })}
+      className={cn(
+        "relative rounded-md p-1.5 hover:bg-raised",
+        computerActing || state.computerOpen ? "text-accent" : "text-ink hover:text-ink",
+      )}
+      title={computerLabel}
+      // Czytnik ekranu ma słyszeć to samo, co mówi dymek — sam kolor ikony nie
+      // niesie dla niego niczego.
+      aria-label={computerLabel}
+      data-computer-acting={computerActing ? "1" : undefined}
+    >
+      <Monitor size={18} />
+      {computerActing && (
+        <span aria-hidden className="absolute right-1 top-1 size-1.5 rounded-full bg-accent motion-safe:animate-pulse" />
+      )}
+    </button>
+  );
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
@@ -472,10 +617,15 @@ export function ChatView({ bot }: { bot: Bot }) {
       .querySelector(`[data-mb-msg="${CSS.escape(highlightId)}"]`)
       ?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [highlightId]);
+  // multibot: trafienia w treści — podświetla je useChatFind po Range'ach
+  // (patrz lib/findInChat.ts), pasek pokazuje tylko „3/17".
+  const find = useChatFind(scrollRef, findOpen);
+  const resetFind = find.reset;
   const closeFind = useCallback(() => {
     setFindOpen(false);
     setHighlightId(null);
-  }, []);
+    resetFind();
+  }, [resetFind]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -497,9 +647,12 @@ export function ChatView({ bot }: { bot: Bot }) {
     if (lastMessage?.role === "user") setFollow(true);
   }, [lastMessage?.id, lastMessage?.role]);
   useEffect(() => {
-    // zmiana bota zamyka find — trafienia należą do starego transkryptu
+    // zmiana bota zamyka find — trafienia należą do starego transkryptu,
+    // razem z wpisaną frazą (inaczej pasek wracał z zapytaniem poprzedniego bota)
     setFindOpen(false);
     setHighlightId(null);
+    resetFind();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bot.id]);
   useEffect(() => {
     let active = true;
@@ -572,7 +725,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           title={polish ? "Ustawienia bota" : "Bot settings"}
         >
           <span className="relative inline-flex shrink-0 rounded-full">
-            <MausAvatar
+            <BotAvatar
               color={bot.color} avatarUrl={bot.avatarUrl}
               shape={bot.mascotShape}
               size={40}
@@ -591,12 +744,15 @@ export function ChatView({ bot }: { bot: Bot }) {
               z aplikacji mobilnej. W przeglądarce i na serwerze telefonu
               zostają ikony, bo tam nagłówka nic nie ściska. */}
           {isElectron ? (
-            <ChatHeaderMenu
-              onToggleFind={() => {
-                setFollow(false);
-                setFindOpen((open) => !open);
-              }}
-            />
+            <>
+              {computerActing && computerButton}
+              <ChatHeaderMenu
+                onToggleFind={() => {
+                  setFollow(false);
+                  setFindOpen((open) => !open);
+                }}
+              />
+            </>
           ) : (
             <>
               <button
@@ -613,24 +769,8 @@ export function ChatView({ bot }: { bot: Bot }) {
               >
                 <Search size={18} />
               </button>
-              <button
-                onClick={() => dispatch({ type: "toggleInspector" })}
-                className={cn("rounded-md p-1.5 hover:bg-raised", state.inspectorOpen ? "text-accent" : "text-ink hover:text-ink")}
-                title={polish ? "Inspector runtime" : "Runtime inspector"}
-                aria-label={polish ? "Inspector runtime" : "Runtime inspector"}
-              >
-                <ScanSearch size={18} />
-              </button>
-              <button
-                onClick={() => dispatch({ type: "toggleComputer" })}
-                className={cn(
-                  "rounded-md p-1.5 hover:bg-raised",
-                  state.computerOpen ? "text-accent" : "text-ink hover:text-ink",
-                )}
-                title={polish ? "Komputer bota" : "Bot's computer"}
-              >
-                <Monitor size={18} />
-              </button>
+              {/* hidden per Kacper 07.09.2026, panels kept */}
+              {computerButton}
               <button
                 onClick={() => dispatch({ type: "toggleRoutines" })}
                 className={cn(
@@ -658,6 +798,10 @@ export function ChatView({ bot }: { bot: Bot }) {
         </div>
       </div>
 
+      {/* multibot: logowanie CLI wygasło — jedno kliknięcie prowadzi do
+          okna logowania tego narzędzia w ustawieniach. */}
+      <AuthExpiredBanner bot={bot} />
+
       {/* Error banner */}
       {state.error && (
         <div className="w-full px-5">
@@ -672,7 +816,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           między nagłówkiem a polem pisania i karta wyglądała na przesuniętą. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {findOpen && (
-          <ChatFindBar messages={bot.messages} onClose={closeFind} onJump={jumpToHit} />
+          <ChatFindBar find={find} onClose={closeFind} />
         )}
         {/* Messages */}
         <div
@@ -689,7 +833,10 @@ export function ChatView({ bot }: { bot: Bot }) {
           else if (atEnd()) setFollow(true);
         }}
         onScroll={() => {
-          if (!follow && atEnd()) setFollow(true);
+          // przy otwartym pasku szukania NIE wracamy do trybu „goń dół": to
+          // programowe przewinięcie na trafienie dojechało do końca listy, a
+          // nie użytkownik prosił o live view
+          if (!follow && !findOpen && atEnd()) setFollow(true);
         }}
       >
         {/* multibot: `pb-16` (64 px) zamiast `pb-10` — przy dojechaniu na sam
@@ -702,6 +849,10 @@ export function ChatView({ bot }: { bot: Bot }) {
             switch (m.kind) {
               case "secret":
                 child = <SecretRequestCard key={m.id} botId={bot.id} message={m} />;
+                break;
+              // multibot: karta „logowanie wygasło" z przyciskiem odświeżenia
+              case "login":
+                child = <LoginExpiredCard key={m.id} message={m} />;
                 break;
               case "options":
                 // multibot: karta przekazania komputera ma własny render

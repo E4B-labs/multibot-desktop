@@ -26,13 +26,13 @@ Docelowy układ: MultiBot Server działa stale na S10e w Termuxie. Desktopowa i 
 
 ### Pierwszy boot drukuje trzy wartości
 
-Serwer, do którego nikt jeszcze nie dołączył, sam sobie nadaje nazwę (slug w rodzaju `brave-otter`) i losuje hasło serwera. Zapisuje je razem z adresem i odciskiem certyfikatu do `DATA_DIR/setup.json` (0600, domyślnie `~/.openmausbot/setup.json`) i pokazuje na konsoli. Hasło leci na stdout **tylko na prawdziwym terminalu**: pod `svlogger`, systemd czy `docker logs` stdout jest plikiem, który zostaje na zawsze, więc harness drukuje tam wyłącznie ścieżkę do pliku.
+Serwer, do którego nikt jeszcze nie dołączył, sam sobie nadaje nazwę (slug w rodzaju `brave-otter`) i losuje hasło serwera. Zapisuje je razem z adresem i odciskiem certyfikatu do `DATA_DIR/setup.json` (0600, domyślnie `~/.multibot/setup.json`) i pokazuje na konsoli. Hasło leci na stdout **tylko na prawdziwym terminalu**: pod `svlogger`, systemd czy `docker logs` stdout jest plikiem, który zostaje na zawsze, więc harness drukuje tam wyłącznie ścieżkę do pliku.
 
 Dlatego wartości pokazują instalatory, po starcie usługi:
 
 - `install-termux.sh` i `install-linux.sh` czekają na `setup.json` (do 90 s) i drukują blok `Address / Name / Password / Fingerprint` przez `scripts/print-setup-values.sh`. Na maszynie, która ma `tor`, skrypt przytrzymuje wypis, dopóki w pliku nie pojawi się adres `.onion` (tor wstaje 10–30 s) — bez tego instalator podałby adres LAN-owy, który działa tylko po tym Wi-Fi;
-- kontener NIE dostaje ich do logu (ten zostaje na zawsze): `scripts/docker-entrypoint.sh` wypisuje tylko ścieżkę i komendę `docker compose -f docker-compose.selfhost.yml exec app cat /data/.openmausbot/setup.json`;
-- `install-server-windows.mjs` czyta ten sam plik po `waitForServer`; ta usługa stoi na pętli zwrotnej, więc jej adres to `https://127.0.0.1:8799` (do sieci wypuszcza ją dopiero `OMB_HOST=0.0.0.0` albo reverse proxy).
+- kontener NIE dostaje ich do logu (ten zostaje na zawsze): `scripts/docker-entrypoint.sh` wypisuje tylko ścieżkę i komendę `docker compose -f docker-compose.selfhost.yml exec app cat /data/.multibot/setup.json`;
+- `install-server-windows.mjs` czyta ten sam plik po `waitForServer`; ta usługa stoi na pętli zwrotnej, więc jej adres to `https://127.0.0.1:8799` (do sieci wypuszcza ją dopiero `MULTIBOT_HOST=0.0.0.0` albo reverse proxy).
 
 Kończy się to jedną instrukcją: **wpisz te trzy wartości w MultiBot na dowolnym urządzeniu → `Sign in to a server`**. Gdy `setup.json` nie ma, instalator drukuje sam adres i mówi, że albo serwer ma już profil (zaloguj się na niego), albo nie wystartował (sprawdź log usługi) — z zewnątrz jedno od drugiego nie do odróżnienia. Hasło serwera rotuje potem właściciel z panelu.
 
@@ -47,7 +47,7 @@ Nie ma QR, Tailscale, WireGuard ani ręcznego wklejania tokenu w normalnym flow.
 
 ## HTTPS
 
-Od 0.4.0 harness słucha **wyłącznie po HTTPS**, na porcie `8799`. Domyślnie nasłuchuje na pętli zwrotnej — wyjście do sieci to świadoma decyzja (`OMB_HOST=0.0.0.0`, tak robią `scripts/install-linux.sh` i `scripts/install-termux.sh`). Certyfikat wystawia sobie sam na pierwszym boocie: klucz P-256 i X.509 na 10 lat w `DATA_DIR/tls.key` (0600, na Windowsie dodatkowo `icacls`) i `DATA_DIR/tls.crt`, z SAN-em obejmującym adresy IP tej maszyny z chwili wystawienia oraz `localhost`. Odcisk SHA-256 idzie do logu startowego, do `setup.json`, do `GET /api/public/server`, `GET /api/setup/values` i `GET /api/server`.
+Od 0.4.0 harness słucha **wyłącznie po HTTPS**, na porcie `8799`. Domyślnie nasłuchuje na pętli zwrotnej — wyjście do sieci to świadoma decyzja (`MULTIBOT_HOST=0.0.0.0`, tak robią `scripts/install-linux.sh` i `scripts/install-termux.sh`). Certyfikat wystawia sobie sam na pierwszym boocie: klucz P-256 i X.509 na 10 lat w `DATA_DIR/tls.key` (0600, na Windowsie dodatkowo `icacls`) i `DATA_DIR/tls.crt`, z SAN-em obejmującym adresy IP tej maszyny z chwili wystawienia oraz `localhost`. Odcisk SHA-256 idzie do logu startowego, do `setup.json`, do `GET /api/public/server`, `GET /api/setup/values` i `GET /api/server`.
 
 Certyfikat nie ma urzędu, który by go potwierdził, więc zaufanie działa jak w SSH: klient zapamiętuje odcisk przy pierwszym połączeniu i pilnuje go potem (desktop robi to sam, `electron/tls-pin.mjs`; przeglądarka pokazuje ostrzeżenie raz na profil). **Zmiana odcisku to twardy błąd**, nie cicha zgoda.
 
@@ -72,7 +72,7 @@ TLS zostaje **od końca do końca**. Relay przepuszcza czysty TCP, więc certyfi
 Trzy kroki:
 
 1. **Weź maszynę z publicznym IP.** Dowolny VPS. Za darmo: Oracle Cloud Always Free (ARM Ampere, 4 rdzenie / 24 GB, bez limitu czasu).
-2. **Na serwerze MultiBota** uruchom `sh scripts/relay-connect.sh <IP-relaya>`. Skrypt tworzy `~/.openmausbot/relay_key` (ed25519, bez hasła), zapisuje `~/.openmausbot/relay.env`, instaluje usługę (`mb-relay` w runicie na Termuksie, `mb-relay.service` w systemd na Linuksie) i **drukuje klucz publiczny razem z gotową komendą do wklejenia**.
+2. **Na serwerze MultiBota** uruchom `sh scripts/relay-connect.sh <IP-relaya>`. Skrypt tworzy `~/.multibot/relay_key` (ed25519, bez hasła), zapisuje `~/.multibot/relay.env`, instaluje usługę (`mb-relay` w runicie na Termuksie, `mb-relay.service` w systemd na Linuksie) i **drukuje klucz publiczny razem z gotową komendą do wklejenia**.
 3. **Na relayu**, jako root, wklej komendę wydrukowaną w kroku 2 — `relay-setup.sh` nie musi tam wcześniej być, bo komenda pobiera go prosto z repo:
 
    ```sh
@@ -83,7 +83,7 @@ Trzy kroki:
 
    Wymaga OpenSSH 7.8+ — na starszym `permitlisten` bywa po cichu ignorowane, więc skrypt odmawia zamiast zbudować coś słabszego, niż wygląda. Port jest parametrem (`$2`), nie stałą.
 
-**Adres serwera to od tej chwili `https://<IP-relaya>:8799`.** Harness stawia go na szczycie drabiny jako rodzaj `relay` i podaje w `GET /api/server/address` (`current`) oraz `GET /api/server` (`publicAddress`). `OMB_PUBLIC_URL` nadal wygrywa, jeśli ktoś je ustawił.
+**Adres serwera to od tej chwili `https://<IP-relaya>:8799`.** Harness stawia go na szczycie drabiny jako rodzaj `relay` i podaje w `GET /api/server/address` (`current`) oraz `GET /api/server` (`publicAddress`). `MULTIBOT_PUBLIC_URL` nadal wygrywa, jeśli ktoś je ustawił.
 
 `setup.json` powstaje raz, na pierwszym boocie serwera. Od 0.5.0 przepisywane jest w nim **wyłącznie pole `address`** — i tylko dopóki plik istnieje, czyli zanim pierwszy profil przejmie serwer (`identity.updateSetupAddress`). Powód: plik rodzi się z adresem, który drabina znała w tamtej sekundzie (zwykle LAN-owym), a relay albo onion pojawia się kilkanaście sekund później. Nazwa, hasło i odcisk certyfikatu **nie zmieniają się nigdy**: certyfikat nie jest wymieniany, więc kto już zaufał serwerowi po LAN-ie, nie musi robić nic ponownie.
 
@@ -111,12 +111,12 @@ brew install tor       # macOS
 
 Harness sam pilnuje procesu (`server/tor.ts`) — nie ma osobnej usługi w runicie ani w systemd. Zapisuje `DATA_DIR/tor/torrc`, startuje `tor -f torrc`, czyta z jego stdoutu port SOCKS i postęp bootstrapu, a gdy tor się wywróci, podnosi go z backoffem 5→60 s. Wyłączenie serwera zabija tora razem z nim: onion, za którym nie stoi harness, to opublikowany martwy adres.
 
-Adres bierze się z `DATA_DIR/tor/hs/hostname` (katalog `hs` ma 0700, inaczej tor odmawia startu) i wygląda tak: `https://<56 znaków base32>.onion:8799`. `OMB_TOR=0` wyłącza całość, `OMB_TOR_BIN` wskazuje binarium spoza `PATH`. Brak tora nie jest błędem — jest jedna linia w logu i drabina ma o szczebel mniej.
+Adres bierze się z `DATA_DIR/tor/hs/hostname` (katalog `hs` ma 0700, inaczej tor odmawia startu) i wygląda tak: `https://<56 znaków base32>.onion:8799`. `MULTIBOT_TOR=0` wyłącza całość, `MULTIBOT_TOR_BIN` wskazuje binarium spoza `PATH`. Brak tora nie jest błędem — jest jedna linia w logu i drabina ma o szczebel mniej.
 
-**Dwa układy nie dostają oniona nigdy**, i to niezależnie od `OMB_TOR` — powód jest ten sam w obu: opublikowanie oniona bierze instalację, którą właściciel świadomie trzymał poza internetem, i wystawia ją całemu internetowi.
+**Dwa układy nie dostają oniona nigdy**, i to niezależnie od `MULTIBOT_TOR` — powód jest ten sam w obu: opublikowanie oniona bierze instalację, którą właściciel świadomie trzymał poza internetem, i wystawia ją całemu internetowi.
 
-- **Serwer na pętli zwrotnej** (`OMB_HOST` domyślne albo `127.0.0.1`, czyli `install-server-windows.mjs` i każde uruchomienie deweloperskie). Ten serwer nie miał być widoczny nawet z sąsiedniego komputera. Chcesz oniona — ustaw `OMB_HOST=0.0.0.0` świadomie.
-- **`OMB_TLS=off`.** Nie ma wtedy naszego certyfikatu, więc nie ma odcisku, więc `probeOnion` nigdy nie potwierdzi adresu — a drabina i tak stawiałaby go nad każdym niepotwierdzonym szczeblem. Do tego `OMB_TLS=off` istnieje wyłącznie dla reverse proxy kończącego TLS gdzie indziej, a onion prowadzący prosto do harnessa obchodziłby to proxy bokiem.
+- **Serwer na pętli zwrotnej** (`MULTIBOT_HOST` domyślne albo `127.0.0.1`, czyli `install-server-windows.mjs` i każde uruchomienie deweloperskie). Ten serwer nie miał być widoczny nawet z sąsiedniego komputera. Chcesz oniona — ustaw `MULTIBOT_HOST=0.0.0.0` świadomie.
+- **`MULTIBOT_TLS=off`.** Nie ma wtedy naszego certyfikatu, więc nie ma odcisku, więc `probeOnion` nigdy nie potwierdzi adresu — a drabina i tak stawiałaby go nad każdym niepotwierdzonym szczeblem. Do tego `MULTIBOT_TLS=off` istnieje wyłącznie dla reverse proxy kończącego TLS gdzie indziej, a onion prowadzący prosto do harnessa obchodziłby to proxy bokiem.
 
 W obu wypadkach w logu jest jedna linia mówiąca który to przypadek.
 
@@ -185,10 +185,10 @@ odpowiadające źródła.
 Proxy z certyfikatem od prawdziwego urzędu jest opcją, nie wymogiem. Jeśli je stawiasz, to **ono kończy TLS**, a do harnessa idzie po pętli zwrotnej gołym HTTP:
 
 ```
-OMB_HOST=127.0.0.1 OMB_TLS=off
+MULTIBOT_HOST=127.0.0.1 MULTIBOT_TLS=off
 ```
 
-To JEDYNY wspierany sposób na `OMB_TLS=off`: przy `OMB_HOST` spoza pętli zwrotnej serwer **odmawia startu**, zamiast cicho wystawiać hasła gołym tekstem. Proxy ma dokładać `X-Forwarded-Proto: https` — po tym nagłówku serwer wie, że sesja jedzie po TLS, i dopina ciasteczku `Secure`; nagłówek liczy się wyłącznie od klienta z pętli zwrotnej, czyli od proxy stojącego na tej samej maszynie.
+To JEDYNY wspierany sposób na `MULTIBOT_TLS=off`: przy `MULTIBOT_HOST` spoza pętli zwrotnej serwer **odmawia startu**, zamiast cicho wystawiać hasła gołym tekstem. Proxy ma dokładać `X-Forwarded-Proto: https` — po tym nagłówku serwer wie, że sesja jedzie po TLS, i dopina ciasteczku `Secure`; nagłówek liczy się wyłącznie od klienta z pętli zwrotnej, czyli od proxy stojącego na tej samej maszynie.
 
 `/api/public/server` jest publiczne. `/api/bots` bez sesji musi zwracać `401`.
 
@@ -228,7 +228,7 @@ Najważniejsze endpointy:
 
 ## S10e / Termux
 
-Uruchom usługę serwera przez `runit`/`termux-services`, ustaw autostart i wyłącz agresywne oszczędzanie baterii dla Termuxa. Przechowuj dane w katalogu wskazanym przez `OMB_DATA_DIR`; nie używaj katalogu repo jako magazynu sekretów.
+Uruchom usługę serwera przez `runit`/`termux-services`, ustaw autostart i wyłącz agresywne oszczędzanie baterii dla Termuxa. Przechowuj dane w katalogu wskazanym przez `MULTIBOT_DATA_DIR`; nie używaj katalogu repo jako magazynu sekretów.
 
 Instalatory:
 

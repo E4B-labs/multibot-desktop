@@ -5,6 +5,7 @@ import {
   PEER_CHAT_WAVE_MS,
   WAVE_VARIANT_COUNT,
   bubbleWaves,
+  isEngagedInPeerChat,
   selectActivePeerChat,
   waveSeed,
 } from "./botChatAnimation";
@@ -40,6 +41,40 @@ function room(id: string, botIds: string[], status: Room["status"] = "running", 
     ...(activeBotId !== undefined ? { activeBotId } : {}),
   };
 }
+
+describe("isEngagedInPeerChat", () => {
+  const a = bot("a");
+  const idle = bot("b");
+  const working = bot("b", { busy: true });
+
+  it("kolega wlasnie pisze -> wymiana trwa", () => {
+    expect(isEngagedInPeerChat([room("r1", ["a", "b"])], "a", { a, b: working })).toBe(true);
+  });
+
+  it("szczelina miedzy turami: dlug `pendingTo` liczy sie tak samo", () => {
+    const handover = { ...room("r1", ["a", "b"]), pendingTo: "b" };
+    expect(isEngagedInPeerChat([handover], "a", { a, b: idle })).toBe(true);
+  });
+
+  it("cisza w pokoju to nie wymiana", () => {
+    expect(isEngagedInPeerChat([room("r1", ["a", "b"])], "a", { a, b: idle })).toBe(false);
+  });
+
+  it("wlasne `busy` nie jest rozmowa z nikim", () => {
+    const solo = bot("a", { busy: true });
+    expect(isEngagedInPeerChat([room("r1", ["a", "b"])], "a", { a: solo, b: idle })).toBe(false);
+  });
+
+  it("pokoj grupy to czat czlowieka, nie rozmowa botow", () => {
+    const group = { ...room("r1", ["a", "b"]), groupId: "g1" };
+    expect(isEngagedInPeerChat([group], "a", { a, b: working })).toBe(false);
+  });
+
+  it("zamkniety pokoj i pokoj bez tego bota nie licza sie", () => {
+    expect(isEngagedInPeerChat([room("r1", ["a", "b"], "done")], "a", { a, b: working })).toBe(false);
+    expect(isEngagedInPeerChat([room("r1", ["c", "b"])], "a", { a, b: working })).toBe(false);
+  });
+});
 
 describe("selectActivePeerChat", () => {
   it("zwraca null, gdy nie ma żadnych pokoi", () => {

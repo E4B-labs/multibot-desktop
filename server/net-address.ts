@@ -155,7 +155,7 @@ function kindOf(hostname: string): AddressKind {
 }
 
 /** The harness is HTTPS-only from 0.4.0 (`server/tls-cert.ts`); the scheme is
- * still a parameter because `OMB_TLS=off` behind a reverse proxy is a real,
+ * still a parameter because `MULTIBOT_TLS=off` behind a reverse proxy is a real,
  * documented deployment. */
 export type Scheme = "http" | "https";
 
@@ -405,7 +405,7 @@ export type AddressDeps = {
    * which is the honest answer rather than a guess. */
   socksPort?(): number | null;
   /** Our own certificate's SHA-256, so `probeRelay` can recognise us coming
-   * back through the tunnel. Null with `OMB_TLS=off`, where there is nothing
+   * back through the tunnel. Null with `MULTIBOT_TLS=off`, where there is nothing
    * to recognise and the relay simply stays unverified. */
   tlsFingerprint?: string | null;
   getMeta(key: string): string | null;

@@ -1,18 +1,22 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Spinner } from "./Loading";
 import { ArrowUp, Brain, CalendarClock, File as FileIcon, Loader2, Mic, Plus, Puzzle, Shield, SlidersHorizontal, Wand2, Wrench, X, Zap } from "lucide-react";
 import { api, useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { authFetch } from "@/lib/auth";
-import { MausAvatar } from "./Avatar";
-import { normalizeState, stripMascotState } from "@/lib/mascot";
+import { BotAvatar } from "./Avatar";
+import { botChipStyle } from "./PeerBadge";
+import { CELEBRATE_MS, activityPhrase, normalizeState, stripMascotState } from "@/lib/mascot";
+import { splitMentions } from "@/lib/mentions";
+import { isEngagedInPeerChat } from "@/lib/botChatAnimation";
 import { useLanguage } from "@/lib/language";
 import { botDisplayName } from "@/lib/botNames";
 import { parseSchedule, type PresetOrUnknown } from "@/lib/routineSchedule";
 import { AttachmentCard } from "./AttachmentCard";
 import { randomId } from "@/lib/shell";
 
-// multibot: szybki przełącznik dostępu w composerze (port z OpenMausBot #442,
+// multibot: szybki przełącznik dostępu w composerze (port z upstreamu #442,
 // tam PermissionModeSelector) — te same endpointy co EngineAutonomy.
 type ComposerAccess = "read-only" | "approval" | "full";
 
@@ -126,10 +130,96 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   const upto = text.slice(0, caret);
   const at = upto.lastIndexOf("@");
   if (at === -1) return null;
+  // TA SAMA reguła co `mentionedBots` w server/store.ts i co `mentionRegex`
+  // w lib/mentions.ts: „@" na początku albo po białym znaku. Trzy miejsca,
+  // jedno zdanie — jeśli zmieniasz jedno, zmień wszystkie trzy.
   if (at > 0 && !/\s/.test(upto[at - 1])) return null; // user@host, not a tag
   const query = upto.slice(at + 1);
   if (query.length > 24 || query.includes("@") || query.includes("\n")) return null;
   return { start: at, query };
+}
+
+/** multibot K2: typografia pola pisania. Warstwa podświetlenia musi ją mieć co
+ *  do piksela taką samą, więc stoi w jednym miejscu zamiast w dwóch klasach,
+ *  które rozjadą się przy pierwszej zmianie rozmiaru czcionki. */
+const COMPOSER_TYPO = "py-1 text-[15px] leading-5";
+
+/**
+ * multibot K2: `@Imię` koloruje się już w PISANEJ wiadomości, nie dopiero po
+ * wysłaniu. Warstwa maluje tekst pod przezroczystą textareą — pole zostaje
+ * zwykłą textareą (cofanie, IME, wklejanie, klawiatura telefonu, dyktowanie),
+ * a jedynym źródłem prawdy wysyłanym na serwer dalej jest jej surowy tekst.
+ *
+ * Warunek poprawności to identyczne metryki: te same klasy typografii, ta sama
+ * szerokość, to samo zawijanie i zsynchronizowane przewijanie. Dlatego pigułka
+ * wnosi ZERO szerokości (`px-[1px]` cofnięte `-mx-[1px]` — tło wystaje poza
+ * znaki, znaki stoją tam, gdzie stały) i dlatego NIE MA tu awatara: każdy
+ * dodatkowy piksel w toku tekstu odsuwa kursor od litery, na której stoi.
+ * Awatar pokazuje picker „@" nad polem i pigułka w wysłanej wiadomości.
+ * Z tego samego powodu nie ma obwódki: spacja w Interze 15 px ma ~4 px, więc
+ * ramka wystająca po 2 px z każdej strony stykała się z sąsiednią literą
+ * (zmierzone na zrzucie) — zostaje samo wypełnienie i kolor liter.
+ *
+ * Zmienne koloru bierze `botChipStyle` — ten sam przepis `--bot`/`--bot-ink`,
+ * którym maluje się pigułka w wysłanej wiadomości (PeerBadge.tsx, #170).
+ * Różni się samo wypełnienie: 26% zamiast 18%, bo tutaj nie ma obwódki i bez
+ * tego pigułka ginęła w polu. Wypełnienie miesza się z `--color-raised`, czyli
+ * z tłem RZĘDU composera, nie z tłem czatu (rząd stoi na `bg-raised/60`) —
+ * na `--color-app` pigułka była o ton za ciemna/za jasna wobec pola.
+ *
+ * Warstwa jest zamontowana ZAWSZE, a nie tylko przy wzmiance: montowana
+ * warunkowo wchodziła ze `scrollTop = 0`, więc w przewiniętym szkicu pierwsza
+ * wzmianka pokazywała się o kilka wierszy za wysoko, do najbliższego zdarzenia
+ * przewijania. Niewidoczna gaśnie `opacity-0` i wtedy pole maluje litery samo.
+ */
+function MentionHighlight({
+  text,
+  bots,
+  layerRef,
+  visible,
+}: {
+  text: string;
+  bots: Bot[];
+  layerRef: React.RefObject<HTMLDivElement | null>;
+  visible: boolean;
+}) {
+  const segments = splitMentions(text, bots);
+  return (
+    <div
+      ref={layerRef}
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-ink",
+        COMPOSER_TYPO,
+        visible ? "opacity-100" : "opacity-0",
+      )}
+    >
+      {segments.map((segment, index) => {
+        const bot = segment.name
+          ? bots.find((candidate) => candidate.name.toLowerCase() === segment.name!.toLowerCase())
+          : undefined;
+        if (!bot) return <span key={index}>{segment.text}</span>;
+        return (
+          <span
+            key={index}
+            style={botChipStyle(bot.color)}
+            // Zmierzone dla 14 kolorów × 4 skórek: najgorsza para
+            // black/midnight 3,73:1, żadna poniżej 3,0 (pigułka wysłanej
+            // wiadomości ma tam 3,31:1 — patrz BOT_CHIP_CLASS).
+            className="-mx-[1px] rounded-[3px] px-[1px] text-[var(--bot-ink)] bg-[color-mix(in_oklab,var(--bot)_26%,var(--color-raised))]"
+          >
+            {segment.text}
+          </span>
+        );
+      })}
+      {/* Domknięcie ostatniego wiersza: textarea rezerwuje linię po końcowym
+          Enterze, blok HTML by jej nie pokazał. Warstwa NIE jest lustrem
+          wysokości pola — pole rośnie na `scrollHeight`, warstwa leży
+          `inset-0` i przycina nadmiar; ta linia wyrównuje tylko ostatni
+          wiersz, a nie całą geometrię. */}
+      {"\n"}
+    </div>
+  );
 }
 
 // multibot: F8 — /slash autocomplete. Skill wysyła się jako ZWYKŁA wiadomość:
@@ -330,21 +420,63 @@ export function Composer({
   // wybiera czysta `stripMascotState`; `null` znaczy „pasek pusty".
   const runtime = state.runtime[bot.threadId] ?? null;
   // Wiersze zależne od czasu (loading po 10 s, celebrate gaśnie po 1 s) nie mają
-  // własnego eventu, więc przy żywej turze przeliczamy je co pół sekundy.
+  // własnego eventu, więc przy żywej turze przeliczamy je co pół sekundy. Faza
+  // `runtime` nigdy się nie kasuje, więc warunkiem NIE może być samo jej
+  // istnienie — inaczej zegar tykał do końca życia aplikacji.
   const [clock, setClock] = useState(() => Date.now());
+  const celebrating = runtime?.kind === "done" && clock - runtime.at < CELEBRATE_MS;
   useEffect(() => {
-    if (!bot.busy && !runtime) return;
+    if (!bot.busy && !celebrating) return;
     const timer = setInterval(() => setClock(Date.now()), 500);
     return () => clearInterval(timer);
-  }, [bot.busy, runtime]);
+  }, [bot.busy, celebrating]);
+  // Rozmowa bot↔bot toczy się na WŁASNYCH wątkach uczestników, więc w widoku
+  // oglądanego bota nie widać po niej ani `busy`, ani żadnej fazy `runtime`,
+  // dopóki nie wypadnie jego kolej. Prawdę o niej trzyma pokój i tylko stamtąd
+  // da się ją wziąć.
+  const botsById = useMemo(() => Object.fromEntries(state.bots.map((b) => [b.id, b])), [state.bots]);
+  const engaged = useMemo(
+    () => isEngagedInPeerChat(state.rooms, bot.id, botsById),
+    [state.rooms, bot.id, botsById],
+  );
   const strip = stripMascotState({
     bot,
     runtime,
     streaming: state.streaming[bot.threadId] !== undefined,
+    engaged,
     focused: typeof document === "undefined" || document.hasFocus(),
     now: clock,
   });
+  // Pusty pasek znika przenikaniem, więc przez te 200 ms jest jeszcze widoczny.
+  // Gdyby dostał wtedy „idle", ciało przeskoczyłoby twardo do innej geometrii w
+  // tej samej klatce, w której się zatrzymuje — dokładnie ten przeskok, którego
+  // pozbywamy się przy wejściu. Gaśnie więc na ostatniej minie, jaką miał.
+  // Najechanie na maskotkę mówi, co bot robi TERAZ — to samo zdanie, które roster
+  // pokazuje w sidebarze (activityPhrase); bezczynny bot pokazuje tylko nazwę.
+  const doing = activityPhrase(
+    bot,
+    { runtime, streaming: state.streaming[bot.threadId] !== undefined, engaged, focused: typeof document === "undefined" || document.hasFocus(), now: clock },
+    polish ? "pl" : "en",
+  );
+  const lastStrip = useRef<NonNullable<typeof strip>>("idle");
+  if (strip) lastStrip.current = strip;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // multibot K2: warstwa podświetlenia wzmianek pod tekstem pola. Sama warstwa
+  // jest zamontowana zawsze (patrz MentionHighlight — inaczej wchodzi ze
+  // `scrollTop = 0`), ale WIDAĆ ją tylko wtedy, gdy w treści jest wzmianka
+  // znanego bota. Bez wzmianki pole maluje litery samo i zachowuje się co do
+  // piksela jak dotąd, więc zwykłe pisanie nic nie ryzykuje.
+  const mentionLayerRef = useRef<HTMLDivElement>(null);
+  // IME (japoński, chiński, koreański) rysuje tekst w trakcie komponowania sam,
+  // z własnym podkreśleniem, i nie ma go jeszcze w `value`. Przezroczyste
+  // litery zjadałyby ten podgląd w całości, więc przez czas komponowania
+  // warstwa gaśnie i pole wraca do zwykłego atramentu.
+  const [composing, setComposing] = useState(false);
+  const liveMentions = useMemo(
+    () => splitMentions(text, state.bots).some((segment) => segment.name),
+    [text, state.bots],
+  );
+  const highlightOn = liveMentions && !composing;
   const filesRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef(new Set<string>());
   // what was typed before the mic went on — partials append after it
@@ -558,7 +690,7 @@ export function Composer({
         label: botDisplayName(peer, polish ? "pl" : "en"),
         hint: peer.id === bot.id ? (polish ? "Bieżący" : "Current") : (polish ? "Przełącz" : "Switch to bot"),
         kind: "agent" as const,
-        icon: <MausAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={normalizeState(peer.mascotExpression) ?? "happy"} size={20} animated={false} />,
+        icon: <BotAvatar color={peer.color} avatarUrl={peer.avatarUrl} shape={peer.mascotShape} state={normalizeState(peer.mascotExpression) ?? "happy"} size={20} animated={false} />,
         run: () => dispatch({ type: "select", id: peer.id }),
       })),
       ...(slashRoutines?.rows ?? []).map((routine) => ({
@@ -914,7 +1046,7 @@ export function Composer({
               >
                 {row.type === "bot" ? (
                   <>
-                    <MausAvatar color={row.peer.color} shape={row.peer.mascotShape} state={normalizeState(row.peer.mascotExpression) ?? "happy"} size={24} animated={false} />
+                    <BotAvatar color={row.peer.color} shape={row.peer.mascotShape} state={normalizeState(row.peer.mascotExpression) ?? "happy"} size={24} animated={false} />
                     <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{botDisplayName(row.peer, polish ? "pl" : "en")}</span>
                     <span className="shrink-0 text-xs text-ink-secondary">{polish ? "Bot" : "Agent"}</span>
                   </>
@@ -979,19 +1111,33 @@ export function Composer({
             (Kacper). Zwinięte pigułki są teraz kwadratami 32 px jak mikrofon
             i spinacz, więc cały rząd trzyma jeden rytm. */}
         <div data-composer-row className="relative flex min-h-12 items-center gap-1.5 rounded-2xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2.5">
-        {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać. */}
-        {strip && (
-          <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-20 hidden size-[40px] items-center justify-center md:flex" title={botDisplayName(bot, polish ? "pl" : "en")}>
-            <MausAvatar
-              color={bot.color}
-              avatarUrl={bot.avatarUrl}
-              shape={bot.mascotShape}
-              state={strip}
-              size={40}
-              animated
-            />
-          </div>
-        )}
+        {/* Pasek: maksymalnie jeden bot, animowany, i tylko gdy ma co pokazać.
+            Maskotka NIE odmontowuje się między stanami — silnik przechodzi
+            między nimi sprężyną, a odmontowanie zabijałoby ten przebieg i dawało
+            twarde przeskoki. Pojawienie się i zniknięcie to więc przenikanie
+            (`opacity`), a nie wejście/wyjście z drzewa. Pusty pasek stoi
+            zapauzowany (`animated={false}`), więc nie rysuje kolejnych klatek. */}
+        <div
+          aria-hidden
+          className={cn(
+            // `hidden md:flex` znaczyło: na telefonie maskotki NIE MA nigdy —
+            // ani przy pracy, ani w rozmowie z botem. Pasek stoi na nakładce
+            // nad polem pisania, nic nie przesuwa i mieści się na najwęższym
+            // ekranie, więc nie ma czego chować.
+            "absolute bottom-[calc(100%+8px)] left-0 z-20 flex size-[40px] items-center justify-center transition-opacity duration-200",
+            strip ? "opacity-100" : "opacity-0",
+          )}
+          title={doing ?? botDisplayName(bot, polish ? "pl" : "en")}
+        >
+          <BotAvatar
+            color={bot.color}
+            avatarUrl={bot.avatarUrl}
+            shape={bot.mascotShape}
+            state={strip ?? lastStrip.current}
+            size={40}
+            animated={strip !== null}
+          />
+        </div>
         {/* Czat grupowy nie ma jednego wlasciciela pliku, a `onSend` niesie sam
             tekst - lepiej nie pokazywac spinacza niz zzerac zalacznik. */}
         {!onSend && (
@@ -1009,8 +1155,20 @@ export function Composer({
           <Plus size={20} />
         </button>
         )}
+        {/* multibot K2: pole i warstwa podświetlenia w jednym pudełku — warstwa
+            leży `inset-0`, więc ma dokładnie tę samą ramkę co textarea.
+            `data-composer-field` musi zostać: to po nim reguła telefonu
+            (styles.css) daje polu własny wiersz. Zanim ten znacznik powstał,
+            regułą był `[data-composer-row] > [data-composer-input]`, a pudełko
+            zabrało polu status dziecka rzędu i na 360 px wracał błąd z 07.09
+            (pole ściśnięte do zera przez pigułki). `min-w-[8rem]` jest drugim
+            hamulcem na ten sam błąd: powyżej 700 px rząd się nie zawija, więc
+            samo `min-w-0` pozwalało pigułkom ścisnąć pole dowolnie wąsko. */}
+        <div data-composer-field className="relative min-w-[8rem] flex-1">
+        <MentionHighlight text={text} bots={state.bots} layerRef={mentionLayerRef} visible={highlightOn} />
         <textarea
           data-composer-input
+          data-mentions={highlightOn ? "" : undefined}
           ref={inputRef}
           rows={1}
           value={text}
@@ -1069,6 +1227,16 @@ export function Composer({
             if (e.key === "Escape" && recording) setRecording(false);
           }}
           onPaste={handlePaste}
+          // IME: podgląd komponowanego znaku rysuje przeglądarka w POLU i nie ma
+          // go jeszcze w `value`, więc przez ten czas litery pola muszą być
+          // widoczne — inaczej japoński czy chiński pisałby się w niewidzialne.
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
+          onScroll={(e) => {
+            // warstwa nie ma własnego paska (pole też nie, patrz styles.css),
+            // więc jedzie za polem — inaczej długi szkic rozjeżdża się o wiersze
+            if (mentionLayerRef.current) mentionLayerRef.current.scrollTop = e.currentTarget.scrollTop;
+          }}
           placeholder={
             recording ? polish ? "Słucham…" : "Listening…" : bot.busy ? polish ? `${botDisplayName(bot, polish ? "pl" : "en")} pracuje…` : `${botDisplayName(bot, polish ? "pl" : "en")} is working…` : polish ? `Wiadomość do ${botDisplayName(bot, polish ? "pl" : "en")}` : `Message ${botDisplayName(bot, polish ? "pl" : "en")}`
           }
@@ -1078,8 +1246,21 @@ export function Composer({
           // `max-h-64` przycina wzrost, `overflow-y-auto` daje pasek. Bez
           // liczenia sufitu w JS: styl wpisany na sztywno i tak jest zacięty
           // przez `max-height`.
-          className="max-h-64 w-full resize-none overflow-y-auto bg-transparent py-1 text-[15px] leading-5 text-ink placeholder:text-ink-secondary focus:outline-none"
+          className={cn(
+            // `block`: textarea jest domyślnie inline-block, więc w pudełku
+            // zostawiała pod sobą 6 px zejścia linii (zmierzone). Pudełko było
+            // o te 6 px wyższe od pola, czyli rząd composera rósł, a warstwa
+            // `inset-0` miała inny zakres przewijania niż pole i w maksymalnie
+            // przewiniętym szkicu zostawała 6 px wyżej.
+            "relative block max-h-64 w-full resize-none overflow-y-auto bg-transparent placeholder:text-ink-secondary focus:outline-none",
+            COMPOSER_TYPO,
+            // litery maluje warstwa pod spodem; zostaje sam kursor, a pas
+            // zaznaczenia wraca przez `[data-mentions]::selection` w styles.css
+            // (przy przezroczystym tekście Chrome nie rysuje go sam)
+            highlightOn ? "text-transparent caret-ink" : "text-ink",
+          )}
         />
+        </div>
         <div className="relative shrink-0">
           <button
             onClick={() => setReasoningOpen((open) => !open)}
@@ -1166,7 +1347,7 @@ export function Composer({
           title={polish ? "Wyślij" : "Send"}
           aria-label={polish ? "Wyślij" : "Send"}
         >
-          <ArrowUp size={16} />
+          {uploading ? <Spinner size={16} /> : <ArrowUp size={16} />}
         </button>
         </div>
       </div>

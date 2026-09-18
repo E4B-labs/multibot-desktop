@@ -1,17 +1,25 @@
-// multibot: podgląd załącznika-obrazka w aplikacji (port z OpenMausBot #436).
+// multibot: podgląd załącznika-obrazka w aplikacji (port z upstreamu #436).
 // Portal nad całą powłoką; Escape i klik w tło zamykają, pobieranie zostaje.
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Download, X } from "lucide-react";
 import { useLanguage } from "@/lib/language";
+import { openFileViaShell } from "@/lib/nativeBridge";
+import { noDragRegion } from "@/lib/shell";
 
 export function AttachmentPreviewDialog({
   url,
   name,
+  path,
+  mime,
   onClose,
 }: {
   url: string;
   name: string;
+  /** Ścieżka pliku na serwerze — w powłoce telefonu „Pobierz" idzie przez most
+   * natywny, bo `<a download>` na blobie w Android WebView jest martwe. */
+  path?: string;
+  mime?: string;
   onClose: () => void;
 }) {
   const polish = useLanguage() === "pl";
@@ -26,6 +34,13 @@ export function AttachmentPreviewDialog({
 
   return createPortal(
     <div
+      // multibot: `createPortal` wynosi podgląd do `document.body`, czyli POZA
+      // `.multibot-shell` — reguła `.multibot-frameless [data-shell-overlay]`
+      // nigdy go nie dosięgnie, więc region zdejmujemy stylem wprost (tak samo
+      // robi `ResizeHandle`). Bez tego klik w górne 72 px tła przesuwa okno,
+      // zamiast zamknąć podgląd. Atrybut zostaje dla testu i dla czytelnika.
+      data-shell-overlay
+      style={noDragRegion}
       className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-3 bg-black/80 p-6"
       onClick={onClose}
       role="dialog"
@@ -45,6 +60,9 @@ export function AttachmentPreviewDialog({
         <a
           href={url}
           download={name}
+          onClick={(e) => {
+            if (path && openFileViaShell(path, name, mime ?? "")) e.preventDefault();
+          }}
           className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12.5px] text-white hover:bg-white/25"
         >
           <Download size={13} /> {polish ? "Pobierz" : "Download"}

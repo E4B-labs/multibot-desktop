@@ -75,26 +75,26 @@ const startHarness = async (extraEnv: Record<string, string>) => {
   chmodSync(FAKE_CLI, 0o755);
   const port = 18800 + Math.floor(Math.random() * 10_000);
   base = `https://127.0.0.1:${port}`;
-  home = mkdtempSync(join(tmpdir(), "omb-groupchat-"));
+  home = mkdtempSync(join(tmpdir(), "multibot-groupchat-"));
   stderr = "";
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".multibot"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".multibot", "config.json"),
     JSON.stringify({ instances: { atlas: ATLAS, research: RESEARCH } }),
   );
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { windowsHide: true,
     cwd: join(SERVER_DIR, ".."),
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(port),
-      OMB_HOST: "127.0.0.1",
+      MULTIBOT_PORT: String(port),
+      MULTIBOT_HOST: "127.0.0.1",
       MULTIBOT_COMPUTER: "off",
-      OMB_ONBOARDING_TURN: "0",
-      OMB_TURN_DEBOUNCE_MS: "150",
+      MULTIBOT_ONBOARDING_TURN: "0",
+      MULTIBOT_TURN_DEBOUNCE_MS: "150",
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -143,8 +143,13 @@ describe("group chat: the user writes to everyone, the members pick who answers"
 
   afterAll(stopHarness);
 
-  it("na powitanie odpisuje KAŻDY członek, a w prywatnym czacie zostaje ślad", async () => {
+  it("na powitanie odpisuje KAŻDY członek, a prywatny czat zostaje NIETKNIĘTY", async () => {
     const gid = await newGroup("Ekipa", [atlas, researcher]);
+    // Prywatny wątek to rozmowa człowieka z TYM botem. Ruch grupy — koperta,
+    // odpowiedź, czip — nie ma go dotykać w ogóle, więc bierzemy migawkę
+    // sprzed tury i porównujemy ją z tym, co widać po turze.
+    const before = new Map<string, string[]>();
+    for (const id of [atlas, researcher]) before.set(id, (await botOf(id)).messages.map((m: any) => m.id));
     const chat = await api("POST", `/api/groups/${gid}/chat`, { message: "hej" });
     expect(chat.status).toBe(200);
     expect(typeof chat.body.roomId).toBe("string");
@@ -157,11 +162,15 @@ describe("group chat: the user writes to everyone, the members pick who answers"
     expect(said(atlas)).toEqual(["hello from Atlas"]);
     expect(said(researcher)).toEqual(["hello from Researcher"]);
 
-    // ślad w prywatnych czatach obu członków: klikalny czip pokoju grupy
+    // ani śladu w prywatnych czatach członków: żadnej koperty, żadnego czipa,
+    // żadnej odpowiedzi — i żadnej kropki „nieprzeczytane" na czacie, w którym
+    // nic nowego nie ma.
     for (const id of [atlas, researcher]) {
       const bot = await botOf(id);
-      const chip = bot.messages.find((m: any) => m.kind === "room" && m.room?.id === room.id);
-      expect(chip, `brak czipa grupy w czacie ${id}`).toBeTruthy();
+      expect(bot.messages.map((m: any) => m.id), `prywatny czat ${id} zmieniony`).toEqual(before.get(id));
+      // Kropka „nieprzeczytane" ma iść za tym, CO WIDAĆ, a nie za rodzajem
+      // tury: skoro wyżej nic w tym czacie nie przybyło, kropki też nie ma.
+      expect(bot.unread, `kropka nieprzeczytanych po turze grupowej u ${id}`).toBeFalsy();
     }
   }, 90_000);
 
